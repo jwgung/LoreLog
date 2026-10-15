@@ -1,6 +1,8 @@
 package com.lifelog.data
 
 import android.content.Context
+import com.lifelog.summary.GeminiNanoSummarizer
+import com.lifelog.summary.Summarizer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -24,6 +26,7 @@ import java.util.Locale
  */
 object LogRepository {
     private const val KEEP = 500
+    private const val DIGEST_MAX_CHARS = 8000
 
     private lateinit var store: LogStore
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -42,6 +45,9 @@ object LogRepository {
 
     private val _notifications = MutableStateFlow<List<NotificationEvent>>(emptyList())
     val notifications: StateFlow<List<NotificationEvent>> = _notifications.asStateFlow()
+
+    private val _summaries = MutableStateFlow<List<Summary>>(emptyList())
+    val summaries: StateFlow<List<Summary>> = _summaries.asStateFlow()
 
     /** 모든 수집 종류를 시간순(최신 먼저)으로 합친 타임라인. */
     val timeline: StateFlow<List<TimelineItem>> =
@@ -72,6 +78,7 @@ object LogRepository {
             _screenEvents.value = store.recentScreen(KEEP)
             _locations.value = store.recentLocation(KEEP)
             _notifications.value = store.recentNotification(KEEP)
+            _summaries.value = store.recentSummary(KEEP)
         }
     }
 
@@ -145,6 +152,26 @@ object LogRepository {
         result.lines.size
     }
 
+    /**
+     * 최근 구간([periodMs]) 기록을 묶어 요약 엔진으로 요약하고, 성공하면 저장한다.
+     * 미지원 기기면 Unavailable 을 돌려주고 아무것도 저장하지 않는다(흐름은 그대로).
+     */
+    suspend fun summarizeRecent(
+        context: Context,
+        periodMs: Long,
+    ): Summarizer.SummaryResult = withContext(Dispatchers.IO) {
+        val until = System.currentTimeMillis()
+        val since = until - periodMs
+        val digest = store.digest(since, until, DIGEST_MAX_CHARS)
+        if (digest.isBlank()) return@withContext Summarizer.SummaryResult.Unavailable("요약할 기록이 없습니다")
+        val result = GeminiNanoSummarizer(context).summarize(digest)
+        if (result is Summarizer.SummaryResult.Ok) {
+            val id = store.insertSummary(until, since, until, result.summary)
+            _summaries.update { (listOf(Summary(id, until, since, until, result.summary)) + it).take(KEEP) }
+        }
+        result
+    }
+
     /** 모든 기록을 지운다(되돌릴 수 없음). */
     fun deleteAll() {
         scope.launch {
@@ -154,6 +181,7 @@ object LogRepository {
             _screenEvents.value = emptyList()
             _locations.value = emptyList()
             _notifications.value = emptyList()
+            _summaries.value = emptyList()
             _partial.value = ""
         }
     }

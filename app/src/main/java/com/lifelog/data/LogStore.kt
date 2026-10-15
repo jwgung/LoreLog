@@ -34,6 +34,8 @@ class LogStore(context: Context, password: ByteArray) {
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_location_ts ON $TABLE_LOCATION(ts)")
         db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_NOTIF (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, pkg TEXT NOT NULL, label TEXT NOT NULL, title TEXT NOT NULL, text TEXT NOT NULL)")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_notif_ts ON $TABLE_NOTIF(ts)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_SUMMARY (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, period_start INTEGER NOT NULL, period_end INTEGER NOT NULL, text TEXT NOT NULL)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_summary_ts ON $TABLE_SUMMARY(ts)")
     }
 
     fun insertVoice(timestampMs: Long, text: String, speaker: String?): Long {
@@ -156,6 +158,7 @@ class LogStore(context: Context, password: ByteArray) {
         root.put("screen", dump(TABLE_SCREEN, arrayOf("id", "ts", "pkg", "label", "text")))
         root.put("locations", dump(TABLE_LOCATION, arrayOf("id", "ts", "lat", "lon", "accuracy")))
         root.put("notifications", dump(TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text")))
+        root.put("summaries", dump(TABLE_SUMMARY, arrayOf("id", "ts", "period_start", "period_end", "text")))
         return root.toString(2)
     }
 
@@ -176,6 +179,48 @@ class LogStore(context: Context, password: ByteArray) {
         Cursor.FIELD_TYPE_FLOAT -> c.getDouble(i)
         Cursor.FIELD_TYPE_NULL -> JSONObject.NULL
         else -> c.getString(i)
+    }
+
+    fun insertSummary(timestampMs: Long, periodStartMs: Long, periodEndMs: Long, text: String): Long {
+        val values = ContentValues().apply {
+            put("ts", timestampMs)
+            put("period_start", periodStartMs)
+            put("period_end", periodEndMs)
+            put("text", text)
+        }
+        return db.insert(TABLE_SUMMARY, null, values)
+    }
+
+    fun recentSummary(limit: Int): List<Summary> {
+        val out = ArrayList<Summary>()
+        db.query(TABLE_SUMMARY, arrayOf("id", "ts", "period_start", "period_end", "text"), null, null, null, null, "ts DESC", limit.toString()).use { c ->
+            while (c.moveToNext()) {
+                out.add(Summary(c.getLong(0), c.getLong(1), c.getLong(2), c.getLong(3), c.getString(4)))
+            }
+        }
+        return out
+    }
+
+    /** 요약 입력용 묶음 텍스트. 지정 구간의 음성·화면·알림·앱 기록을 시간순 한 줄씩. */
+    fun digest(sinceMs: Long, untilMs: Long, maxChars: Int): String {
+        val sb = StringBuilder()
+        data class Row(val ts: Long, val line: String)
+        val rows = ArrayList<Row>()
+        fun collect(table: String, cols: Array<String>, render: (android.database.Cursor) -> String) {
+            db.query(table, cols, "ts >= ? AND ts < ?", arrayOf(sinceMs.toString(), untilMs.toString()), null, null, "ts ASC").use { c ->
+                while (c.moveToNext()) rows.add(Row(c.getLong(0), render(c)))
+            }
+        }
+        collect(TABLE_VOICE, arrayOf("ts", "text")) { "말: ${it.getString(1)}" }
+        collect(TABLE_SCREEN, arrayOf("ts", "label", "text")) { "화면(${it.getString(1)}): ${it.getString(2).take(200)}" }
+        collect(TABLE_NOTIF, arrayOf("ts", "label", "title", "text")) { "알림(${it.getString(1)}): ${it.getString(2)} ${it.getString(3)}" }
+        collect(TABLE_APP, arrayOf("ts", "label")) { "앱 전환: ${it.getString(1)}" }
+        rows.sortBy { it.ts }
+        for (r in rows) {
+            if (sb.length + r.line.length + 1 > maxChars) break
+            sb.append(r.line).append('\n')
+        }
+        return sb.toString().trim()
     }
 
     /** 증분 내보내기용 새 행(각 테이블에서 id > 마지막 내보낸 id). 줄마다 type 이 붙은 NDJSON. */
@@ -202,11 +247,12 @@ class LogStore(context: Context, password: ByteArray) {
         emit("screen", TABLE_SCREEN, arrayOf("id", "ts", "pkg", "label", "text"))
         emit("location", TABLE_LOCATION, arrayOf("id", "ts", "lat", "lon", "accuracy"))
         emit("notification", TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text"))
+        emit("summary", TABLE_SUMMARY, arrayOf("id", "ts", "period_start", "period_end", "text"))
         return NewRows(lines, newIds)
     }
 
     /** 증분 내보내기가 커서로 쓰는 테이블 이름들. */
-    fun tables(): List<String> = listOf(TABLE_VOICE, TABLE_APP, TABLE_SCREEN, TABLE_LOCATION, TABLE_NOTIF)
+    fun tables(): List<String> = listOf(TABLE_VOICE, TABLE_APP, TABLE_SCREEN, TABLE_LOCATION, TABLE_NOTIF, TABLE_SUMMARY)
 
     /** 모든 기록을 지운다(되돌릴 수 없음). */
     fun deleteAll() {
@@ -215,6 +261,7 @@ class LogStore(context: Context, password: ByteArray) {
         db.delete(TABLE_SCREEN, null, null)
         db.delete(TABLE_LOCATION, null, null)
         db.delete(TABLE_NOTIF, null, null)
+        db.delete(TABLE_SUMMARY, null, null)
     }
 
     companion object {
@@ -224,5 +271,6 @@ class LogStore(context: Context, password: ByteArray) {
         private const val TABLE_SCREEN = "screen_content"
         private const val TABLE_LOCATION = "location_point"
         private const val TABLE_NOTIF = "notification_event"
+        private const val TABLE_SUMMARY = "summary"
     }
 }

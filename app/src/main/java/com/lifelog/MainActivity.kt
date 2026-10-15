@@ -53,6 +53,7 @@ import kotlinx.coroutines.launch
 import com.lifelog.collect.UsageAccess
 import com.lifelog.data.LogRepository
 import com.lifelog.data.TimelineItem
+import com.lifelog.summary.Summarizer
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -94,6 +95,7 @@ private fun HomeScreen() {
     val timeline by LogRepository.timeline.collectAsStateWithLifecycle()
     val partial by LogRepository.partial.collectAsStateWithLifecycle()
     val status by LogRepository.status.collectAsStateWithLifecycle()
+    val summaries by LogRepository.summaries.collectAsStateWithLifecycle()
 
     // 특수 권한(사용 정보 접근, 접근성)은 설정에서 켜고 돌아온다. 화면이 다시 보일 때 다시 확인한다.
     var usageGranted by remember { mutableStateOf(UsageAccess.isGranted(context)) }
@@ -230,6 +232,20 @@ private fun HomeScreen() {
                 coroutineScope.launch { LogRepository.exportIncremental(context) }
             }) { Text("폴더로 (증분)") }
             OutlinedButton(onClick = { showDeleteDialog = true }) { Text("전체 삭제") }
+        }
+
+        OutlinedButton(onClick = {
+            coroutineScope.launch {
+                when (val r = LogRepository.summarizeRecent(context, 24L * 60 * 60 * 1000)) {
+                    is Summarizer.SummaryResult.Ok -> LogRepository.setStatus("요약 완료")
+                    is Summarizer.SummaryResult.Unavailable -> LogRepository.setStatus("요약 불가: ${r.reason}")
+                }
+            }
+        }) { Text("지금 요약 (최근 24시간)") }
+
+        if (summaries.isNotEmpty()) {
+            Text("최근 요약", style = MaterialTheme.typography.labelLarge)
+            Text(summaries.first().text, style = MaterialTheme.typography.bodyMedium)
         }
 
         if (running && partial.isNotBlank()) {
