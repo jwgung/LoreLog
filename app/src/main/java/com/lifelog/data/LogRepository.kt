@@ -3,6 +3,8 @@ package com.lifelog.data
 import android.content.Context
 import com.lifelog.net.EndpointConfig
 import com.lifelog.net.HttpSink
+import com.lifelog.net.LlmConfig
+import com.lifelog.summary.CloudSummarizer
 import com.lifelog.summary.GeminiNanoSummarizer
 import com.lifelog.summary.Summarizer
 import kotlinx.coroutines.CoroutineScope
@@ -185,7 +187,8 @@ object LogRepository {
         val since = until - periodMs
         val digest = store.digest(since, until, DIGEST_MAX_CHARS)
         if (digest.isBlank()) return@withContext Summarizer.SummaryResult.Unavailable("요약할 기록이 없습니다")
-        val result = GeminiNanoSummarizer(context).summarize(digest)
+        val summarizer = if (LlmConfig.isConfigured(context)) CloudSummarizer(context) else GeminiNanoSummarizer(context)
+        val result = summarizer.summarize(digest)
         if (result is Summarizer.SummaryResult.Ok) {
             val id = store.insertSummary(until, since, until, result.summary)
             _summaries.update { (listOf(Summary(id, until, since, until, result.summary)) + it).take(KEEP) }

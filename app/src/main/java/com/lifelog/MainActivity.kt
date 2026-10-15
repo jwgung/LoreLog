@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
@@ -56,6 +58,7 @@ import com.lifelog.collect.UsageAccess
 import com.lifelog.data.LogRepository
 import com.lifelog.data.TimelineItem
 import com.lifelog.net.EndpointConfig
+import com.lifelog.net.LlmConfig
 import com.lifelog.summary.Summarizer
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -131,6 +134,9 @@ private fun HomeScreen() {
     var endpointUrl by remember { mutableStateOf(EndpointConfig.url(context) ?: "") }
     var endpointToken by remember { mutableStateOf(EndpointConfig.token(context) ?: "") }
     val tagInputs = remember { mutableStateMapOf<Long, String>() }
+    var llmUrl by remember { mutableStateOf(LlmConfig.baseUrl(context)) }
+    var llmModel by remember { mutableStateOf(LlmConfig.model(context)) }
+    var llmKey by remember { mutableStateOf(LlmConfig.apiKey(context) ?: "") }
 
     if (showDeleteDialog) {
         AlertDialog(
@@ -150,7 +156,7 @@ private fun HomeScreen() {
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 20.dp),
+        modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(
@@ -307,6 +313,33 @@ private fun HomeScreen() {
             }) { Text("지금 전송") }
         }
 
+        Text("요약 LLM (클라우드, 무료 티어 키)", style = MaterialTheme.typography.labelLarge)
+        OutlinedTextField(
+            value = llmUrl,
+            onValueChange = { llmUrl = it },
+            label = { Text("베이스 URL") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = llmModel,
+            onValueChange = { llmModel = it },
+            label = { Text("모델") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = llmKey,
+            onValueChange = { llmKey = it },
+            label = { Text("API 키") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedButton(onClick = {
+            LlmConfig.set(context, llmUrl, llmModel, llmKey)
+            LogRepository.setStatus("요약 LLM 저장됨")
+        }) { Text("요약 LLM 저장") }
+
         val pending = conversations.filter { it.status == "pending" }
         if (pending.isNotEmpty()) {
             Text("태그할 대화 (${pending.size})", style = MaterialTheme.typography.labelLarge)
@@ -345,11 +378,11 @@ private fun HomeScreen() {
                 modifier = Modifier.padding(top = 8.dp),
             )
         } else {
-            LazyColumn(
+            Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(timeline, key = { itemKey(it) }) { item -> TimelineRow(item) }
+                timeline.take(200).forEach { item -> TimelineRow(item) }
             }
         }
     }
