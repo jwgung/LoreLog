@@ -254,6 +254,19 @@ class LogStore(context: Context, password: ByteArray) {
     /** 증분 내보내기가 커서로 쓰는 테이블 이름들. */
     fun tables(): List<String> = listOf(TABLE_VOICE, TABLE_APP, TABLE_SCREEN, TABLE_LOCATION, TABLE_NOTIF, TABLE_SUMMARY)
 
+    /**
+     * 보존 정리. 각 원본 테이블에서 ts < [cutoffMs] 이고 이미 내보낸(id <= 해당 테이블의
+     * [exportedLastIds]) 행만 지운다. 요약은 건드리지 않는다. 지운 행 수를 반환.
+     */
+    fun prune(cutoffMs: Long, exportedLastIds: Map<String, Long>): Int {
+        var deleted = 0
+        for (table in listOf(TABLE_VOICE, TABLE_APP, TABLE_SCREEN, TABLE_LOCATION, TABLE_NOTIF)) {
+            val lastExported = exportedLastIds[table] ?: 0L
+            deleted += db.delete(table, "ts < ? AND id <= ?", arrayOf(cutoffMs.toString(), lastExported.toString()))
+        }
+        return deleted
+    }
+
     /** 모든 기록을 지운다(되돌릴 수 없음). */
     fun deleteAll() {
         db.delete(TABLE_VOICE, null, null)

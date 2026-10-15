@@ -172,6 +172,25 @@ object LogRepository {
         result
     }
 
+    /**
+     * 보존 정리. 이미 내보냈고 [retentionMs] 보다 오래된 원본을 지운다(요약은 유지).
+     * 지운 행 수를 반환하고, 화면용 목록을 다시 읽는다.
+     */
+    suspend fun pruneExportedOlderThan(context: Context, retentionMs: Long): Int = withContext(Dispatchers.IO) {
+        val prefs = context.getSharedPreferences("export_state", Context.MODE_PRIVATE)
+        val exportedIds = store.tables().associateWith { prefs.getLong("last_$it", 0L) }
+        val cutoff = System.currentTimeMillis() - retentionMs
+        val deleted = store.prune(cutoff, exportedIds)
+        if (deleted > 0) {
+            _voiceSegments.value = store.recentVoice(KEEP)
+            _appEvents.value = store.recentApp(KEEP)
+            _screenEvents.value = store.recentScreen(KEEP)
+            _locations.value = store.recentLocation(KEEP)
+            _notifications.value = store.recentNotification(KEEP)
+        }
+        deleted
+    }
+
     /** 모든 기록을 지운다(되돌릴 수 없음). */
     fun deleteAll() {
         scope.launch {
