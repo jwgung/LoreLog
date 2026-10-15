@@ -23,10 +23,25 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
             """.trimIndent(),
         )
         db.execSQL("CREATE INDEX idx_voice_ts ON $TABLE_VOICE(ts)")
+        createAppTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // 1단계뿐이라 아직 마이그레이션 없음.
+        if (oldVersion < 2) createAppTable(db)
+    }
+
+    private fun createAppTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE $TABLE_APP (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                pkg TEXT NOT NULL,
+                label TEXT NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX idx_app_ts ON $TABLE_APP(ts)")
     }
 
     fun insertVoice(timestampMs: Long, text: String, speaker: String?): Long {
@@ -58,9 +73,32 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
         return out
     }
 
+    fun insertApp(timestampMs: Long, packageName: String, label: String): Long {
+        val values = ContentValues().apply {
+            put("ts", timestampMs)
+            put("pkg", packageName)
+            put("label", label)
+        }
+        return writableDatabase.insert(TABLE_APP, null, values)
+    }
+
+    fun recentApp(limit: Int): List<AppEvent> {
+        val out = ArrayList<AppEvent>()
+        readableDatabase.query(
+            TABLE_APP, arrayOf("id", "ts", "pkg", "label"),
+            null, null, null, null, "ts DESC", limit.toString(),
+        ).use { c ->
+            while (c.moveToNext()) {
+                out.add(AppEvent(c.getLong(0), c.getLong(1), c.getString(2), c.getString(3)))
+            }
+        }
+        return out
+    }
+
     companion object {
         private const val DB_NAME = "lifelog.db"
-        private const val DB_VERSION = 1
+        private const val DB_VERSION = 2
         private const val TABLE_VOICE = "voice_segment"
+        private const val TABLE_APP = "app_event"
     }
 }

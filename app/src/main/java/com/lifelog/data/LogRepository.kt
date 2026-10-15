@@ -5,8 +5,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -23,6 +26,17 @@ object LogRepository {
     private val _voiceSegments = MutableStateFlow<List<VoiceSegment>>(emptyList())
     val voiceSegments: StateFlow<List<VoiceSegment>> = _voiceSegments.asStateFlow()
 
+    private val _appEvents = MutableStateFlow<List<AppEvent>>(emptyList())
+    val appEvents: StateFlow<List<AppEvent>> = _appEvents.asStateFlow()
+
+    /** 음성·앱 이벤트를 시간순(최신 먼저)으로 합친 타임라인. */
+    val timeline: StateFlow<List<TimelineItem>> =
+        combine(_voiceSegments, _appEvents) { voice, apps ->
+            (voice.map { TimelineItem.Voice(it) } + apps.map { TimelineItem.App(it) })
+                .sortedByDescending { it.timestampMs }
+                .take(KEEP)
+        }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+
     /** 아직 확정되지 않은 실시간 부분 인식 텍스트(저장하지 않음). */
     private val _partial = MutableStateFlow("")
     val partial: StateFlow<String> = _partial.asStateFlow()
@@ -33,7 +47,10 @@ object LogRepository {
 
     fun init(context: Context) {
         store = LogStore(context.applicationContext)
-        scope.launch { _voiceSegments.value = store.recentVoice(KEEP) }
+        scope.launch {
+            _voiceSegments.value = store.recentVoice(KEEP)
+            _appEvents.value = store.recentApp(KEEP)
+        }
     }
 
     fun addVoice(text: String, speaker: String? = null) {
@@ -44,6 +61,14 @@ object LogRepository {
             val id = store.insertVoice(ts, trimmed, speaker)
             val seg = VoiceSegment(id, ts, trimmed, speaker)
             _voiceSegments.update { (listOf(seg) + it).take(KEEP) }
+        }
+    }
+
+    fun addApp(packageName: String, label: String, timestampMs: Long) {
+        scope.launch {
+            val id = store.insertApp(timestampMs, packageName, label)
+            val event = AppEvent(id, timestampMs, packageName, label)
+            _appEvents.update { (listOf(event) + it).take(KEEP) }
         }
     }
 

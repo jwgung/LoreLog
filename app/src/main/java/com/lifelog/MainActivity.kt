@@ -1,9 +1,11 @@
 package com.lifelog
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -21,21 +23,30 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.lifelog.collect.UsageAccess
 import com.lifelog.data.LogRepository
-import com.lifelog.data.VoiceSegment
+import com.lifelog.data.TimelineItem
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -63,11 +74,21 @@ private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 private fun HomeScreen() {
     val context = LocalContext.current
     val running by LoggerService.isRunning.collectAsStateWithLifecycle()
-    val segments by LogRepository.voiceSegments.collectAsStateWithLifecycle()
+    val timeline by LogRepository.timeline.collectAsStateWithLifecycle()
     val partial by LogRepository.partial.collectAsStateWithLifecycle()
     val status by LogRepository.status.collectAsStateWithLifecycle()
 
-    // 기록에 필요한 권한(마이크, 13+ 알림)을 요청하고, 마이크가 허용되면 시작한다.
+    // '사용 정보 접근' 권한은 설정에서 켜고 돌아온다. 화면이 다시 보일 때 다시 확인한다.
+    var usageGranted by remember { mutableStateOf(UsageAccess.isGranted(context)) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) usageGranted = UsageAccess.isGranted(context)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { result ->
@@ -93,6 +114,7 @@ private fun HomeScreen() {
         if (status.isNotEmpty()) {
             Text(status, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
+
         Button(onClick = {
             if (running) {
                 LoggerService.stop(context)
@@ -113,6 +135,17 @@ private fun HomeScreen() {
             Text(if (running) "정지" else "기록 시작")
         }
 
+        if (!usageGranted) {
+            OutlinedButton(onClick = {
+                context.startActivity(
+                    Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }) {
+                Text("앱 사용 기록 켜기 (사용 정보 접근)")
+            }
+        }
+
         if (running && partial.isNotBlank()) {
             Text(
                 partial,
@@ -123,9 +156,9 @@ private fun HomeScreen() {
 
         HorizontalDivider()
 
-        if (segments.isEmpty()) {
+        if (timeline.isEmpty()) {
             Text(
-                "아직 기록이 없습니다. 기록을 시작하고 말해 보세요.",
+                "아직 기록이 없습니다. 기록을 시작하고 말하거나 앱을 전환해 보세요.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp),
@@ -135,25 +168,37 @@ private fun HomeScreen() {
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(segments, key = { it.id }) { seg -> SegmentRow(seg) }
+                items(timeline, key = { itemKey(it) }) { item -> TimelineRow(item) }
             }
         }
     }
 }
 
+private fun itemKey(item: TimelineItem): String = when (item) {
+    is TimelineItem.Voice -> "v${item.seg.id}"
+    is TimelineItem.App -> "a${item.event.id}"
+}
+
 @Composable
-private fun SegmentRow(seg: VoiceSegment) {
+private fun TimelineRow(item: TimelineItem) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.Top,
     ) {
         Text(
-            timeFormat.format(Date(seg.timestampMs)),
+            timeFormat.format(Date(item.timestampMs)),
             style = MaterialTheme.typography.labelSmall,
             fontFamily = FontFamily.Monospace,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Text(seg.text, style = MaterialTheme.typography.bodyLarge)
+        when (item) {
+            is TimelineItem.Voice -> Text(item.seg.text, style = MaterialTheme.typography.bodyLarge)
+            is TimelineItem.App -> Text(
+                "▸ ${item.event.label}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }

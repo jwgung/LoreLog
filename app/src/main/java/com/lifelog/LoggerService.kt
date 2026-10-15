@@ -10,6 +10,7 @@ import android.Manifest
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import com.lifelog.collect.AppUsageCollector
 import com.lifelog.collect.VoiceCollector
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 class LoggerService : Service() {
 
     private var voice: VoiceCollector? = null
+    private var appUsage: AppUsageCollector? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -48,10 +50,13 @@ class LoggerService : Service() {
             if (voice == null) voice = VoiceCollector(this)
             voice?.start()
         }
+        if (appUsage == null) appUsage = AppUsageCollector(this)
+        appUsage?.start()
     }
 
     private fun stopCollectors() {
         voice?.stop()
+        appUsage?.stop()
     }
 
     private fun stopLogging() {
