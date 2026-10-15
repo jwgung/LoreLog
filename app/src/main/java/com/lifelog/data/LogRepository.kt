@@ -29,10 +29,15 @@ object LogRepository {
     private val _appEvents = MutableStateFlow<List<AppEvent>>(emptyList())
     val appEvents: StateFlow<List<AppEvent>> = _appEvents.asStateFlow()
 
-    /** 음성·앱 이벤트를 시간순(최신 먼저)으로 합친 타임라인. */
+    private val _screenEvents = MutableStateFlow<List<ScreenContentEvent>>(emptyList())
+    val screenEvents: StateFlow<List<ScreenContentEvent>> = _screenEvents.asStateFlow()
+
+    /** 음성·앱·화면 내용을 시간순(최신 먼저)으로 합친 타임라인. */
     val timeline: StateFlow<List<TimelineItem>> =
-        combine(_voiceSegments, _appEvents) { voice, apps ->
-            (voice.map { TimelineItem.Voice(it) } + apps.map { TimelineItem.App(it) })
+        combine(_voiceSegments, _appEvents, _screenEvents) { voice, apps, screens ->
+            (voice.map { TimelineItem.Voice(it) } +
+                apps.map { TimelineItem.App(it) } +
+                screens.map { TimelineItem.Screen(it) })
                 .sortedByDescending { it.timestampMs }
                 .take(KEEP)
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
@@ -50,6 +55,7 @@ object LogRepository {
         scope.launch {
             _voiceSegments.value = store.recentVoice(KEEP)
             _appEvents.value = store.recentApp(KEEP)
+            _screenEvents.value = store.recentScreen(KEEP)
         }
     }
 
@@ -69,6 +75,14 @@ object LogRepository {
             val id = store.insertApp(timestampMs, packageName, label)
             val event = AppEvent(id, timestampMs, packageName, label)
             _appEvents.update { (listOf(event) + it).take(KEEP) }
+        }
+    }
+
+    fun addScreen(packageName: String, label: String, text: String, timestampMs: Long) {
+        scope.launch {
+            val id = store.insertScreen(timestampMs, packageName, label, text)
+            val event = ScreenContentEvent(id, timestampMs, packageName, label, text)
+            _screenEvents.update { (listOf(event) + it).take(KEEP) }
         }
     }
 

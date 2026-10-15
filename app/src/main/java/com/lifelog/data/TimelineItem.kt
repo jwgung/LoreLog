@@ -11,4 +11,8 @@ sealed interface TimelineItem {
     data class App(val event: AppEvent) : TimelineItem {
         override val timestampMs: Long get() = event.timestampMs
     }
+
+    data class Screen(val event: ScreenContentEvent) : TimelineItem {
+        override val timestampMs: Long get() = event.timestampMs
+    }
 }

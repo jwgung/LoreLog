@@ -5,4 +5,6 @@
     <string name="notif_title">LifeLog 기록 중</string>
     <string name="notif_text">내 활동을 이 기기에만 기록하고 있습니다</string>
     <string name="action_stop">정지</string>
+    <string name="accessibility_label">LifeLog 화면 내용 기록</string>
+    <string name="accessibility_desc">기록 중일 때, 앱 화면에 보이는 텍스트를 읽어 이 기기에만 저장합니다. 은행·결제 등 제외 목록 앱은 읽지 않습니다. 본인 기록용입니다.</string>
 </resources>

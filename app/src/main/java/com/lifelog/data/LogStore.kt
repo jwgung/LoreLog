@@ -24,10 +24,12 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
         )
         db.execSQL("CREATE INDEX idx_voice_ts ON $TABLE_VOICE(ts)")
         createAppTable(db)
+        createScreenTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createAppTable(db)
+        if (oldVersion < 3) createScreenTable(db)
     }
 
     private fun createAppTable(db: SQLiteDatabase) {
@@ -42,6 +44,21 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
             """.trimIndent(),
         )
         db.execSQL("CREATE INDEX idx_app_ts ON $TABLE_APP(ts)")
+    }
+
+    private fun createScreenTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE $TABLE_SCREEN (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                pkg TEXT NOT NULL,
+                label TEXT NOT NULL,
+                text TEXT NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX idx_screen_ts ON $TABLE_SCREEN(ts)")
     }
 
     fun insertVoice(timestampMs: Long, text: String, speaker: String?): Long {
@@ -95,10 +112,38 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
         return out
     }
 
+    fun insertScreen(timestampMs: Long, packageName: String, label: String, text: String): Long {
+        val values = ContentValues().apply {
+            put("ts", timestampMs)
+            put("pkg", packageName)
+            put("label", label)
+            put("text", text)
+        }
+        return writableDatabase.insert(TABLE_SCREEN, null, values)
+    }
+
+    fun recentScreen(limit: Int): List<ScreenContentEvent> {
+        val out = ArrayList<ScreenContentEvent>()
+        readableDatabase.query(
+            TABLE_SCREEN, arrayOf("id", "ts", "pkg", "label", "text"),
+            null, null, null, null, "ts DESC", limit.toString(),
+        ).use { c ->
+            while (c.moveToNext()) {
+                out.add(
+                    ScreenContentEvent(
+                        c.getLong(0), c.getLong(1), c.getString(2), c.getString(3), c.getString(4),
+                    ),
+                )
+            }
+        }
+        return out
+    }
+
     companion object {
         private const val DB_NAME = "lifelog.db"
-        private const val DB_VERSION = 2
+        private const val DB_VERSION = 3
         private const val TABLE_VOICE = "voice_segment"
         private const val TABLE_APP = "app_event"
+        private const val TABLE_SCREEN = "screen_content"
     }
 }

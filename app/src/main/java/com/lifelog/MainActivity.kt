@@ -70,6 +70,14 @@ class MainActivity : ComponentActivity() {
 
 private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
+private fun isScreenCaptureEnabled(context: android.content.Context): Boolean {
+    val enabled = Settings.Secure.getString(
+        context.contentResolver,
+        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+    ) ?: return false
+    return enabled.contains("${context.packageName}/") && enabled.contains("ScreenContentService")
+}
+
 @Composable
 private fun HomeScreen() {
     val context = LocalContext.current
@@ -78,12 +86,16 @@ private fun HomeScreen() {
     val partial by LogRepository.partial.collectAsStateWithLifecycle()
     val status by LogRepository.status.collectAsStateWithLifecycle()
 
-    // '사용 정보 접근' 권한은 설정에서 켜고 돌아온다. 화면이 다시 보일 때 다시 확인한다.
+    // 특수 권한(사용 정보 접근, 접근성)은 설정에서 켜고 돌아온다. 화면이 다시 보일 때 다시 확인한다.
     var usageGranted by remember { mutableStateOf(UsageAccess.isGranted(context)) }
+    var screenGranted by remember { mutableStateOf(isScreenCaptureEnabled(context)) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) usageGranted = UsageAccess.isGranted(context)
+            if (event == Lifecycle.Event.ON_RESUME) {
+                usageGranted = UsageAccess.isGranted(context)
+                screenGranted = isScreenCaptureEnabled(context)
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -141,9 +153,16 @@ private fun HomeScreen() {
                     Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 )
-            }) {
-                Text("앱 사용 기록 켜기 (사용 정보 접근)")
-            }
+            }) { Text("앱 사용 기록 켜기 (사용 정보 접근)") }
+        }
+
+        if (!screenGranted) {
+            OutlinedButton(onClick = {
+                context.startActivity(
+                    Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }) { Text("화면 내용 기록 켜기 (접근성)") }
         }
 
         if (running && partial.isNotBlank()) {
@@ -158,7 +177,7 @@ private fun HomeScreen() {
 
         if (timeline.isEmpty()) {
             Text(
-                "아직 기록이 없습니다. 기록을 시작하고 말하거나 앱을 전환해 보세요.",
+                "아직 기록이 없습니다. 기록을 시작하고 말하거나 앱을 써 보세요.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 8.dp),
@@ -177,6 +196,7 @@ private fun HomeScreen() {
 private fun itemKey(item: TimelineItem): String = when (item) {
     is TimelineItem.Voice -> "v${item.seg.id}"
     is TimelineItem.App -> "a${item.event.id}"
+    is TimelineItem.Screen -> "s${item.event.id}"
 }
 
 @Composable
@@ -199,6 +219,17 @@ private fun TimelineRow(item: TimelineItem) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            is TimelineItem.Screen -> Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    "▦ ${item.event.label}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    item.event.text.take(140),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
     }
 }
