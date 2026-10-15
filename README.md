@@ -35,6 +35,29 @@ LifeLogApp              — 알림 채널
 - 툴체인: AGP 9.4.1(내장 Kotlin), Gradle 9.8.0, compileSdk 37 / targetSdk 36 / minSdk 29, Jetpack Compose.
 - `local.properties` 의 `sdk.dir` 로 Android SDK 경로 지정.
 
-## 현재 상태 (v0.1.0, 1단계)
-스캐폴드 + 상시 알림 포그라운드 서비스까지. 시작/정지와 지울 수 없는 알림 동작.
-수집기(음성·앱·화면·위치·알림)는 다음 단계에서 추가한다.
+## 내보내기 / 삭제
+- **내보내기(JSON)**: 모든 기록을 voice/apps/screen/locations/notifications 로 나눈
+  JSON 파일로 내보내 공유(지식그래프 등 외부로 넣는 연결 고리).
+- **전체 삭제**: 기기에 쌓인 모든 기록을 지운다(확인 후, 되돌릴 수 없음).
+
+## 저장 보안
+- DB 파일은 **SQLCipher 로 암호화**(lifelog_enc.db). 키는 랜덤 32바이트로,
+  Android Keystore 로 보호되는 EncryptedSharedPreferences 에 보관(기기를 벗어나지 않음).
+
+## 현재 상태 (1~7단계 구현 완료)
+1. 스캐폴드 + 상시 알림 포그라운드 서비스
+2. 음성 상시 수집(내장 SpeechRecognizer, 재시작 루프)
+3. 앱 사용 수집(UsageStatsManager)
+4. 앱 내 화면 내용 수집(AccessibilityService) + 민감 앱 제외 목록
+5. 위치 수집(FusedLocationProvider)
+6. 알림 수집(NotificationListenerService)
+7. 내보내기(JSON) + 전체 삭제 + DB 암호화(SQLCipher)
+
+SM-P200(Android 11) 실기기에서 음성·앱·화면·알림 수집, 통합 타임라인,
+내보내기·삭제, 암호화 DB 동작을 확인. 위치는 GPS 없는 Wi-Fi 모델이라 측위 신호가
+없어 실측은 GPS 폰/실외에서 확인 필요(등록·저장 경로는 확인됨).
+
+## 남은 후속 과제
+- 수집기별 on/off 설정 화면, 민감 앱 제외 목록 편집 UI(현재 기본 목록 + prefs).
+- 화자 식별(내 목소리 등록 → 나/상대/모름 라벨), 배터리 영향 측정·튜닝.
+- 시스템 UI(상태바) 화면 캡처 노이즈 필터, 위치 실측 검증.
