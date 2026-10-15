@@ -1,10 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 1단계: 상시 알림을 띄우는 포그라운드 서비스. 수집기 권한은 각 단계에서 추가한다. -->
+    <!-- 포그라운드 서비스 + 상시 알림 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- 2단계: 음성 상시 수집 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <!-- Android 11+ 패키지 가시성: 음성 인식 서비스를 보려면 선언해야 한다. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
 
     <application
         android:name=".LifeLogApp"
@@ -28,11 +38,7 @@
         <service
             android:name=".LoggerService"
             android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="personal activity logging for the device owner" />
-        </service>
+            android:foregroundServiceType="microphone" />
 
     </application>
 </manifest>
