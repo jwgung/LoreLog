@@ -135,6 +135,9 @@ private fun HomeScreen() {
                     if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
                         != PackageManager.PERMISSION_GRANTED
                     ) add(Manifest.permission.RECORD_AUDIO)
+                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
+                        != PackageManager.PERMISSION_GRANTED
+                    ) add(Manifest.permission.ACCESS_FINE_LOCATION)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
                         != PackageManager.PERMISSION_GRANTED
@@ -197,6 +200,7 @@ private fun itemKey(item: TimelineItem): String = when (item) {
     is TimelineItem.Voice -> "v${item.seg.id}"
     is TimelineItem.App -> "a${item.event.id}"
     is TimelineItem.Screen -> "s${item.event.id}"
+    is TimelineItem.Location -> "l${item.point.id}"
 }
 
 @Composable
@@ -230,6 +234,13 @@ private fun TimelineRow(item: TimelineItem) {
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
+            is TimelineItem.Location -> Text(
+                "◎ %.5f, %.5f (±%.0fm)".format(
+                    item.point.latitude, item.point.longitude, item.point.accuracyM,
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

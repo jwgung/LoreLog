@@ -32,12 +32,16 @@ object LogRepository {
     private val _screenEvents = MutableStateFlow<List<ScreenContentEvent>>(emptyList())
     val screenEvents: StateFlow<List<ScreenContentEvent>> = _screenEvents.asStateFlow()
 
-    /** 음성·앱·화면 내용을 시간순(최신 먼저)으로 합친 타임라인. */
+    private val _locations = MutableStateFlow<List<LocationPoint>>(emptyList())
+    val locations: StateFlow<List<LocationPoint>> = _locations.asStateFlow()
+
+    /** 음성·앱·화면 내용·위치를 시간순(최신 먼저)으로 합친 타임라인. */
     val timeline: StateFlow<List<TimelineItem>> =
-        combine(_voiceSegments, _appEvents, _screenEvents) { voice, apps, screens ->
+        combine(_voiceSegments, _appEvents, _screenEvents, _locations) { voice, apps, screens, locs ->
             (voice.map { TimelineItem.Voice(it) } +
                 apps.map { TimelineItem.App(it) } +
-                screens.map { TimelineItem.Screen(it) })
+                screens.map { TimelineItem.Screen(it) } +
+                locs.map { TimelineItem.Location(it) })
                 .sortedByDescending { it.timestampMs }
                 .take(KEEP)
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
@@ -56,6 +60,7 @@ object LogRepository {
             _voiceSegments.value = store.recentVoice(KEEP)
             _appEvents.value = store.recentApp(KEEP)
             _screenEvents.value = store.recentScreen(KEEP)
+            _locations.value = store.recentLocation(KEEP)
         }
     }
 
@@ -83,6 +88,14 @@ object LogRepository {
             val id = store.insertScreen(timestampMs, packageName, label, text)
             val event = ScreenContentEvent(id, timestampMs, packageName, label, text)
             _screenEvents.update { (listOf(event) + it).take(KEEP) }
+        }
+    }
+
+    fun addLocation(lat: Double, lon: Double, accuracyM: Float, timestampMs: Long) {
+        scope.launch {
+            val id = store.insertLocation(timestampMs, lat, lon, accuracyM)
+            val point = LocationPoint(id, timestampMs, lat, lon, accuracyM)
+            _locations.update { (listOf(point) + it).take(KEEP) }
         }
     }
 

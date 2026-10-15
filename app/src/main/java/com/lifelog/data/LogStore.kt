@@ -25,11 +25,13 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
         db.execSQL("CREATE INDEX idx_voice_ts ON $TABLE_VOICE(ts)")
         createAppTable(db)
         createScreenTable(db)
+        createLocationTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createAppTable(db)
         if (oldVersion < 3) createScreenTable(db)
+        if (oldVersion < 4) createLocationTable(db)
     }
 
     private fun createAppTable(db: SQLiteDatabase) {
@@ -59,6 +61,21 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
             """.trimIndent(),
         )
         db.execSQL("CREATE INDEX idx_screen_ts ON $TABLE_SCREEN(ts)")
+    }
+
+    private fun createLocationTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE $TABLE_LOCATION (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                lat REAL NOT NULL,
+                lon REAL NOT NULL,
+                accuracy REAL NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX idx_location_ts ON $TABLE_LOCATION(ts)")
     }
 
     fun insertVoice(timestampMs: Long, text: String, speaker: String?): Long {
@@ -139,11 +156,37 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
         return out
     }
 
+    fun insertLocation(timestampMs: Long, lat: Double, lon: Double, accuracyM: Float): Long {
+        val values = ContentValues().apply {
+            put("ts", timestampMs)
+            put("lat", lat)
+            put("lon", lon)
+            put("accuracy", accuracyM)
+        }
+        return writableDatabase.insert(TABLE_LOCATION, null, values)
+    }
+
+    fun recentLocation(limit: Int): List<LocationPoint> {
+        val out = ArrayList<LocationPoint>()
+        readableDatabase.query(
+            TABLE_LOCATION, arrayOf("id", "ts", "lat", "lon", "accuracy"),
+            null, null, null, null, "ts DESC", limit.toString(),
+        ).use { c ->
+            while (c.moveToNext()) {
+                out.add(
+                    LocationPoint(c.getLong(0), c.getLong(1), c.getDouble(2), c.getDouble(3), c.getFloat(4)),
+                )
+            }
+        }
+        return out
+    }
+
     companion object {
         private const val DB_NAME = "lifelog.db"
-        private const val DB_VERSION = 3
+        private const val DB_VERSION = 4
         private const val TABLE_VOICE = "voice_segment"
         private const val TABLE_APP = "app_event"
         private const val TABLE_SCREEN = "screen_content"
+        private const val TABLE_LOCATION = "location_point"
     }
 }
