@@ -26,12 +26,14 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
         createAppTable(db)
         createScreenTable(db)
         createLocationTable(db)
+        createNotificationTable(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < 2) createAppTable(db)
         if (oldVersion < 3) createScreenTable(db)
         if (oldVersion < 4) createLocationTable(db)
+        if (oldVersion < 5) createNotificationTable(db)
     }
 
     private fun createAppTable(db: SQLiteDatabase) {
@@ -76,6 +78,22 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
             """.trimIndent(),
         )
         db.execSQL("CREATE INDEX idx_location_ts ON $TABLE_LOCATION(ts)")
+    }
+
+    private fun createNotificationTable(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE $TABLE_NOTIF (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts INTEGER NOT NULL,
+                pkg TEXT NOT NULL,
+                label TEXT NOT NULL,
+                title TEXT NOT NULL,
+                text TEXT NOT NULL
+            )
+            """.trimIndent(),
+        )
+        db.execSQL("CREATE INDEX idx_notif_ts ON $TABLE_NOTIF(ts)")
     }
 
     fun insertVoice(timestampMs: Long, text: String, speaker: String?): Long {
@@ -181,12 +199,42 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
         return out
     }
 
+    fun insertNotification(timestampMs: Long, pkg: String, label: String, title: String, text: String): Long {
+        val values = ContentValues().apply {
+            put("ts", timestampMs)
+            put("pkg", pkg)
+            put("label", label)
+            put("title", title)
+            put("text", text)
+        }
+        return writableDatabase.insert(TABLE_NOTIF, null, values)
+    }
+
+    fun recentNotification(limit: Int): List<NotificationEvent> {
+        val out = ArrayList<NotificationEvent>()
+        readableDatabase.query(
+            TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text"),
+            null, null, null, null, "ts DESC", limit.toString(),
+        ).use { c ->
+            while (c.moveToNext()) {
+                out.add(
+                    NotificationEvent(
+                        c.getLong(0), c.getLong(1), c.getString(2),
+                        c.getString(3), c.getString(4), c.getString(5),
+                    ),
+                )
+            }
+        }
+        return out
+    }
+
     companion object {
         private const val DB_NAME = "lifelog.db"
-        private const val DB_VERSION = 4
+        private const val DB_VERSION = 5
         private const val TABLE_VOICE = "voice_segment"
         private const val TABLE_APP = "app_event"
         private const val TABLE_SCREEN = "screen_content"
         private const val TABLE_LOCATION = "location_point"
+        private const val TABLE_NOTIF = "notification_event"
     }
 }

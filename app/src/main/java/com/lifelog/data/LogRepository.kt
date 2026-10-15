@@ -35,13 +35,18 @@ object LogRepository {
     private val _locations = MutableStateFlow<List<LocationPoint>>(emptyList())
     val locations: StateFlow<List<LocationPoint>> = _locations.asStateFlow()
 
-    /** 음성·앱·화면 내용·위치를 시간순(최신 먼저)으로 합친 타임라인. */
+    private val _notifications = MutableStateFlow<List<NotificationEvent>>(emptyList())
+    val notifications: StateFlow<List<NotificationEvent>> = _notifications.asStateFlow()
+
+    /** 모든 수집 종류를 시간순(최신 먼저)으로 합친 타임라인. */
     val timeline: StateFlow<List<TimelineItem>> =
-        combine(_voiceSegments, _appEvents, _screenEvents, _locations) { voice, apps, screens, locs ->
+        combine(_voiceSegments, _appEvents, _screenEvents, _locations, _notifications) {
+            voice, apps, screens, locs, notifs ->
             (voice.map { TimelineItem.Voice(it) } +
                 apps.map { TimelineItem.App(it) } +
                 screens.map { TimelineItem.Screen(it) } +
-                locs.map { TimelineItem.Location(it) })
+                locs.map { TimelineItem.Location(it) } +
+                notifs.map { TimelineItem.Notification(it) })
                 .sortedByDescending { it.timestampMs }
                 .take(KEEP)
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
@@ -61,6 +66,7 @@ object LogRepository {
             _appEvents.value = store.recentApp(KEEP)
             _screenEvents.value = store.recentScreen(KEEP)
             _locations.value = store.recentLocation(KEEP)
+            _notifications.value = store.recentNotification(KEEP)
         }
     }
 
@@ -96,6 +102,14 @@ object LogRepository {
             val id = store.insertLocation(timestampMs, lat, lon, accuracyM)
             val point = LocationPoint(id, timestampMs, lat, lon, accuracyM)
             _locations.update { (listOf(point) + it).take(KEEP) }
+        }
+    }
+
+    fun addNotification(packageName: String, label: String, title: String, text: String, timestampMs: Long) {
+        scope.launch {
+            val id = store.insertNotification(timestampMs, packageName, label, title, text)
+            val event = NotificationEvent(id, timestampMs, packageName, label, title, text)
+            _notifications.update { (listOf(event) + it).take(KEEP) }
         }
     }
 

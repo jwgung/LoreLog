@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -78,6 +79,9 @@ private fun isScreenCaptureEnabled(context: android.content.Context): Boolean {
     return enabled.contains("${context.packageName}/") && enabled.contains("ScreenContentService")
 }
 
+private fun isNotificationAccessEnabled(context: android.content.Context): Boolean =
+    NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
+
 @Composable
 private fun HomeScreen() {
     val context = LocalContext.current
@@ -89,12 +93,14 @@ private fun HomeScreen() {
     // 특수 권한(사용 정보 접근, 접근성)은 설정에서 켜고 돌아온다. 화면이 다시 보일 때 다시 확인한다.
     var usageGranted by remember { mutableStateOf(UsageAccess.isGranted(context)) }
     var screenGranted by remember { mutableStateOf(isScreenCaptureEnabled(context)) }
+    var notifGranted by remember { mutableStateOf(isNotificationAccessEnabled(context)) }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 usageGranted = UsageAccess.isGranted(context)
                 screenGranted = isScreenCaptureEnabled(context)
+                notifGranted = isNotificationAccessEnabled(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -168,6 +174,15 @@ private fun HomeScreen() {
             }) { Text("화면 내용 기록 켜기 (접근성)") }
         }
 
+        if (!notifGranted) {
+            OutlinedButton(onClick = {
+                context.startActivity(
+                    Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }) { Text("알림 기록 켜기 (알림 접근)") }
+        }
+
         if (running && partial.isNotBlank()) {
             Text(
                 partial,
@@ -201,6 +216,7 @@ private fun itemKey(item: TimelineItem): String = when (item) {
     is TimelineItem.App -> "a${item.event.id}"
     is TimelineItem.Screen -> "s${item.event.id}"
     is TimelineItem.Location -> "l${item.point.id}"
+    is TimelineItem.Notification -> "n${item.event.id}"
 }
 
 @Composable
@@ -241,6 +257,18 @@ private fun TimelineRow(item: TimelineItem) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            is TimelineItem.Notification -> Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    "✉ " + item.event.label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    listOf(item.event.title, item.event.text).filter { it.isNotEmpty() }
+                        .joinToString(" — ").take(140),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
     }
 }

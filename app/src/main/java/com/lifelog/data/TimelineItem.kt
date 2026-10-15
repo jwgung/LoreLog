@@ -19,4 +19,8 @@ sealed interface TimelineItem {
     data class Location(val point: LocationPoint) : TimelineItem {
         override val timestampMs: Long get() = point.timestampMs
     }
+
+    data class Notification(val event: NotificationEvent) : TimelineItem {
+        override val timestampMs: Long get() = event.timestampMs
+    }
 }
