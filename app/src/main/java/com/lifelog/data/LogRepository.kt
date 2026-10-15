@@ -12,6 +12,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * 수집 결과의 단일 출처. 화면은 여기 StateFlow 를 구독한다.
@@ -110,6 +112,28 @@ object LogRepository {
             val id = store.insertNotification(timestampMs, packageName, label, title, text)
             val event = NotificationEvent(id, timestampMs, packageName, label, title, text)
             _notifications.update { (listOf(event) + it).take(KEEP) }
+        }
+    }
+
+    /** 모든 기록을 JSON 파일로 내보내 반환한다(공유용, 캐시 폴더). */
+    suspend fun exportToFile(context: Context): File = withContext(Dispatchers.IO) {
+        val json = store.exportJson(System.currentTimeMillis())
+        val dir = File(context.cacheDir, "exports").apply { mkdirs() }
+        val file = File(dir, "lifelog_${System.currentTimeMillis()}.json")
+        file.writeText(json)
+        file
+    }
+
+    /** 모든 기록을 지운다(되돌릴 수 없음). */
+    fun deleteAll() {
+        scope.launch {
+            store.deleteAll()
+            _voiceSegments.value = emptyList()
+            _appEvents.value = emptyList()
+            _screenEvents.value = emptyList()
+            _locations.value = emptyList()
+            _notifications.value = emptyList()
+            _partial.value = ""
         }
     }
 

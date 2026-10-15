@@ -2,8 +2,11 @@ package com.lifelog.data
 
 import android.content.ContentValues
 import android.content.Context
+import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * 기기 로컬 SQLite 저장. 의존성 없이 프레임워크만 쓴다.
@@ -226,6 +229,51 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
             }
         }
         return out
+    }
+
+    /** 모든 기록을 JSON 문자열로. 지식그래프 등 외부로 내보낼 때 쓴다. */
+    fun exportJson(exportedAtMs: Long): String {
+        val db = readableDatabase
+        val root = JSONObject()
+        root.put("exportedAt", exportedAtMs)
+        root.put("voice", dump(db, TABLE_VOICE, arrayOf("id", "ts", "text", "speaker")))
+        root.put("apps", dump(db, TABLE_APP, arrayOf("id", "ts", "pkg", "label")))
+        root.put("screen", dump(db, TABLE_SCREEN, arrayOf("id", "ts", "pkg", "label", "text")))
+        root.put("locations", dump(db, TABLE_LOCATION, arrayOf("id", "ts", "lat", "lon", "accuracy")))
+        root.put("notifications", dump(db, TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text")))
+        return root.toString(2)
+    }
+
+    private fun dump(db: SQLiteDatabase, table: String, cols: Array<String>): JSONArray {
+        val arr = JSONArray()
+        db.query(table, cols, null, null, null, null, "ts ASC").use { c ->
+            while (c.moveToNext()) {
+                val o = JSONObject()
+                for (i in cols.indices) {
+                    o.put(cols[i], valueAt(c, i))
+                }
+                arr.put(o)
+            }
+        }
+        return arr
+    }
+
+    private fun valueAt(c: Cursor, i: Int): Any = when (c.getType(i)) {
+        Cursor.FIELD_TYPE_INTEGER -> c.getLong(i)
+        Cursor.FIELD_TYPE_FLOAT -> c.getDouble(i)
+        Cursor.FIELD_TYPE_NULL -> JSONObject.NULL
+        else -> c.getString(i)
+    }
+
+    /** 모든 기록을 지운다(되돌릴 수 없음). */
+    fun deleteAll() {
+        writableDatabase.apply {
+            delete(TABLE_VOICE, null, null)
+            delete(TABLE_APP, null, null)
+            delete(TABLE_SCREEN, null, null)
+            delete(TABLE_LOCATION, null, null)
+            delete(TABLE_NOTIF, null, null)
+        }
     }
 
     companion object {
