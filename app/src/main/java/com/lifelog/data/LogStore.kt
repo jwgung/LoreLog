@@ -38,6 +38,8 @@ class LogStore(context: Context, password: ByteArray) {
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_summary_ts ON $TABLE_SUMMARY(ts)")
         db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_COMM (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, kind TEXT NOT NULL, direction TEXT NOT NULL, party TEXT NOT NULL, party_name TEXT, content TEXT NOT NULL)")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_comm_ts ON $TABLE_COMM(ts)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_CAL (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, title TEXT NOT NULL, location TEXT NOT NULL, end_ms INTEGER NOT NULL)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_cal_ts ON $TABLE_CAL(ts)")
     }
 
     fun insertVoice(timestampMs: Long, text: String, speaker: String?): Long {
@@ -162,6 +164,7 @@ class LogStore(context: Context, password: ByteArray) {
         root.put("notifications", dump(TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text")))
         root.put("summaries", dump(TABLE_SUMMARY, arrayOf("id", "ts", "period_start", "period_end", "text")))
         root.put("comms", dump(TABLE_COMM, arrayOf("id", "ts", "kind", "direction", "party", "party_name", "content")))
+        root.put("calendar", dump(TABLE_CAL, arrayOf("id", "ts", "title", "location", "end_ms")))
         return root.toString(2)
     }
 
@@ -206,6 +209,26 @@ class LogStore(context: Context, password: ByteArray) {
                         c.getString(4), if (c.isNull(5)) null else c.getString(5), c.getString(6),
                     ),
                 )
+            }
+        }
+        return out
+    }
+
+    fun insertCalendar(timestampMs: Long, title: String, location: String, endMs: Long): Long {
+        val values = ContentValues().apply {
+            put("ts", timestampMs)
+            put("title", title)
+            put("location", location)
+            put("end_ms", endMs)
+        }
+        return db.insert(TABLE_CAL, null, values)
+    }
+
+    fun recentCalendar(limit: Int): List<CalendarEntry> {
+        val out = ArrayList<CalendarEntry>()
+        db.query(TABLE_CAL, arrayOf("id", "ts", "title", "location", "end_ms"), null, null, null, null, "ts DESC", limit.toString()).use { c ->
+            while (c.moveToNext()) {
+                out.add(CalendarEntry(c.getLong(0), c.getLong(1), c.getString(2), c.getString(3), c.getLong(4)))
             }
         }
         return out
@@ -279,11 +302,12 @@ class LogStore(context: Context, password: ByteArray) {
         emit("notification", TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text"))
         emit("summary", TABLE_SUMMARY, arrayOf("id", "ts", "period_start", "period_end", "text"))
         emit("comm", TABLE_COMM, arrayOf("id", "ts", "kind", "direction", "party", "party_name", "content"))
+        emit("calendar", TABLE_CAL, arrayOf("id", "ts", "title", "location", "end_ms"))
         return NewRows(lines, newIds)
     }
 
     /** 증분 내보내기가 커서로 쓰는 테이블 이름들. */
-    fun tables(): List<String> = listOf(TABLE_VOICE, TABLE_APP, TABLE_SCREEN, TABLE_LOCATION, TABLE_NOTIF, TABLE_SUMMARY, TABLE_COMM)
+    fun tables(): List<String> = listOf(TABLE_VOICE, TABLE_APP, TABLE_SCREEN, TABLE_LOCATION, TABLE_NOTIF, TABLE_SUMMARY, TABLE_COMM, TABLE_CAL)
 
     /**
      * 보존 정리. 각 원본 테이블에서 ts < [cutoffMs] 이고 이미 내보낸(id <= 해당 테이블의
@@ -291,7 +315,7 @@ class LogStore(context: Context, password: ByteArray) {
      */
     fun prune(cutoffMs: Long, exportedLastIds: Map<String, Long>): Int {
         var deleted = 0
-        for (table in listOf(TABLE_VOICE, TABLE_APP, TABLE_SCREEN, TABLE_LOCATION, TABLE_NOTIF, TABLE_COMM)) {
+        for (table in listOf(TABLE_VOICE, TABLE_APP, TABLE_SCREEN, TABLE_LOCATION, TABLE_NOTIF, TABLE_COMM, TABLE_CAL)) {
             val lastExported = exportedLastIds[table] ?: 0L
             deleted += db.delete(table, "ts < ? AND id <= ?", arrayOf(cutoffMs.toString(), lastExported.toString()))
         }
@@ -307,6 +331,7 @@ class LogStore(context: Context, password: ByteArray) {
         db.delete(TABLE_NOTIF, null, null)
         db.delete(TABLE_SUMMARY, null, null)
         db.delete(TABLE_COMM, null, null)
+        db.delete(TABLE_CAL, null, null)
     }
 
     companion object {
@@ -318,5 +343,6 @@ class LogStore(context: Context, password: ByteArray) {
         private const val TABLE_NOTIF = "notification_event"
         private const val TABLE_SUMMARY = "summary"
         private const val TABLE_COMM = "comm_event"
+        private const val TABLE_CAL = "calendar_event"
     }
 }

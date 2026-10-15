@@ -11,6 +11,7 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.lifelog.collect.AppUsageCollector
+import com.lifelog.collect.CalendarCollector
 import com.lifelog.collect.CommsCollector
 import com.lifelog.collect.LocationCollector
 import com.lifelog.collect.VoiceCollector
@@ -27,6 +28,7 @@ class LoggerService : Service() {
     private var appUsage: AppUsageCollector? = null
     private var location: LocationCollector? = null
     private var comms: CommsCollector? = null
+    private var calendar: CalendarCollector? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -60,6 +62,8 @@ class LoggerService : Service() {
         location?.start()
         if (comms == null) comms = CommsCollector(this)
         comms?.start()
+        if (calendar == null) calendar = CalendarCollector(this)
+        calendar?.start()
     }
 
     private fun stopCollectors() {
@@ -67,6 +71,7 @@ class LoggerService : Service() {
         appUsage?.stop()
         location?.stop()
         comms?.stop()
+        calendar?.stop()
     }
 
     private fun stopLogging() {

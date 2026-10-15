@@ -175,7 +175,7 @@ private fun HomeScreen() {
                     if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
                         != PackageManager.PERMISSION_GRANTED
                     ) add(Manifest.permission.ACCESS_FINE_LOCATION)
-                    for (p in listOf(Manifest.permission.READ_CALL_LOG, Manifest.permission.READ_SMS, Manifest.permission.READ_CONTACTS)) {
+                    for (p in listOf(Manifest.permission.READ_CALL_LOG, Manifest.permission.READ_SMS, Manifest.permission.READ_CONTACTS, Manifest.permission.READ_CALENDAR)) {
                         if (ContextCompat.checkSelfPermission(context, p) != PackageManager.PERMISSION_GRANTED) add(p)
                     }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -324,6 +324,7 @@ private fun itemKey(item: TimelineItem): String = when (item) {
     is TimelineItem.Location -> "l${item.point.id}"
     is TimelineItem.Notification -> "n${item.event.id}"
     is TimelineItem.Comm -> "c${item.event.id}"
+    is TimelineItem.Calendar -> "k${item.entry.id}"
 }
 
 @Composable
@@ -395,6 +396,10 @@ private fun TimelineRow(item: TimelineItem) {
                     )
                 }
             }
+            is TimelineItem.Calendar -> Text(
+                "📅 ${item.entry.title}" + if (item.entry.location.isNotEmpty()) " @${item.entry.location}" else "",
+                style = MaterialTheme.typography.bodyMedium,
+            )
         }
     }
 }

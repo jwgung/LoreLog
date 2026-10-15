@@ -54,6 +54,9 @@ object LogRepository {
     private val _commEvents = MutableStateFlow<List<CommEvent>>(emptyList())
     val commEvents: StateFlow<List<CommEvent>> = _commEvents.asStateFlow()
 
+    private val _calendarEvents = MutableStateFlow<List<CalendarEntry>>(emptyList())
+    val calendarEvents: StateFlow<List<CalendarEntry>> = _calendarEvents.asStateFlow()
+
     /** 모든 수집 종류를 시간순(최신 먼저)으로 합친 타임라인. */
     val timeline: StateFlow<List<TimelineItem>> =
         combine(
@@ -66,8 +69,9 @@ object LogRepository {
                     notifs.map { TimelineItem.Notification(it) }
             },
             _commEvents,
-        ) { base, comms ->
-            (base + comms.map { TimelineItem.Comm(it) })
+            _calendarEvents,
+        ) { base, comms, cals ->
+            (base + comms.map { TimelineItem.Comm(it) } + cals.map { TimelineItem.Calendar(it) })
                 .sortedByDescending { it.timestampMs }
                 .take(KEEP)
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
@@ -90,6 +94,7 @@ object LogRepository {
             _notifications.value = store.recentNotification(KEEP)
             _summaries.value = store.recentSummary(KEEP)
             _commEvents.value = store.recentComm(KEEP)
+            _calendarEvents.value = store.recentCalendar(KEEP)
         }
     }
 
@@ -199,6 +204,7 @@ object LogRepository {
             _locations.value = store.recentLocation(KEEP)
             _notifications.value = store.recentNotification(KEEP)
             _commEvents.value = store.recentComm(KEEP)
+            _calendarEvents.value = store.recentCalendar(KEEP)
         }
         deleted
     }
@@ -234,6 +240,7 @@ object LogRepository {
             _notifications.value = emptyList()
             _summaries.value = emptyList()
             _commEvents.value = emptyList()
+            _calendarEvents.value = emptyList()
             _partial.value = ""
         }
     }
@@ -243,6 +250,14 @@ object LogRepository {
             val id = store.insertComm(timestampMs, kind, direction, party, partyName, content)
             val event = CommEvent(id, timestampMs, kind, direction, party, partyName, content)
             _commEvents.update { (listOf(event) + it).take(KEEP) }
+        }
+    }
+
+    fun addCalendar(title: String, location: String, beginMs: Long, endMs: Long) {
+        scope.launch {
+            val id = store.insertCalendar(beginMs, title, location, endMs)
+            val entry = CalendarEntry(id, beginMs, title, location, endMs)
+            _calendarEvents.update { (listOf(entry) + it).take(KEEP) }
         }
     }
 
