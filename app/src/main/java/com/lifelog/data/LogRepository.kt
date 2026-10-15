@@ -51,15 +51,23 @@ object LogRepository {
     private val _summaries = MutableStateFlow<List<Summary>>(emptyList())
     val summaries: StateFlow<List<Summary>> = _summaries.asStateFlow()
 
+    private val _commEvents = MutableStateFlow<List<CommEvent>>(emptyList())
+    val commEvents: StateFlow<List<CommEvent>> = _commEvents.asStateFlow()
+
     /** 모든 수집 종류를 시간순(최신 먼저)으로 합친 타임라인. */
     val timeline: StateFlow<List<TimelineItem>> =
-        combine(_voiceSegments, _appEvents, _screenEvents, _locations, _notifications) {
-            voice, apps, screens, locs, notifs ->
-            (voice.map { TimelineItem.Voice(it) } +
-                apps.map { TimelineItem.App(it) } +
-                screens.map { TimelineItem.Screen(it) } +
-                locs.map { TimelineItem.Location(it) } +
-                notifs.map { TimelineItem.Notification(it) })
+        combine(
+            combine(_voiceSegments, _appEvents, _screenEvents, _locations, _notifications) {
+                voice, apps, screens, locs, notifs ->
+                voice.map { TimelineItem.Voice(it) } +
+                    apps.map { TimelineItem.App(it) } +
+                    screens.map { TimelineItem.Screen(it) } +
+                    locs.map { TimelineItem.Location(it) } +
+                    notifs.map { TimelineItem.Notification(it) }
+            },
+            _commEvents,
+        ) { base, comms ->
+            (base + comms.map { TimelineItem.Comm(it) })
                 .sortedByDescending { it.timestampMs }
                 .take(KEEP)
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
@@ -81,6 +89,7 @@ object LogRepository {
             _locations.value = store.recentLocation(KEEP)
             _notifications.value = store.recentNotification(KEEP)
             _summaries.value = store.recentSummary(KEEP)
+            _commEvents.value = store.recentComm(KEEP)
         }
     }
 
@@ -189,6 +198,7 @@ object LogRepository {
             _screenEvents.value = store.recentScreen(KEEP)
             _locations.value = store.recentLocation(KEEP)
             _notifications.value = store.recentNotification(KEEP)
+            _commEvents.value = store.recentComm(KEEP)
         }
         deleted
     }
@@ -223,7 +233,16 @@ object LogRepository {
             _locations.value = emptyList()
             _notifications.value = emptyList()
             _summaries.value = emptyList()
+            _commEvents.value = emptyList()
             _partial.value = ""
+        }
+    }
+
+    fun addComm(kind: String, direction: String, party: String, partyName: String?, content: String, timestampMs: Long) {
+        scope.launch {
+            val id = store.insertComm(timestampMs, kind, direction, party, partyName, content)
+            val event = CommEvent(id, timestampMs, kind, direction, party, partyName, content)
+            _commEvents.update { (listOf(event) + it).take(KEEP) }
         }
     }
 

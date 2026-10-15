@@ -23,4 +23,8 @@ sealed interface TimelineItem {
     data class Notification(val event: NotificationEvent) : TimelineItem {
         override val timestampMs: Long get() = event.timestampMs
     }
+
+    data class Comm(val event: CommEvent) : TimelineItem {
+        override val timestampMs: Long get() = event.timestampMs
+    }
 }

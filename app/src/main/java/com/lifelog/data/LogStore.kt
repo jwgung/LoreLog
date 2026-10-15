@@ -36,6 +36,8 @@ class LogStore(context: Context, password: ByteArray) {
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_notif_ts ON $TABLE_NOTIF(ts)")
         db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_SUMMARY (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, period_start INTEGER NOT NULL, period_end INTEGER NOT NULL, text TEXT NOT NULL)")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_summary_ts ON $TABLE_SUMMARY(ts)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_COMM (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, kind TEXT NOT NULL, direction TEXT NOT NULL, party TEXT NOT NULL, party_name TEXT, content TEXT NOT NULL)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_comm_ts ON $TABLE_COMM(ts)")
     }
 
     fun insertVoice(timestampMs: Long, text: String, speaker: String?): Long {
@@ -159,6 +161,7 @@ class LogStore(context: Context, password: ByteArray) {
         root.put("locations", dump(TABLE_LOCATION, arrayOf("id", "ts", "lat", "lon", "accuracy")))
         root.put("notifications", dump(TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text")))
         root.put("summaries", dump(TABLE_SUMMARY, arrayOf("id", "ts", "period_start", "period_end", "text")))
+        root.put("comms", dump(TABLE_COMM, arrayOf("id", "ts", "kind", "direction", "party", "party_name", "content")))
         return root.toString(2)
     }
 
@@ -179,6 +182,33 @@ class LogStore(context: Context, password: ByteArray) {
         Cursor.FIELD_TYPE_FLOAT -> c.getDouble(i)
         Cursor.FIELD_TYPE_NULL -> JSONObject.NULL
         else -> c.getString(i)
+    }
+
+    fun insertComm(timestampMs: Long, kind: String, direction: String, party: String, partyName: String?, content: String): Long {
+        val values = ContentValues().apply {
+            put("ts", timestampMs)
+            put("kind", kind)
+            put("direction", direction)
+            put("party", party)
+            put("party_name", partyName)
+            put("content", content)
+        }
+        return db.insert(TABLE_COMM, null, values)
+    }
+
+    fun recentComm(limit: Int): List<CommEvent> {
+        val out = ArrayList<CommEvent>()
+        db.query(TABLE_COMM, arrayOf("id", "ts", "kind", "direction", "party", "party_name", "content"), null, null, null, null, "ts DESC", limit.toString()).use { c ->
+            while (c.moveToNext()) {
+                out.add(
+                    CommEvent(
+                        c.getLong(0), c.getLong(1), c.getString(2), c.getString(3),
+                        c.getString(4), if (c.isNull(5)) null else c.getString(5), c.getString(6),
+                    ),
+                )
+            }
+        }
+        return out
     }
 
     fun insertSummary(timestampMs: Long, periodStartMs: Long, periodEndMs: Long, text: String): Long {
@@ -248,11 +278,12 @@ class LogStore(context: Context, password: ByteArray) {
         emit("location", TABLE_LOCATION, arrayOf("id", "ts", "lat", "lon", "accuracy"))
         emit("notification", TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text"))
         emit("summary", TABLE_SUMMARY, arrayOf("id", "ts", "period_start", "period_end", "text"))
+        emit("comm", TABLE_COMM, arrayOf("id", "ts", "kind", "direction", "party", "party_name", "content"))
         return NewRows(lines, newIds)
     }
 
     /** 증분 내보내기가 커서로 쓰는 테이블 이름들. */
-    fun tables(): List<String> = listOf(TABLE_VOICE, TABLE_APP, TABLE_SCREEN, TABLE_LOCATION, TABLE_NOTIF, TABLE_SUMMARY)
+    fun tables(): List<String> = listOf(TABLE_VOICE, TABLE_APP, TABLE_SCREEN, TABLE_LOCATION, TABLE_NOTIF, TABLE_SUMMARY, TABLE_COMM)
 
     /**
      * 보존 정리. 각 원본 테이블에서 ts < [cutoffMs] 이고 이미 내보낸(id <= 해당 테이블의
@@ -260,7 +291,7 @@ class LogStore(context: Context, password: ByteArray) {
      */
     fun prune(cutoffMs: Long, exportedLastIds: Map<String, Long>): Int {
         var deleted = 0
-        for (table in listOf(TABLE_VOICE, TABLE_APP, TABLE_SCREEN, TABLE_LOCATION, TABLE_NOTIF)) {
+        for (table in listOf(TABLE_VOICE, TABLE_APP, TABLE_SCREEN, TABLE_LOCATION, TABLE_NOTIF, TABLE_COMM)) {
             val lastExported = exportedLastIds[table] ?: 0L
             deleted += db.delete(table, "ts < ? AND id <= ?", arrayOf(cutoffMs.toString(), lastExported.toString()))
         }
@@ -275,6 +306,7 @@ class LogStore(context: Context, password: ByteArray) {
         db.delete(TABLE_LOCATION, null, null)
         db.delete(TABLE_NOTIF, null, null)
         db.delete(TABLE_SUMMARY, null, null)
+        db.delete(TABLE_COMM, null, null)
     }
 
     companion object {
@@ -285,5 +317,6 @@ class LogStore(context: Context, password: ByteArray) {
         private const val TABLE_LOCATION = "location_point"
         private const val TABLE_NOTIF = "notification_event"
         private const val TABLE_SUMMARY = "summary"
+        private const val TABLE_COMM = "comm_event"
     }
 }
