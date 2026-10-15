@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit
 class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = try {
         LogRepository.exportIncremental(applicationContext)
+        LogRepository.pushToHttp(applicationContext)
         Result.success()
     } catch (e: Exception) {
         Result.retry()

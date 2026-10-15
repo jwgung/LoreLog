@@ -25,6 +25,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -53,6 +54,7 @@ import kotlinx.coroutines.launch
 import com.lifelog.collect.UsageAccess
 import com.lifelog.data.LogRepository
 import com.lifelog.data.TimelineItem
+import com.lifelog.net.EndpointConfig
 import com.lifelog.summary.Summarizer
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -124,6 +126,8 @@ private fun HomeScreen() {
 
     val coroutineScope = rememberCoroutineScope()
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var endpointUrl by remember { mutableStateOf(EndpointConfig.url(context) ?: "") }
+    var endpointToken by remember { mutableStateOf(EndpointConfig.token(context) ?: "") }
 
     if (showDeleteDialog) {
         AlertDialog(
@@ -254,6 +258,40 @@ private fun HomeScreen() {
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+
+        Text("HTTP 내보내기", style = MaterialTheme.typography.labelLarge)
+        OutlinedTextField(
+            value = endpointUrl,
+            onValueChange = { endpointUrl = it },
+            label = { Text("엔드포인트 URL") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = endpointToken,
+            onValueChange = { endpointToken = it },
+            label = { Text("토큰 (선택)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = {
+                EndpointConfig.set(context, endpointUrl, endpointToken)
+                LogRepository.setStatus("엔드포인트 저장됨")
+            }) { Text("저장") }
+            OutlinedButton(onClick = {
+                coroutineScope.launch {
+                    val n = LogRepository.pushToHttp(context)
+                    LogRepository.setStatus(
+                        when (n) {
+                            -1 -> "엔드포인트 미설정"
+                            -2 -> "전송 실패"
+                            else -> "전송됨: ${n}건"
+                        },
+                    )
+                }
+            }) { Text("지금 전송") }
         }
 
         HorizontalDivider()

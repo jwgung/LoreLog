@@ -3,6 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <!-- 포그라운드 서비스 + 상시 알림 -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
@@ -32,6 +33,7 @@
 
     <application
         android:name=".LifeLogApp"
+        android:usesCleartextTraffic="true"
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"

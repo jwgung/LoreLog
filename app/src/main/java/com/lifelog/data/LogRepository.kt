@@ -1,6 +1,8 @@
 package com.lifelog.data
 
 import android.content.Context
+import com.lifelog.net.EndpointConfig
+import com.lifelog.net.HttpSink
 import com.lifelog.summary.GeminiNanoSummarizer
 import com.lifelog.summary.Summarizer
 import kotlinx.coroutines.CoroutineScope
@@ -189,6 +191,26 @@ object LogRepository {
             _notifications.value = store.recentNotification(KEEP)
         }
         deleted
+    }
+
+    /**
+     * HTTP 엔드포인트로 증분 전송. 설정된 URL 로 지난 전송 이후 새 기록만 NDJSON 으로 POST.
+     * 성공(2xx) 시에만 전송 커서를 전진시킨다(실패하면 다음에 다시 보냄).
+     * 반환: 보낸 줄 수(>=0), -1 미설정, -2 전송 실패.
+     */
+    suspend fun pushToHttp(context: Context): Int = withContext(Dispatchers.IO) {
+        val url = EndpointConfig.url(context) ?: return@withContext -1
+        val prefs = context.getSharedPreferences("http_state", Context.MODE_PRIVATE)
+        val lastIds = store.tables().associateWith { prefs.getLong("last_$it", 0L) }
+        val result = store.newRows(lastIds)
+        if (result.lines.isEmpty()) return@withContext 0
+        val body = result.lines.joinToString("\n", postfix = "\n")
+        val ok = HttpSink.post(url, EndpointConfig.token(context), body)
+        if (!ok) return@withContext -2
+        prefs.edit().apply {
+            result.newLastIds.forEach { (table, id) -> putLong("last_$table", id) }
+        }.apply()
+        result.lines.size
     }
 
     /** 모든 기록을 지운다(되돌릴 수 없음). */
