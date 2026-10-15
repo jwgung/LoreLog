@@ -38,8 +38,12 @@ class LogStore(context: Context, password: ByteArray) {
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_summary_ts ON $TABLE_SUMMARY(ts)")
         db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_COMM (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, kind TEXT NOT NULL, direction TEXT NOT NULL, party TEXT NOT NULL, party_name TEXT, content TEXT NOT NULL)")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_comm_ts ON $TABLE_COMM(ts)")
-        db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_CAL (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, title TEXT NOT NULL, location TEXT NOT NULL, end_ms INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_CAL (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, title TEXT NOT NULL, location TEXT NOT NULL, end_ms INTEGER NOT NULL, attendees TEXT NOT NULL DEFAULT '')")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_cal_ts ON $TABLE_CAL(ts)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_CONV (id INTEGER PRIMARY KEY AUTOINCREMENT, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, participants TEXT NOT NULL, source TEXT NOT NULL, status TEXT NOT NULL, context TEXT NOT NULL)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_conv_start ON $TABLE_CONV(start_ms)")
+        // 기존 DB(열 없는 calendar_event)를 위한 보강. 이미 있으면 무시.
+        runCatching { db.execSQL("ALTER TABLE $TABLE_CAL ADD COLUMN attendees TEXT NOT NULL DEFAULT ''") }
     }
 
     fun insertVoice(timestampMs: Long, text: String, speaker: String?): Long {
@@ -164,13 +168,14 @@ class LogStore(context: Context, password: ByteArray) {
         root.put("notifications", dump(TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text")))
         root.put("summaries", dump(TABLE_SUMMARY, arrayOf("id", "ts", "period_start", "period_end", "text")))
         root.put("comms", dump(TABLE_COMM, arrayOf("id", "ts", "kind", "direction", "party", "party_name", "content")))
-        root.put("calendar", dump(TABLE_CAL, arrayOf("id", "ts", "title", "location", "end_ms")))
+        root.put("calendar", dump(TABLE_CAL, arrayOf("id", "ts", "title", "location", "end_ms", "attendees")))
+        root.put("conversations", dump(TABLE_CONV, arrayOf("id", "start_ms", "end_ms", "participants", "source", "status", "context")))
         return root.toString(2)
     }
 
     private fun dump(table: String, cols: Array<String>): JSONArray {
         val arr = JSONArray()
-        db.query(table, cols, null, null, null, null, "ts ASC").use { c ->
+        db.query(table, cols, null, null, null, null, "id ASC").use { c ->
             while (c.moveToNext()) {
                 val o = JSONObject()
                 for (i in cols.indices) o.put(cols[i], valueAt(c, i))
@@ -214,24 +219,80 @@ class LogStore(context: Context, password: ByteArray) {
         return out
     }
 
-    fun insertCalendar(timestampMs: Long, title: String, location: String, endMs: Long): Long {
+    fun insertCalendar(timestampMs: Long, title: String, location: String, endMs: Long, attendees: String): Long {
         val values = ContentValues().apply {
             put("ts", timestampMs)
             put("title", title)
             put("location", location)
             put("end_ms", endMs)
+            put("attendees", attendees)
         }
         return db.insert(TABLE_CAL, null, values)
     }
 
     fun recentCalendar(limit: Int): List<CalendarEntry> {
         val out = ArrayList<CalendarEntry>()
-        db.query(TABLE_CAL, arrayOf("id", "ts", "title", "location", "end_ms"), null, null, null, null, "ts DESC", limit.toString()).use { c ->
+        db.query(TABLE_CAL, arrayOf("id", "ts", "title", "location", "end_ms", "attendees"), null, null, null, null, "ts DESC", limit.toString()).use { c ->
             while (c.moveToNext()) {
-                out.add(CalendarEntry(c.getLong(0), c.getLong(1), c.getString(2), c.getString(3), c.getLong(4)))
+                out.add(CalendarEntry(c.getLong(0), c.getLong(1), c.getString(2), c.getString(3), c.getLong(4), c.getString(5)))
             }
         }
         return out
+    }
+
+    /** 대화 자동 연결용: 구간과 겹치는 통화. */
+    fun commsBetween(startMs: Long, endMs: Long): List<CommEvent> {
+        val out = ArrayList<CommEvent>()
+        db.query(TABLE_COMM, arrayOf("id", "ts", "kind", "direction", "party", "party_name", "content"),
+            "ts >= ? AND ts <= ?", arrayOf(startMs.toString(), endMs.toString()), null, null, "ts ASC").use { c ->
+            while (c.moveToNext()) {
+                out.add(CommEvent(c.getLong(0), c.getLong(1), c.getString(2), c.getString(3), c.getString(4), if (c.isNull(5)) null else c.getString(5), c.getString(6)))
+            }
+        }
+        return out
+    }
+
+    /** 대화 자동 연결용: 구간과 겹치는 일정(begin < end AND end_ms > start). */
+    fun calendarOverlapping(startMs: Long, endMs: Long): List<CalendarEntry> {
+        val out = ArrayList<CalendarEntry>()
+        db.query(TABLE_CAL, arrayOf("id", "ts", "title", "location", "end_ms", "attendees"),
+            "ts <= ? AND end_ms >= ?", arrayOf(endMs.toString(), startMs.toString()), null, null, "ts ASC").use { c ->
+            while (c.moveToNext()) {
+                out.add(CalendarEntry(c.getLong(0), c.getLong(1), c.getString(2), c.getString(3), c.getLong(4), c.getString(5)))
+            }
+        }
+        return out
+    }
+
+    fun insertConversation(startMs: Long, endMs: Long, participants: String, source: String, status: String, context: String): Long {
+        val values = ContentValues().apply {
+            put("start_ms", startMs)
+            put("end_ms", endMs)
+            put("participants", participants)
+            put("source", source)
+            put("status", status)
+            put("context", context)
+        }
+        return db.insert(TABLE_CONV, null, values)
+    }
+
+    fun recentConversation(limit: Int): List<Conversation> {
+        val out = ArrayList<Conversation>()
+        db.query(TABLE_CONV, arrayOf("id", "start_ms", "end_ms", "participants", "source", "status", "context"), null, null, null, null, "start_ms DESC", limit.toString()).use { c ->
+            while (c.moveToNext()) {
+                out.add(Conversation(c.getLong(0), c.getLong(1), c.getLong(2), c.getString(3), c.getString(4), c.getString(5), c.getString(6)))
+            }
+        }
+        return out
+    }
+
+    fun tagConversation(id: Long, participants: String) {
+        val values = ContentValues().apply {
+            put("participants", participants)
+            put("source", "manual")
+            put("status", "tagged")
+        }
+        db.update(TABLE_CONV, values, "id = ?", arrayOf(id.toString()))
     }
 
     fun insertSummary(timestampMs: Long, periodStartMs: Long, periodEndMs: Long, text: String): Long {
@@ -302,12 +363,13 @@ class LogStore(context: Context, password: ByteArray) {
         emit("notification", TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text"))
         emit("summary", TABLE_SUMMARY, arrayOf("id", "ts", "period_start", "period_end", "text"))
         emit("comm", TABLE_COMM, arrayOf("id", "ts", "kind", "direction", "party", "party_name", "content"))
-        emit("calendar", TABLE_CAL, arrayOf("id", "ts", "title", "location", "end_ms"))
+        emit("calendar", TABLE_CAL, arrayOf("id", "ts", "title", "location", "end_ms", "attendees"))
+        emit("conversation", TABLE_CONV, arrayOf("id", "start_ms", "end_ms", "participants", "source", "status", "context"))
         return NewRows(lines, newIds)
     }
 
     /** 증분 내보내기가 커서로 쓰는 테이블 이름들. */
-    fun tables(): List<String> = listOf(TABLE_VOICE, TABLE_APP, TABLE_SCREEN, TABLE_LOCATION, TABLE_NOTIF, TABLE_SUMMARY, TABLE_COMM, TABLE_CAL)
+    fun tables(): List<String> = listOf(TABLE_VOICE, TABLE_APP, TABLE_SCREEN, TABLE_LOCATION, TABLE_NOTIF, TABLE_SUMMARY, TABLE_COMM, TABLE_CAL, TABLE_CONV)
 
     /**
      * 보존 정리. 각 원본 테이블에서 ts < [cutoffMs] 이고 이미 내보낸(id <= 해당 테이블의
@@ -332,6 +394,7 @@ class LogStore(context: Context, password: ByteArray) {
         db.delete(TABLE_SUMMARY, null, null)
         db.delete(TABLE_COMM, null, null)
         db.delete(TABLE_CAL, null, null)
+        db.delete(TABLE_CONV, null, null)
     }
 
     companion object {
@@ -344,5 +407,6 @@ class LogStore(context: Context, password: ByteArray) {
         private const val TABLE_SUMMARY = "summary"
         private const val TABLE_COMM = "comm_event"
         private const val TABLE_CAL = "calendar_event"
+        private const val TABLE_CONV = "conversation"
     }
 }

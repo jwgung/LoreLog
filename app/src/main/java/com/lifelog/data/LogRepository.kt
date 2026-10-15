@@ -29,6 +29,7 @@ import java.util.Locale
 object LogRepository {
     private const val KEEP = 500
     private const val DIGEST_MAX_CHARS = 8000
+    private const val CONV_GAP_MS = 5 * 60 * 1000L
 
     private lateinit var store: LogStore
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -56,6 +57,9 @@ object LogRepository {
 
     private val _calendarEvents = MutableStateFlow<List<CalendarEntry>>(emptyList())
     val calendarEvents: StateFlow<List<CalendarEntry>> = _calendarEvents.asStateFlow()
+
+    private val _conversations = MutableStateFlow<List<Conversation>>(emptyList())
+    val conversations: StateFlow<List<Conversation>> = _conversations.asStateFlow()
 
     /** 모든 수집 종류를 시간순(최신 먼저)으로 합친 타임라인. */
     val timeline: StateFlow<List<TimelineItem>> =
@@ -95,6 +99,7 @@ object LogRepository {
             _summaries.value = store.recentSummary(KEEP)
             _commEvents.value = store.recentComm(KEEP)
             _calendarEvents.value = store.recentCalendar(KEEP)
+            _conversations.value = store.recentConversation(KEEP)
         }
     }
 
@@ -241,6 +246,7 @@ object LogRepository {
             _summaries.value = emptyList()
             _commEvents.value = emptyList()
             _calendarEvents.value = emptyList()
+            _conversations.value = emptyList()
             _partial.value = ""
         }
     }
@@ -253,11 +259,67 @@ object LogRepository {
         }
     }
 
-    fun addCalendar(title: String, location: String, beginMs: Long, endMs: Long) {
+    fun addCalendar(title: String, location: String, beginMs: Long, endMs: Long, attendees: String) {
         scope.launch {
-            val id = store.insertCalendar(beginMs, title, location, endMs)
-            val entry = CalendarEntry(id, beginMs, title, location, endMs)
+            val id = store.insertCalendar(beginMs, title, location, endMs, attendees)
+            val entry = CalendarEntry(id, beginMs, title, location, endMs, attendees)
             _calendarEvents.update { (listOf(entry) + it).take(KEEP) }
+        }
+    }
+
+    /**
+     * 음성 조각을 시간 간격으로 묶어 대화를 만들고, 겹치는 통화·회의(참석자)로 참석자를 자동 연결한다.
+     * 자동으로 안 채워지면 pending 으로 둬 검토 큐에 올린다. 만든 대화 수 반환.
+     */
+    suspend fun buildConversations(context: Context): Int = withContext(Dispatchers.IO) {
+        val prefs = context.getSharedPreferences("conv_state", Context.MODE_PRIVATE)
+        val builtUntil = prefs.getLong("built_until", 0L)
+        val now = System.currentTimeMillis()
+        val segs = store.recentVoice(KEEP).filter { it.timestampMs > builtUntil }.sortedBy { it.timestampMs }
+        if (segs.isEmpty()) return@withContext 0
+        var created = 0
+        var newBuiltUntil = builtUntil
+        var groupStart = segs.first().timestampMs
+        var groupEnd = segs.first().timestampMs
+        for (i in 1..segs.lastIndex) {
+            val t = segs[i].timestampMs
+            if (t - groupEnd > CONV_GAP_MS) {
+                createConversation(groupStart, groupEnd)
+                created++; newBuiltUntil = groupEnd
+                groupStart = t; groupEnd = t
+            } else {
+                groupEnd = t
+            }
+        }
+        if (groupEnd < now - CONV_GAP_MS) {
+            createConversation(groupStart, groupEnd)
+            created++; newBuiltUntil = groupEnd
+        }
+        prefs.edit().putLong("built_until", newBuiltUntil).apply()
+        _conversations.value = store.recentConversation(KEEP)
+        created
+    }
+
+    private fun createConversation(startMs: Long, endMs: Long) {
+        val calls = store.commsBetween(startMs, endMs).filter { it.kind == "call" }
+        val cals = store.calendarOverlapping(startMs, endMs)
+        val names = LinkedHashSet<String>()
+        calls.forEach { names.add(it.partyName ?: it.party) }
+        cals.forEach { e -> if (e.attendees.isNotBlank()) e.attendees.split(",").forEach { names.add(it.trim()) } }
+        val context = cals.joinToString("; ") { it.title }
+        val (source, status) = when {
+            calls.isNotEmpty() -> "call" to "auto"
+            names.isNotEmpty() -> "calendar" to "auto"
+            else -> "" to "pending"
+        }
+        store.insertConversation(startMs, endMs, names.joinToString(", "), source, status, context)
+    }
+
+    /** 검토 큐에서 참석자를 수동으로 채운다. */
+    fun tagConversation(id: Long, participants: String) {
+        scope.launch {
+            store.tagConversation(id, participants)
+            _conversations.value = store.recentConversation(KEEP)
         }
     }
 

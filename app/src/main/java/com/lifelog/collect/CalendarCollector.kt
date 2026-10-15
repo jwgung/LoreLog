@@ -63,6 +63,7 @@ class CalendarCollector(context: Context) {
             CalendarContract.Instances.BEGIN,
             CalendarContract.Instances.END,
             CalendarContract.Instances.EVENT_LOCATION,
+            CalendarContract.Instances.EVENT_ID,
         )
         cr.query(builder.build(), cols, "${CalendarContract.Instances.BEGIN} > ?", arrayOf(lastBeginMs.toString()), "${CalendarContract.Instances.BEGIN} ASC")?.use { c ->
             while (c.moveToNext()) {
@@ -70,10 +71,27 @@ class CalendarCollector(context: Context) {
                 val begin = c.getLong(1)
                 val end = c.getLong(2)
                 val location = c.getString(3).orEmpty()
-                LogRepository.addCalendar(title, location, begin, end)
+                val eventId = c.getLong(4)
+                LogRepository.addCalendar(title, location, begin, end, attendees(eventId))
             }
         }
         lastBeginMs = now
+    }
+
+    /** 일정 참석자 이름을 쉼표로. 없으면 빈 문자열. */
+    private fun attendees(eventId: Long): String {
+        val names = ArrayList<String>()
+        cr.query(
+            CalendarContract.Attendees.CONTENT_URI,
+            arrayOf(CalendarContract.Attendees.ATTENDEE_NAME, CalendarContract.Attendees.ATTENDEE_EMAIL),
+            "${CalendarContract.Attendees.EVENT_ID} = ?", arrayOf(eventId.toString()), null,
+        )?.use { c ->
+            while (c.moveToNext()) {
+                val name = c.getString(0)?.takeIf { it.isNotBlank() } ?: c.getString(1).orEmpty()
+                if (name.isNotBlank()) names.add(name)
+            }
+        }
+        return names.joinToString(", ")
     }
 
     companion object {

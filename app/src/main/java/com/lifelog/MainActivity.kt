@@ -34,6 +34,7 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -98,6 +99,7 @@ private fun HomeScreen() {
     val partial by LogRepository.partial.collectAsStateWithLifecycle()
     val status by LogRepository.status.collectAsStateWithLifecycle()
     val summaries by LogRepository.summaries.collectAsStateWithLifecycle()
+    val conversations by LogRepository.conversations.collectAsStateWithLifecycle()
 
     // 특수 권한(사용 정보 접근, 접근성)은 설정에서 켜고 돌아온다. 화면이 다시 보일 때 다시 확인한다.
     var usageGranted by remember { mutableStateOf(UsageAccess.isGranted(context)) }
@@ -128,6 +130,7 @@ private fun HomeScreen() {
     var showDeleteDialog by remember { mutableStateOf(false) }
     var endpointUrl by remember { mutableStateOf(EndpointConfig.url(context) ?: "") }
     var endpointToken by remember { mutableStateOf(EndpointConfig.token(context) ?: "") }
+    val tagInputs = remember { mutableStateMapOf<Long, String>() }
 
     if (showDeleteDialog) {
         AlertDialog(
@@ -250,6 +253,13 @@ private fun HomeScreen() {
             }
         }) { Text("지금 요약 (최근 24시간)") }
 
+        OutlinedButton(onClick = {
+            coroutineScope.launch {
+                val n = LogRepository.buildConversations(context)
+                LogRepository.setStatus("대화 묶기: ${n}건")
+            }
+        }) { Text("지금 대화 묶기") }
+
         if (summaries.isNotEmpty()) {
             Text("최근 요약", style = MaterialTheme.typography.labelLarge)
             Text(summaries.first().text, style = MaterialTheme.typography.bodyMedium)
@@ -295,6 +305,34 @@ private fun HomeScreen() {
                     )
                 }
             }) { Text("지금 전송") }
+        }
+
+        val pending = conversations.filter { it.status == "pending" }
+        if (pending.isNotEmpty()) {
+            Text("태그할 대화 (${pending.size})", style = MaterialTheme.typography.labelLarge)
+            pending.take(10).forEach { conv ->
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        timeFormat.format(Date(conv.startMs)) + "\u2013" + timeFormat.format(Date(conv.endMs)) +
+                            if (conv.context.isNotEmpty()) " \u00b7 ${conv.context}" else "",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = tagInputs[conv.id] ?: "",
+                            onValueChange = { tagInputs[conv.id] = it },
+                            label = { Text("누구와") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                        OutlinedButton(onClick = {
+                            LogRepository.tagConversation(conv.id, tagInputs[conv.id].orEmpty())
+                            tagInputs.remove(conv.id)
+                        }) { Text("저장") }
+                    }
+                }
+            }
         }
 
         HorizontalDivider()
