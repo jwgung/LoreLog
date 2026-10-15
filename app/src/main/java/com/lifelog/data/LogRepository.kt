@@ -62,7 +62,7 @@ object LogRepository {
     val status: StateFlow<String> = _status.asStateFlow()
 
     fun init(context: Context) {
-        store = LogStore(context.applicationContext)
+        store = LogStore(context.applicationContext, DbKey.get(context))
         scope.launch {
             _voiceSegments.value = store.recentVoice(KEEP)
             _appEvents.value = store.recentApp(KEEP)

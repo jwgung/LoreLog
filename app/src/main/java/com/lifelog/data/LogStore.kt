@@ -3,100 +3,37 @@ package com.lifelog.data
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
-import android.database.sqlite.SQLiteDatabase
-import android.database.sqlite.SQLiteOpenHelper
+import net.zetetic.database.sqlcipher.SQLiteDatabase
 import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * 기기 로컬 SQLite 저장. 의존성 없이 프레임워크만 쓴다.
- * 7단계에서 SQLCipher 암호화 또는 Room 으로 옮길 수 있게 접근을 이 클래스로 모은다.
+ * 기기 로컬 저장. SQLCipher 로 DB 파일을 암호화한다. 암호는 [DbKey] 가
+ * Android Keystore 로 보호해 둔 랜덤 키를 쓴다. 모든 DB 접근을 이 클래스로 모은다.
  */
-class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, DB_NAME, null, DB_VERSION) {
+class LogStore(context: Context, password: ByteArray) {
 
-    override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL(
-            """
-            CREATE TABLE $TABLE_VOICE (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts INTEGER NOT NULL,
-                text TEXT NOT NULL,
-                speaker TEXT
-            )
-            """.trimIndent(),
-        )
-        db.execSQL("CREATE INDEX idx_voice_ts ON $TABLE_VOICE(ts)")
-        createAppTable(db)
-        createScreenTable(db)
-        createLocationTable(db)
-        createNotificationTable(db)
+    private val db: SQLiteDatabase
+
+    init {
+        System.loadLibrary("sqlcipher")
+        val file = context.applicationContext.getDatabasePath(DB_NAME)
+        file.parentFile?.mkdirs()
+        db = SQLiteDatabase.openOrCreateDatabase(file, password, null, null)
+        createSchema(db)
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        if (oldVersion < 2) createAppTable(db)
-        if (oldVersion < 3) createScreenTable(db)
-        if (oldVersion < 4) createLocationTable(db)
-        if (oldVersion < 5) createNotificationTable(db)
-    }
-
-    private fun createAppTable(db: SQLiteDatabase) {
-        db.execSQL(
-            """
-            CREATE TABLE $TABLE_APP (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts INTEGER NOT NULL,
-                pkg TEXT NOT NULL,
-                label TEXT NOT NULL
-            )
-            """.trimIndent(),
-        )
-        db.execSQL("CREATE INDEX idx_app_ts ON $TABLE_APP(ts)")
-    }
-
-    private fun createScreenTable(db: SQLiteDatabase) {
-        db.execSQL(
-            """
-            CREATE TABLE $TABLE_SCREEN (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts INTEGER NOT NULL,
-                pkg TEXT NOT NULL,
-                label TEXT NOT NULL,
-                text TEXT NOT NULL
-            )
-            """.trimIndent(),
-        )
-        db.execSQL("CREATE INDEX idx_screen_ts ON $TABLE_SCREEN(ts)")
-    }
-
-    private fun createLocationTable(db: SQLiteDatabase) {
-        db.execSQL(
-            """
-            CREATE TABLE $TABLE_LOCATION (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts INTEGER NOT NULL,
-                lat REAL NOT NULL,
-                lon REAL NOT NULL,
-                accuracy REAL NOT NULL
-            )
-            """.trimIndent(),
-        )
-        db.execSQL("CREATE INDEX idx_location_ts ON $TABLE_LOCATION(ts)")
-    }
-
-    private fun createNotificationTable(db: SQLiteDatabase) {
-        db.execSQL(
-            """
-            CREATE TABLE $TABLE_NOTIF (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts INTEGER NOT NULL,
-                pkg TEXT NOT NULL,
-                label TEXT NOT NULL,
-                title TEXT NOT NULL,
-                text TEXT NOT NULL
-            )
-            """.trimIndent(),
-        )
-        db.execSQL("CREATE INDEX idx_notif_ts ON $TABLE_NOTIF(ts)")
+    private fun createSchema(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_VOICE (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, text TEXT NOT NULL, speaker TEXT)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_voice_ts ON $TABLE_VOICE(ts)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_APP (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, pkg TEXT NOT NULL, label TEXT NOT NULL)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_app_ts ON $TABLE_APP(ts)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_SCREEN (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, pkg TEXT NOT NULL, label TEXT NOT NULL, text TEXT NOT NULL)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_screen_ts ON $TABLE_SCREEN(ts)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_LOCATION (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, lat REAL NOT NULL, lon REAL NOT NULL, accuracy REAL NOT NULL)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_location_ts ON $TABLE_LOCATION(ts)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_NOTIF (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, pkg TEXT NOT NULL, label TEXT NOT NULL, title TEXT NOT NULL, text TEXT NOT NULL)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_notif_ts ON $TABLE_NOTIF(ts)")
     }
 
     fun insertVoice(timestampMs: Long, text: String, speaker: String?): Long {
@@ -105,15 +42,12 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
             put("text", text)
             put("speaker", speaker)
         }
-        return writableDatabase.insert(TABLE_VOICE, null, values)
+        return db.insert(TABLE_VOICE, null, values)
     }
 
     fun recentVoice(limit: Int): List<VoiceSegment> {
         val out = ArrayList<VoiceSegment>()
-        readableDatabase.query(
-            TABLE_VOICE, arrayOf("id", "ts", "text", "speaker"),
-            null, null, null, null, "ts DESC", limit.toString(),
-        ).use { c ->
+        db.query(TABLE_VOICE, arrayOf("id", "ts", "text", "speaker"), null, null, null, null, "ts DESC", limit.toString()).use { c ->
             while (c.moveToNext()) {
                 out.add(
                     VoiceSegment(
@@ -134,15 +68,12 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
             put("pkg", packageName)
             put("label", label)
         }
-        return writableDatabase.insert(TABLE_APP, null, values)
+        return db.insert(TABLE_APP, null, values)
     }
 
     fun recentApp(limit: Int): List<AppEvent> {
         val out = ArrayList<AppEvent>()
-        readableDatabase.query(
-            TABLE_APP, arrayOf("id", "ts", "pkg", "label"),
-            null, null, null, null, "ts DESC", limit.toString(),
-        ).use { c ->
+        db.query(TABLE_APP, arrayOf("id", "ts", "pkg", "label"), null, null, null, null, "ts DESC", limit.toString()).use { c ->
             while (c.moveToNext()) {
                 out.add(AppEvent(c.getLong(0), c.getLong(1), c.getString(2), c.getString(3)))
             }
@@ -157,21 +88,14 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
             put("label", label)
             put("text", text)
         }
-        return writableDatabase.insert(TABLE_SCREEN, null, values)
+        return db.insert(TABLE_SCREEN, null, values)
     }
 
     fun recentScreen(limit: Int): List<ScreenContentEvent> {
         val out = ArrayList<ScreenContentEvent>()
-        readableDatabase.query(
-            TABLE_SCREEN, arrayOf("id", "ts", "pkg", "label", "text"),
-            null, null, null, null, "ts DESC", limit.toString(),
-        ).use { c ->
+        db.query(TABLE_SCREEN, arrayOf("id", "ts", "pkg", "label", "text"), null, null, null, null, "ts DESC", limit.toString()).use { c ->
             while (c.moveToNext()) {
-                out.add(
-                    ScreenContentEvent(
-                        c.getLong(0), c.getLong(1), c.getString(2), c.getString(3), c.getString(4),
-                    ),
-                )
+                out.add(ScreenContentEvent(c.getLong(0), c.getLong(1), c.getString(2), c.getString(3), c.getString(4)))
             }
         }
         return out
@@ -184,19 +108,14 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
             put("lon", lon)
             put("accuracy", accuracyM)
         }
-        return writableDatabase.insert(TABLE_LOCATION, null, values)
+        return db.insert(TABLE_LOCATION, null, values)
     }
 
     fun recentLocation(limit: Int): List<LocationPoint> {
         val out = ArrayList<LocationPoint>()
-        readableDatabase.query(
-            TABLE_LOCATION, arrayOf("id", "ts", "lat", "lon", "accuracy"),
-            null, null, null, null, "ts DESC", limit.toString(),
-        ).use { c ->
+        db.query(TABLE_LOCATION, arrayOf("id", "ts", "lat", "lon", "accuracy"), null, null, null, null, "ts DESC", limit.toString()).use { c ->
             while (c.moveToNext()) {
-                out.add(
-                    LocationPoint(c.getLong(0), c.getLong(1), c.getDouble(2), c.getDouble(3), c.getFloat(4)),
-                )
+                out.add(LocationPoint(c.getLong(0), c.getLong(1), c.getDouble(2), c.getDouble(3), c.getFloat(4)))
             }
         }
         return out
@@ -210,15 +129,12 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
             put("title", title)
             put("text", text)
         }
-        return writableDatabase.insert(TABLE_NOTIF, null, values)
+        return db.insert(TABLE_NOTIF, null, values)
     }
 
     fun recentNotification(limit: Int): List<NotificationEvent> {
         val out = ArrayList<NotificationEvent>()
-        readableDatabase.query(
-            TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text"),
-            null, null, null, null, "ts DESC", limit.toString(),
-        ).use { c ->
+        db.query(TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text"), null, null, null, null, "ts DESC", limit.toString()).use { c ->
             while (c.moveToNext()) {
                 out.add(
                     NotificationEvent(
@@ -233,25 +149,22 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
 
     /** 모든 기록을 JSON 문자열로. 지식그래프 등 외부로 내보낼 때 쓴다. */
     fun exportJson(exportedAtMs: Long): String {
-        val db = readableDatabase
         val root = JSONObject()
         root.put("exportedAt", exportedAtMs)
-        root.put("voice", dump(db, TABLE_VOICE, arrayOf("id", "ts", "text", "speaker")))
-        root.put("apps", dump(db, TABLE_APP, arrayOf("id", "ts", "pkg", "label")))
-        root.put("screen", dump(db, TABLE_SCREEN, arrayOf("id", "ts", "pkg", "label", "text")))
-        root.put("locations", dump(db, TABLE_LOCATION, arrayOf("id", "ts", "lat", "lon", "accuracy")))
-        root.put("notifications", dump(db, TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text")))
+        root.put("voice", dump(TABLE_VOICE, arrayOf("id", "ts", "text", "speaker")))
+        root.put("apps", dump(TABLE_APP, arrayOf("id", "ts", "pkg", "label")))
+        root.put("screen", dump(TABLE_SCREEN, arrayOf("id", "ts", "pkg", "label", "text")))
+        root.put("locations", dump(TABLE_LOCATION, arrayOf("id", "ts", "lat", "lon", "accuracy")))
+        root.put("notifications", dump(TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text")))
         return root.toString(2)
     }
 
-    private fun dump(db: SQLiteDatabase, table: String, cols: Array<String>): JSONArray {
+    private fun dump(table: String, cols: Array<String>): JSONArray {
         val arr = JSONArray()
         db.query(table, cols, null, null, null, null, "ts ASC").use { c ->
             while (c.moveToNext()) {
                 val o = JSONObject()
-                for (i in cols.indices) {
-                    o.put(cols[i], valueAt(c, i))
-                }
+                for (i in cols.indices) o.put(cols[i], valueAt(c, i))
                 arr.put(o)
             }
         }
@@ -267,18 +180,15 @@ class LogStore(context: Context) : SQLiteOpenHelper(context.applicationContext, 
 
     /** 모든 기록을 지운다(되돌릴 수 없음). */
     fun deleteAll() {
-        writableDatabase.apply {
-            delete(TABLE_VOICE, null, null)
-            delete(TABLE_APP, null, null)
-            delete(TABLE_SCREEN, null, null)
-            delete(TABLE_LOCATION, null, null)
-            delete(TABLE_NOTIF, null, null)
-        }
+        db.delete(TABLE_VOICE, null, null)
+        db.delete(TABLE_APP, null, null)
+        db.delete(TABLE_SCREEN, null, null)
+        db.delete(TABLE_LOCATION, null, null)
+        db.delete(TABLE_NOTIF, null, null)
     }
 
     companion object {
-        private const val DB_NAME = "lifelog.db"
-        private const val DB_VERSION = 5
+        private const val DB_NAME = "lifelog_enc.db"
         private const val TABLE_VOICE = "voice_segment"
         private const val TABLE_APP = "app_event"
         private const val TABLE_SCREEN = "screen_content"
