@@ -14,6 +14,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * 수집 결과의 단일 출처. 화면은 여기 StateFlow 를 구독한다.
@@ -122,6 +125,24 @@ object LogRepository {
         val file = File(dir, "lifelog_${System.currentTimeMillis()}.json")
         file.writeText(json)
         file
+    }
+
+    /**
+     * 증분 내보내기. 지난 내보내기 이후 새 기록만 NDJSON 으로 앱 전용 외부 폴더에 append 한다.
+     * (Android/data/<pkg>/files/exports/lifelog-<날짜>.ndjson). 새로 쓴 줄 수를 반환.
+     */
+    suspend fun exportIncremental(context: Context): Int = withContext(Dispatchers.IO) {
+        val prefs = context.getSharedPreferences("export_state", Context.MODE_PRIVATE)
+        val lastIds = store.tables().associateWith { prefs.getLong("last_$it", 0L) }
+        val result = store.newRows(lastIds)
+        if (result.lines.isEmpty()) return@withContext 0
+        val dir = File(context.getExternalFilesDir(null), "exports").apply { mkdirs() }
+        val date = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        File(dir, "lifelog-$date.ndjson").appendText(result.lines.joinToString("\n", postfix = "\n"))
+        prefs.edit().apply {
+            result.newLastIds.forEach { (table, id) -> putLong("last_$table", id) }
+        }.apply()
+        result.lines.size
     }
 
     /** 모든 기록을 지운다(되돌릴 수 없음). */

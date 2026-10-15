@@ -45,6 +45,7 @@ dependencies {
     implementation("net.zetetic:sqlcipher-android:4.19.1")
     implementation("androidx.sqlite:sqlite:2.4.0")
     implementation("androidx.security:security-crypto:1.1.0")
+    implementation("androidx.work:work-runtime-ktx:2.10.5")
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")

@@ -226,6 +226,9 @@ private fun HomeScreen() {
                     )
                 }
             }) { Text("내보내기 (JSON)") }
+            OutlinedButton(onClick = {
+                coroutineScope.launch { LogRepository.exportIncremental(context) }
+            }) { Text("폴더로 (증분)") }
             OutlinedButton(onClick = { showDeleteDialog = true }) { Text("전체 삭제") }
         }
 

@@ -178,6 +178,36 @@ class LogStore(context: Context, password: ByteArray) {
         else -> c.getString(i)
     }
 
+    /** 증분 내보내기용 새 행(각 테이블에서 id > 마지막 내보낸 id). 줄마다 type 이 붙은 NDJSON. */
+    data class NewRows(val lines: List<String>, val newLastIds: Map<String, Long>)
+
+    fun newRows(lastIds: Map<String, Long>): NewRows {
+        val lines = ArrayList<String>()
+        val newIds = HashMap(lastIds)
+        fun emit(type: String, table: String, cols: Array<String>) {
+            val last = lastIds[table] ?: 0L
+            db.query(table, cols, "id > ?", arrayOf(last.toString()), null, null, "id ASC").use { c ->
+                while (c.moveToNext()) {
+                    val o = JSONObject()
+                    o.put("type", type)
+                    for (i in cols.indices) o.put(cols[i], valueAt(c, i))
+                    lines.add(o.toString())
+                    val id = c.getLong(0)
+                    if (id > (newIds[table] ?: 0L)) newIds[table] = id
+                }
+            }
+        }
+        emit("voice", TABLE_VOICE, arrayOf("id", "ts", "text", "speaker"))
+        emit("app", TABLE_APP, arrayOf("id", "ts", "pkg", "label"))
+        emit("screen", TABLE_SCREEN, arrayOf("id", "ts", "pkg", "label", "text"))
+        emit("location", TABLE_LOCATION, arrayOf("id", "ts", "lat", "lon", "accuracy"))
+        emit("notification", TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text"))
+        return NewRows(lines, newIds)
+    }
+
+    /** 증분 내보내기가 커서로 쓰는 테이블 이름들. */
+    fun tables(): List<String> = listOf(TABLE_VOICE, TABLE_APP, TABLE_SCREEN, TABLE_LOCATION, TABLE_NOTIF)
+
     /** 모든 기록을 지운다(되돌릴 수 없음). */
     fun deleteAll() {
         db.delete(TABLE_VOICE, null, null)
