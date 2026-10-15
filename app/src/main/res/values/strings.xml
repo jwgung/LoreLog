@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">LifeLog</string>
+    <string name="channel_logging_name">기록 중</string>
+    <string name="channel_logging_desc">기록이 도는 동안 상시 표시되는 알림</string>
+    <string name="notif_title">LifeLog 기록 중</string>
+    <string name="notif_text">내 활동을 이 기기에만 기록하고 있습니다</string>
+    <string name="action_stop">정지</string>
+</resources>
