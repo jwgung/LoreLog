@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.lifelog.collect.AppUsageCollector
+import com.lifelog.collect.CollectorPrefs
 import com.lifelog.collect.CalendarCollector
 import com.lifelog.collect.CommsCollector
 import com.lifelog.collect.LocationCollector
@@ -38,6 +39,10 @@ class LoggerService : Service() {
             stopLogging()
             return START_NOT_STICKY
         }
+        if (intent?.action == ACTION_REAPPLY) {
+            if (_isRunning.value) { stopCollectors(); startCollectors() }
+            return START_STICKY
+        }
         NotificationManagerCompat.from(this).cancel(IDLE_NOTIF_ID)
         startForeground(NOTIF_ID, buildRecordingNotification())
         _isRunning.value = true
@@ -52,20 +57,28 @@ class LoggerService : Service() {
     }
 
     private fun startCollectors() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            == PackageManager.PERMISSION_GRANTED
+        if (CollectorPrefs.enabled(this, CollectorPrefs.VOICE) &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         ) {
             if (voice == null) voice = VoiceCollector(this)
             voice?.start()
         }
-        if (appUsage == null) appUsage = AppUsageCollector(this)
-        appUsage?.start()
-        if (location == null) location = LocationCollector(this)
-        location?.start()
-        if (comms == null) comms = CommsCollector(this)
-        comms?.start()
-        if (calendar == null) calendar = CalendarCollector(this)
-        calendar?.start()
+        if (CollectorPrefs.enabled(this, CollectorPrefs.APPS)) {
+            if (appUsage == null) appUsage = AppUsageCollector(this)
+            appUsage?.start()
+        }
+        if (CollectorPrefs.enabled(this, CollectorPrefs.LOCATION)) {
+            if (location == null) location = LocationCollector(this)
+            location?.start()
+        }
+        if (CollectorPrefs.enabled(this, CollectorPrefs.COMMS)) {
+            if (comms == null) comms = CommsCollector(this)
+            comms?.start()
+        }
+        if (CollectorPrefs.enabled(this, CollectorPrefs.CALENDAR)) {
+            if (calendar == null) calendar = CalendarCollector(this)
+            calendar?.start()
+        }
     }
 
     private fun stopCollectors() {
@@ -104,6 +117,7 @@ class LoggerService : Service() {
         private const val NOTIF_ID = 1
         private const val IDLE_NOTIF_ID = 2
         const val ACTION_STOP = "com.lifelog.action.STOP"
+        const val ACTION_REAPPLY = "com.lifelog.action.REAPPLY"
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning
@@ -115,6 +129,14 @@ class LoggerService : Service() {
         fun stop(context: Context) {
             context.startService(
                 Intent(context, LoggerService::class.java).setAction(ACTION_STOP),
+            )
+        }
+
+        /** 수집 항목 설정이 바뀌면 기록 중인 경우 즉시 반영한다. */
+        fun reapply(context: Context) {
+            if (!_isRunning.value) return
+            context.startService(
+                Intent(context, LoggerService::class.java).setAction(ACTION_REAPPLY),
             )
         }
 

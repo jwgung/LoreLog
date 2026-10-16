@@ -30,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -57,6 +58,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import com.lifelog.collect.UsageAccess
 import com.lifelog.data.LogRepository
+import com.lifelog.collect.CollectorPrefs
 import com.lifelog.data.TimelineItem
 import com.lifelog.net.EndpointConfig
 import com.lifelog.net.LlmConfig
@@ -135,6 +137,9 @@ private fun HomeScreen() {
     var endpointUrl by remember { mutableStateOf(EndpointConfig.url(context) ?: "") }
     var endpointToken by remember { mutableStateOf(EndpointConfig.token(context) ?: "") }
     val tagInputs = remember { mutableStateMapOf<Long, String>() }
+    val collectorOn = remember {
+        mutableStateMapOf<String, Boolean>().apply { CollectorPrefs.ALL.forEach { put(it.first, CollectorPrefs.enabled(context, it.first)) } }
+    }
     var llmUrl by remember { mutableStateOf(LlmConfig.baseUrl(context)) }
     var llmModel by remember { mutableStateOf(LlmConfig.model(context)) }
     var llmKey by remember { mutableStateOf(LlmConfig.apiKey(context) ?: "") }
@@ -242,6 +247,25 @@ private fun HomeScreen() {
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 )
             }) { Text("알림 기록 켜기 (알림 접근)") }
+        }
+
+        Text("수집 항목", style = MaterialTheme.typography.labelLarge)
+        CollectorPrefs.ALL.forEach { (key, label) ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(label, style = MaterialTheme.typography.bodyMedium)
+                Switch(
+                    checked = collectorOn[key] ?: true,
+                    onCheckedChange = {
+                        collectorOn[key] = it
+                        CollectorPrefs.set(context, key, it)
+                        LoggerService.reapply(context)
+                    },
+                )
+            }
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
