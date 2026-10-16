@@ -27,11 +27,19 @@ class LifeLogApp : Application() {
             description = getString(R.string.channel_logging_desc)
             setShowBadge(false)
         }
-        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        val minChannel = NotificationChannel(
+            CHANNEL_LOGGING_MIN,
+            getString(R.string.channel_logging_min_name),
+            NotificationManager.IMPORTANCE_MIN,
+        ).apply { setShowBadge(false) }
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(channel)
+        nm.createNotificationChannel(minChannel)
         LoggerService.showIdle(this)
     }
 
     companion object {
         const val CHANNEL_LOGGING = "logging"
+        const val CHANNEL_LOGGING_MIN = "logging_min"
     }
 }

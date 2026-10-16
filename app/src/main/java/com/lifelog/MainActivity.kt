@@ -167,6 +167,8 @@ private fun HomeScreen() {
     }
 
     var showSettings by remember { mutableStateOf(false) }
+    var hideNotif by remember { mutableStateOf(NotifPrefs.hide(context)) }
+    var overlayBadge by remember { mutableStateOf(NotifPrefs.overlay(context)) }
 
     Column(
         modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
@@ -285,6 +287,60 @@ private fun HomeScreen() {
                 )
             }
         }
+
+        Text("알림 / 표시", style = MaterialTheme.typography.labelLarge)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("알림 숨기기 (가능한 만큼)", style = MaterialTheme.typography.bodyMedium)
+            Switch(
+                checked = hideNotif,
+                onCheckedChange = {
+                    hideNotif = it
+                    NotifPrefs.setHide(context, it)
+                    LoggerService.reapply(context)
+                    LoggerService.showIdle(context)
+                },
+            )
+        }
+        Text(
+            "멈춤 알림은 숨겨집니다. 기록 중 알림은 OS 규칙상 완전히 못 숨기고 최소화만 됩니다" +
+                "(상태바 아이콘 없이 알림창 맨 아래로).",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("플로팅 '감시중' 배지 (다른 앱 위에)", style = MaterialTheme.typography.bodyMedium)
+            Switch(
+                checked = overlayBadge,
+                onCheckedChange = {
+                    overlayBadge = it
+                    NotifPrefs.setOverlay(context, it)
+                    if (it && !Settings.canDrawOverlays(context)) {
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:${context.packageName}"),
+                            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }
+                    LoggerService.reapply(context)
+                },
+            )
+        }
+        TextButton(onClick = {
+            context.startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:${context.packageName}"),
+                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }) { Text("다른 앱 위에 표시 허용") }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = {

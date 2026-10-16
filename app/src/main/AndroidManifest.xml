@@ -7,6 +7,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- 3단계: 앱 사용 수집 (사용 정보 접근 특수 권한, 설정에서 사용자가 켬) -->
     <uses-permission
@@ -103,6 +104,9 @@
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+        <receiver
+            android:name=".NotifReviveReceiver"
+            android:exported="false" />
 
     </application>
 </manifest>

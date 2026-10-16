@@ -43,20 +43,35 @@ class LoggerService : Service() {
             return START_NOT_STICKY
         }
         if (intent?.action == ACTION_REAPPLY) {
-            if (_isRunning.value) { stopCollectors(); startCollectors() }
+            if (_isRunning.value) {
+                stopCollectors(); startCollectors()
+                startForeground(NOTIF_ID, buildRecordingNotification())
+                applyOverlay()
+            }
             return START_STICKY
         }
         NotificationManagerCompat.from(this).cancel(IDLE_NOTIF_ID)
         startForeground(NOTIF_ID, buildRecordingNotification())
         _isRunning.value = true
         startCollectors()
+        applyOverlay()
         return START_STICKY
     }
 
     override fun onDestroy() {
         _isRunning.value = false
         stopCollectors()
+        OverlayBadge.hide(this)
         super.onDestroy()
+    }
+
+    /** 기록 중이고 설정·권한이 되면 플로팅 배지를 띄우고, 아니면 내린다. */
+    private fun applyOverlay() {
+        if (_isRunning.value && NotifPrefs.overlay(this) && OverlayBadge.canShow(this)) {
+            OverlayBadge.show(this)
+        } else {
+            OverlayBadge.hide(this)
+        }
     }
 
     private fun startCollectors() {
@@ -101,6 +116,7 @@ class LoggerService : Service() {
     private fun stopLogging() {
         _isRunning.value = false
         stopCollectors()
+        OverlayBadge.hide(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
         showIdle(this)
         stopSelf()
@@ -112,7 +128,8 @@ class LoggerService : Service() {
             Intent(this, LoggerService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE,
         )
-        return NotificationCompat.Builder(this, LifeLogApp.CHANNEL_LOGGING)
+        val channel = if (NotifPrefs.hide(this)) LifeLogApp.CHANNEL_LOGGING_MIN else LifeLogApp.CHANNEL_LOGGING
+        return NotificationCompat.Builder(this, channel)
             .setContentTitle(getString(R.string.notif_title))
             .setContentText(getString(R.string.notif_text))
             .setSmallIcon(R.drawable.ic_stat_logging)
@@ -152,6 +169,15 @@ class LoggerService : Service() {
         /** 멈춤 상태용 상시 알림(기록 시작 버튼). 앱 시작·부팅 때 띄워 둔다. 기록 중이면 띄우지 않는다. */
         fun showIdle(context: Context) {
             if (_isRunning.value) return
+            if (NotifPrefs.hide(context)) {
+                NotificationManagerCompat.from(context).cancel(IDLE_NOTIF_ID)
+                return
+            }
+            val revive = PendingIntent.getBroadcast(
+                context, 3,
+                Intent(context, NotifReviveReceiver::class.java),
+                PendingIntent.FLAG_IMMUTABLE,
+            )
             val start = PendingIntent.getForegroundService(
                 context, 2,
                 Intent(context, LoggerService::class.java),
@@ -164,6 +190,7 @@ class LoggerService : Service() {
                 .setOngoing(true)
                 .setContentIntent(openAppIntent(context))
                 .addAction(0, context.getString(R.string.action_start), start)
+                .setDeleteIntent(revive)
                 .build()
             try {
                 NotificationManagerCompat.from(context).notify(IDLE_NOTIF_ID, notif)
