@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.Manifest
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.lifelog.collect.AppUsageCollector
 import com.lifelog.collect.CalendarCollector
@@ -19,8 +20,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * 상시 기록 서비스. 1단계에서는 포그라운드 서비스로 떠서 지울 수 없는 알림을 띄우고
- * 시작·정지만 한다. 2단계부터 수집기(음성·앱·위치·알림)를 여기에 붙인다.
+ * 상시 기록 서비스. 기록 중에는 지울 수 없는 포그라운드 알림을 띄우고 수집기를 돌린다.
+ * 멈췄을 때도 '기록 시작' 버튼이 달린 상시 알림을 남겨, 알림창에서 바로 켜고 끌 수 있다.
  */
 class LoggerService : Service() {
 
@@ -37,7 +38,8 @@ class LoggerService : Service() {
             stopLogging()
             return START_NOT_STICKY
         }
-        startForeground(NOTIF_ID, buildNotification())
+        NotificationManagerCompat.from(this).cancel(IDLE_NOTIF_ID)
+        startForeground(NOTIF_ID, buildRecordingNotification())
         _isRunning.value = true
         startCollectors()
         return START_STICKY
@@ -78,15 +80,11 @@ class LoggerService : Service() {
         _isRunning.value = false
         stopCollectors()
         stopForeground(STOP_FOREGROUND_REMOVE)
+        showIdle(this)
         stopSelf()
     }
 
-    private fun buildNotification(): Notification {
-        val openApp = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE,
-        )
+    private fun buildRecordingNotification(): Notification {
         val stop = PendingIntent.getService(
             this, 1,
             Intent(this, LoggerService::class.java).setAction(ACTION_STOP),
@@ -97,13 +95,14 @@ class LoggerService : Service() {
             .setContentText(getString(R.string.notif_text))
             .setSmallIcon(R.drawable.ic_stat_logging)
             .setOngoing(true)
-            .setContentIntent(openApp)
+            .setContentIntent(openAppIntent(this))
             .addAction(0, getString(R.string.action_stop), stop)
             .build()
     }
 
     companion object {
         private const val NOTIF_ID = 1
+        private const val IDLE_NOTIF_ID = 2
         const val ACTION_STOP = "com.lifelog.action.STOP"
 
         private val _isRunning = MutableStateFlow(false)
@@ -118,5 +117,35 @@ class LoggerService : Service() {
                 Intent(context, LoggerService::class.java).setAction(ACTION_STOP),
             )
         }
+
+        /** 멈춤 상태용 상시 알림(기록 시작 버튼). 앱 시작·부팅 때 띄워 둔다. 기록 중이면 띄우지 않는다. */
+        fun showIdle(context: Context) {
+            if (_isRunning.value) return
+            val start = PendingIntent.getForegroundService(
+                context, 2,
+                Intent(context, LoggerService::class.java),
+                PendingIntent.FLAG_IMMUTABLE,
+            )
+            val notif = NotificationCompat.Builder(context, LifeLogApp.CHANNEL_LOGGING)
+                .setContentTitle(context.getString(R.string.notif_idle_title))
+                .setContentText(context.getString(R.string.notif_idle_text))
+                .setSmallIcon(R.drawable.ic_stat_logging)
+                .setOngoing(true)
+                .setContentIntent(openAppIntent(context))
+                .addAction(0, context.getString(R.string.action_start), start)
+                .build()
+            try {
+                NotificationManagerCompat.from(context).notify(IDLE_NOTIF_ID, notif)
+            } catch (_: SecurityException) {
+                // POST_NOTIFICATIONS 미허용(Android 13+): 권한 받은 뒤 다시 뜬다.
+            }
+        }
+
+        private fun openAppIntent(context: Context): PendingIntent =
+            PendingIntent.getActivity(
+                context, 0,
+                Intent(context, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE,
+            )
     }
 }

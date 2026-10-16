@@ -28,6 +28,7 @@ class LifeLogApp : Application() {
             setShowBadge(false)
         }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        LoggerService.showIdle(this)
     }
 
     companion object {
