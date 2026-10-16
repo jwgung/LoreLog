@@ -3,6 +3,7 @@ package com.lifelog
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -339,6 +340,12 @@ private fun HomeScreen() {
             LlmConfig.set(context, llmUrl, llmModel, llmKey)
             LogRepository.setStatus("요약 LLM 저장됨")
         }) { Text("요약 LLM 저장") }
+        TextButton(onClick = {
+            context.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }) { Text("Gemini 키 발급 (무료)") }
 
         val pending = conversations.filter { it.status == "pending" }
         if (pending.isNotEmpty()) {
