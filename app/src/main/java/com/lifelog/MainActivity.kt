@@ -243,6 +243,19 @@ private fun HomeScreen() {
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 )
             }) { Text("화면 내용 기록 켜기 (접근성)") }
+            Text(
+                "토글이 회색이면: 앱 정보 → 우상단 ⋮ → '제한된 설정 허용'을 먼저 누르세요. " +
+                    "플레이스토어 밖에서 설치한 앱이라 OS가 접근성을 막아둔 것입니다.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            TextButton(onClick = {
+                context.startActivity(
+                    Intent(
+                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        Uri.parse("package:${context.packageName}"),
+                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }) { Text("앱 정보 열기 (제한된 설정 허용)") }
         }
 
         if (!notifGranted) {
