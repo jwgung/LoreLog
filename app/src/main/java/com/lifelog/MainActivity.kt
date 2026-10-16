@@ -62,6 +62,7 @@ import com.lifelog.collect.CollectorPrefs
 import com.lifelog.data.TimelineItem
 import com.lifelog.net.EndpointConfig
 import com.lifelog.net.LlmConfig
+import com.lifelog.net.SttConfig
 import com.lifelog.summary.Summarizer
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -143,6 +144,10 @@ private fun HomeScreen() {
     var llmUrl by remember { mutableStateOf(LlmConfig.baseUrl(context)) }
     var llmModel by remember { mutableStateOf(LlmConfig.model(context)) }
     var llmKey by remember { mutableStateOf(LlmConfig.apiKey(context) ?: "") }
+    var sttMode by remember { mutableStateOf(SttConfig.cloudMode(context)) }
+    var sttUrl by remember { mutableStateOf(SttConfig.baseUrl(context)) }
+    var sttModel by remember { mutableStateOf(SttConfig.model(context)) }
+    var sttKey by remember { mutableStateOf(SttConfig.apiKey(context) ?: "") }
 
     if (showDeleteDialog) {
         AlertDialog(
@@ -374,6 +379,37 @@ private fun HomeScreen() {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             )
         }) { Text("Gemini 키 발급 (무료)") }
+
+        Text("음성 전사 (녹음+클라우드)", style = MaterialTheme.typography.labelLarge)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("녹음+클라우드 사용 (화면 꺼져도 유지)", style = MaterialTheme.typography.bodyMedium)
+            Switch(
+                checked = sttMode,
+                onCheckedChange = {
+                    sttMode = it
+                    SttConfig.set(context, sttUrl, sttModel, sttKey, it)
+                    LoggerService.reapply(context)
+                },
+            )
+        }
+        OutlinedTextField(value = sttUrl, onValueChange = { sttUrl = it }, label = { Text("베이스 URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(value = sttModel, onValueChange = { sttModel = it }, label = { Text("모델") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(value = sttKey, onValueChange = { sttKey = it }, label = { Text("Groq API 키") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        OutlinedButton(onClick = {
+            SttConfig.set(context, sttUrl, sttModel, sttKey, sttMode)
+            LogRepository.setStatus("음성 전사 저장됨")
+            LoggerService.reapply(context)
+        }) { Text("음성 전사 저장") }
+        TextButton(onClick = {
+            context.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse("https://console.groq.com/keys"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }) { Text("Groq 키 발급 (무료)") }
         }
 
         val pending = conversations.filter { it.status == "pending" }

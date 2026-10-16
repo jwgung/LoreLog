@@ -16,7 +16,7 @@ voice-keyboard(PC 음성 입력·자막)의 모바일 상시판에 해당한다.
 
 | 종류 | 출처 | 비고 |
 |---|---|---|
-| 음성 | 내장 SpeechRecognizer(구글) | 상시, 끊기면 재시작 루프. 텍스트만 저장 |
+| 음성 | 내장 SpeechRecognizer(구글) **또는** 녹음+클라우드(Groq Whisper) | 상시, 텍스트만 저장. 녹음+클라우드는 화면 꺼져도 안 끊기고 무음은 건너뜀 |
 | 앱 사용 | UsageStatsManager | 어떤 앱을 언제 전면에 |
 | 앱 내 화면 내용 | AccessibilityService | 화면 텍스트. **민감 앱(은행·결제·비밀번호)은 제외 목록** |
 | 위치 | FusedLocationProvider | 간격·이동 거리마다 |
@@ -66,7 +66,7 @@ service/ ScreenContentService(접근성) · NotificationService(알림 리스너
 data/   LogStore(SQLCipher) · LogRepository(StateFlow) · DbKey · 각 이벤트 모델
 stt/    SttEngine · AndroidSpeechEngine (음성→텍스트)
 summary/ Summarizer · GeminiNanoSummarizer · CloudSummarizer (요약)
-net/    EndpointConfig(HTTP) · HttpSink · LlmConfig(요약 LLM)
+net/    EndpointConfig(HTTP) · HttpSink · LlmConfig(요약 LLM) · SttConfig · GroqTranscriber(음성 전사)
 work/   ExportWorker(폴더+HTTP) · SummaryWorker · PruneWorker · ConversationWorker
 ```
 
