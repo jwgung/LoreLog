@@ -156,15 +156,22 @@ private fun HomeScreen() {
         )
     }
 
+    var showSettings by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(
-            "LifeLog",
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier.padding(top = 16.dp),
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("LifeLog", style = MaterialTheme.typography.headlineMedium)
+            TextButton(onClick = { showSettings = !showSettings }) {
+                Text(if (showSettings) "닫기" else "설정")
+            }
+        }
         Text(
             if (running) "기록 중 — 이 기기에만 저장됩니다" else "멈춤",
             style = MaterialTheme.typography.bodyMedium,
@@ -200,6 +207,16 @@ private fun HomeScreen() {
             Text(if (running) "정지" else "기록 시작")
         }
 
+        if (running && partial.isNotBlank()) {
+            Text(partial, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (summaries.isNotEmpty()) {
+            Text("최근 요약", style = MaterialTheme.typography.labelLarge)
+            Text(summaries.first().text, style = MaterialTheme.typography.bodyMedium)
+        }
+
+
+        if (showSettings) {
         if (!usageGranted) {
             OutlinedButton(onClick = {
                 context.startActivity(
@@ -267,19 +284,6 @@ private fun HomeScreen() {
             }
         }) { Text("지금 대화 묶기") }
 
-        if (summaries.isNotEmpty()) {
-            Text("최근 요약", style = MaterialTheme.typography.labelLarge)
-            Text(summaries.first().text, style = MaterialTheme.typography.bodyMedium)
-        }
-
-        if (running && partial.isNotBlank()) {
-            Text(
-                partial,
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
         Text("HTTP 내보내기", style = MaterialTheme.typography.labelLarge)
         OutlinedTextField(
             value = endpointUrl,
@@ -346,6 +350,7 @@ private fun HomeScreen() {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             )
         }) { Text("Gemini 키 발급 (무료)") }
+        }
 
         val pending = conversations.filter { it.status == "pending" }
         if (pending.isNotEmpty()) {
