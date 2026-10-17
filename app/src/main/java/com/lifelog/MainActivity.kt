@@ -68,6 +68,7 @@ import com.lifelog.data.TimelineItem
 import com.lifelog.net.EndpointConfig
 import com.lifelog.net.LlmConfig
 import com.lifelog.net.SttConfig
+import com.lifelog.speaker.SpeakerId
 import com.lifelog.net.ModelCatalog
 import com.lifelog.summary.Summarizer
 import java.text.SimpleDateFormat
@@ -155,6 +156,8 @@ private fun HomeScreen() {
     var sttModel by remember { mutableStateOf(SttConfig.model(context)) }
     var sttKey by remember { mutableStateOf(SttConfig.apiKey(context) ?: "") }
     var btMic by remember { mutableStateOf(AudioPrefs.btMic(context)) }
+    var eagleKey by remember { mutableStateOf(SpeakerId.accessKey(context) ?: "") }
+    var enrolled by remember { mutableStateOf(SpeakerId.isEnrolled(context)) }
     var callFolder by remember { mutableStateOf(CallRecordingImporter.folder(context)?.toString()) }
     val callFolderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
@@ -542,6 +545,57 @@ private fun HomeScreen() {
                 coroutineScope.launch { CallRecordingImporter.importNew(context) }
             }) { Text("지금 가져오기") }
         }
+
+        Text("화자 식별 (내 목소리)", style = MaterialTheme.typography.labelLarge)
+        Text(
+            "내 목소리를 한 번 등록하면, 녹음+클라우드 조각마다 '나/상대/모름'을 자동으로 붙입니다. " +
+                "온디바이스(Picovoice Eagle)라 소리는 기기 밖으로 안 나갑니다.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        OutlinedTextField(
+            value = eagleKey,
+            onValueChange = { eagleKey = it },
+            label = { Text("Picovoice AccessKey") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Text(
+            if (enrolled) "상태: 등록됨" else "상태: 미등록",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = {
+                SpeakerId.setAccessKey(context, eagleKey)
+                LogRepository.setStatus("AccessKey 저장됨")
+            }) { Text("키 저장") }
+            OutlinedButton(onClick = {
+                SpeakerId.setAccessKey(context, eagleKey)
+                LogRepository.setStatus("내 목소리 등록 중… 10~20초 말해주세요 (0%)")
+                coroutineScope.launch {
+                    val ok = SpeakerId.enroll(context) { pct, fb ->
+                        if (pct >= 0) LogRepository.setStatus("등록 중… ${pct.toInt()}% ($fb)")
+                        else LogRepository.setStatus("등록 실패: $fb")
+                    }
+                    if (ok) {
+                        enrolled = true
+                        LogRepository.setStatus("내 목소리 등록 완료")
+                    }
+                }
+            }) { Text("내 목소리 등록") }
+        }
+        if (enrolled) {
+            TextButton(onClick = {
+                SpeakerId.clearEnrollment(context)
+                enrolled = false
+                LogRepository.setStatus("등록 지움")
+            }) { Text("등록 지우기") }
+        }
+        TextButton(onClick = {
+            context.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse("https://console.picovoice.ai/"))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }) { Text("Picovoice 키 발급 (무료)") }
         }
 
         val pending = conversations.filter { it.status == "pending" }

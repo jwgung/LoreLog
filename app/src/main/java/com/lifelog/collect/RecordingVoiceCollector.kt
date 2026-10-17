@@ -8,6 +8,8 @@ import android.os.Build
 import com.lifelog.data.LogRepository
 import com.lifelog.net.GroqTranscriber
 import com.lifelog.net.SttConfig
+import com.lifelog.speaker.PcmDecoder
+import com.lifelog.speaker.SpeakerId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -139,9 +141,14 @@ class RecordingVoiceCollector(context: Context) {
     /** 소리 있는 조각을 전사해 저장하고 오디오 삭제. 실패하면 파일을 남겨 다음에 다시 시도한다. */
     private fun transcribe(file: File) {
         scope.launch {
+            val speaker = if (SpeakerId.isConfigured(appContext) && SpeakerId.isEnrolled(appContext)) {
+                SpeakerId.labelFor(appContext, PcmDecoder.decode(file))
+            } else {
+                null
+            }
             val text = GroqTranscriber.transcribe(appContext, file)
             if (text != null) {
-                LogRepository.addVoice(text)
+                LogRepository.addVoice(text, speaker = speaker)
                 file.delete()
             }
         }
