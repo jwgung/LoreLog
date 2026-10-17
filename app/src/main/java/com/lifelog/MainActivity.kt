@@ -13,6 +13,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,6 +25,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -63,6 +66,7 @@ import com.lifelog.data.TimelineItem
 import com.lifelog.net.EndpointConfig
 import com.lifelog.net.LlmConfig
 import com.lifelog.net.SttConfig
+import com.lifelog.net.ModelCatalog
 import com.lifelog.summary.Summarizer
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -424,12 +428,17 @@ private fun HomeScreen() {
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
-        OutlinedTextField(
+        ModelPicker(
+            label = "모델",
+            baseUrl = llmUrl,
+            apiKey = llmKey,
             value = llmModel,
-            onValueChange = { llmModel = it },
-            label = { Text("모델") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            onValue = { llmModel = it },
+            filter = {
+                !it.contains("whisper", true) && !it.contains("embedding", true) &&
+                    !it.contains("tts", true) && !it.contains("imagen", true) &&
+                    !it.contains("veo", true) && !it.contains("aqa", true)
+            },
         )
         OutlinedTextField(
             value = llmKey,
@@ -466,7 +475,14 @@ private fun HomeScreen() {
             )
         }
         OutlinedTextField(value = sttUrl, onValueChange = { sttUrl = it }, label = { Text("베이스 URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = sttModel, onValueChange = { sttModel = it }, label = { Text("모델") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+        ModelPicker(
+            label = "모델",
+            baseUrl = sttUrl,
+            apiKey = sttKey,
+            value = sttModel,
+            onValue = { sttModel = it },
+            filter = { it.contains("whisper", true) },
+        )
         OutlinedTextField(value = sttKey, onValueChange = { sttKey = it }, label = { Text("Groq API 키") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         OutlinedButton(onClick = {
             SttConfig.set(context, sttUrl, sttModel, sttKey, sttMode)
@@ -524,6 +540,60 @@ private fun HomeScreen() {
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 timeline.take(200).forEach { item -> TimelineRow(item) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModelPicker(
+    label: String,
+    baseUrl: String,
+    apiKey: String,
+    value: String,
+    onValue: (String) -> Unit,
+    filter: (String) -> Boolean,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var models by remember { mutableStateOf<List<String>>(emptyList()) }
+    var loading by remember { mutableStateOf(false) }
+    var msg by remember { mutableStateOf<String?>(null) }
+    val scope = rememberCoroutineScope()
+
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValue,
+        label = { Text(label) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+    Box {
+        TextButton(onClick = {
+            expanded = true
+            if (!loading) {
+                loading = true
+                msg = null
+                scope.launch {
+                    val list = ModelCatalog.fetch(baseUrl, apiKey).filter(filter)
+                    loading = false
+                    models = list
+                    msg = if (list.isEmpty()) "목록 없음 — URL·키 확인 후 다시" else null
+                }
+            }
+        }) { Text(if (loading) "불러오는 중…" else "모델 목록에서 고르기 ▾") }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            if (models.isEmpty()) {
+                DropdownMenuItem(
+                    text = { Text(msg ?: "불러오는 중…") },
+                    onClick = { expanded = false },
+                )
+            } else {
+                models.forEach { m ->
+                    DropdownMenuItem(
+                        text = { Text(m) },
+                        onClick = { onValue(m); expanded = false },
+                    )
+                }
             }
         }
     }
