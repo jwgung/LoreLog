@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.content.Context
 import com.lifelog.data.LogRepository
 import com.lifelog.work.ExportWorker
+import com.lifelog.work.CallRecordingWorker
 import com.lifelog.work.ConversationWorker
 import com.lifelog.work.PruneWorker
 import com.lifelog.work.SummaryWorker
@@ -19,6 +20,7 @@ class LifeLogApp : Application() {
         SummaryWorker.schedule(this)
         PruneWorker.schedule(this)
         ConversationWorker.schedule(this)
+        CallRecordingWorker.schedule(this)
         val channel = NotificationChannel(
             CHANNEL_LOGGING,
             getString(R.string.channel_logging_name),

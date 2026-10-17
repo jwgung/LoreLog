@@ -61,6 +61,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import com.lifelog.collect.UsageAccess
 import com.lifelog.data.LogRepository
+import com.lifelog.collect.CallRecordingImporter
+import com.lifelog.collect.AudioPrefs
 import com.lifelog.collect.CollectorPrefs
 import com.lifelog.data.TimelineItem
 import com.lifelog.net.EndpointConfig
@@ -152,6 +154,17 @@ private fun HomeScreen() {
     var sttUrl by remember { mutableStateOf(SttConfig.baseUrl(context)) }
     var sttModel by remember { mutableStateOf(SttConfig.model(context)) }
     var sttKey by remember { mutableStateOf(SttConfig.apiKey(context) ?: "") }
+    var btMic by remember { mutableStateOf(AudioPrefs.btMic(context)) }
+    var callFolder by remember { mutableStateOf(CallRecordingImporter.folder(context)?.toString()) }
+    val callFolderPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        if (uri != null) {
+            CallRecordingImporter.setFolder(context, uri)
+            callFolder = uri.toString()
+            LogRepository.setStatus("통화 녹음 폴더 지정됨")
+        }
+    }
 
     if (showDeleteDialog) {
         AlertDialog(
@@ -474,6 +487,21 @@ private fun HomeScreen() {
                 },
             )
         }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("블루투스 이어폰 마이크로 녹음", style = MaterialTheme.typography.bodyMedium)
+            Switch(
+                checked = btMic,
+                onCheckedChange = {
+                    btMic = it
+                    AudioPrefs.setBtMic(context, it)
+                    LoggerService.reapply(context)
+                },
+            )
+        }
         OutlinedTextField(value = sttUrl, onValueChange = { sttUrl = it }, label = { Text("베이스 URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         ModelPicker(
             label = "모델",
@@ -495,6 +523,25 @@ private fun HomeScreen() {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             )
         }) { Text("Groq 키 발급 (무료)") }
+
+        Text("통화 녹음 가져오기", style = MaterialTheme.typography.labelLarge)
+        Text(
+            "라이브 통화는 OS가 막습니다. 전화앱 설정에서 '통화 자동 녹음'을 켜 두고, " +
+                "그 저장 폴더(예: 내장메모리 Recordings/Call)를 지정하면 새 녹음을 전사합니다. " +
+                "전사는 위 STT(Groq) 키를 씁니다.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            if (callFolder != null) "지정됨: ${Uri.decode(callFolder)}" else "폴더 미지정",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { callFolderPicker.launch(null) }) { Text("통화 녹음 폴더 선택") }
+            OutlinedButton(onClick = {
+                LogRepository.setStatus("통화 녹음 가져오는 중…")
+                coroutineScope.launch { CallRecordingImporter.importNew(context) }
+            }) { Text("지금 가져오기") }
+        }
         }
 
         val pending = conversations.filter { it.status == "pending" }

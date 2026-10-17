@@ -1,6 +1,8 @@
 package com.lifelog.collect
 
 import android.content.Context
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.media.MediaRecorder
 import android.os.Build
 import com.lifelog.data.LogRepository
@@ -25,6 +27,8 @@ class RecordingVoiceCollector(context: Context) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val dir = File(appContext.cacheDir, "audio").apply { mkdirs() }
+    private val audio = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    @Volatile private var btEnabled = false
 
     @Volatile private var running = false
     private var recorder: MediaRecorder? = null
@@ -37,6 +41,7 @@ class RecordingVoiceCollector(context: Context) {
             return
         }
         running = true
+        enableBtMic()
         loopJob = scope.launch {
             sweepLeftovers()
             while (running && isActive) {
@@ -55,6 +60,7 @@ class RecordingVoiceCollector(context: Context) {
         running = false
         loopJob?.cancel()
         releaseRecorder()
+        disableBtMic()
     }
 
     private suspend fun recordChunk(file: File): Int {
@@ -78,6 +84,37 @@ class RecordingVoiceCollector(context: Context) {
         }
         releaseRecorder()
         return maxAmp
+    }
+
+    /** 블루투스 이어폰 마이크로 입력을 돌린다(설정 시). 이어폰이 없으면 폰 마이크로 둔다. */
+    private fun enableBtMic() {
+        if (!AudioPrefs.btMic(appContext)) return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val dev = audio.availableCommunicationDevices
+                    .firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO }
+                if (dev != null) { audio.setCommunicationDevice(dev); btEnabled = true }
+            } else {
+                audio.mode = AudioManager.MODE_IN_COMMUNICATION
+                @Suppress("DEPRECATION") audio.startBluetoothSco()
+                @Suppress("DEPRECATION") audio.isBluetoothScoOn = true
+                btEnabled = true
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun disableBtMic() {
+        if (!btEnabled) return
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                audio.clearCommunicationDevice()
+            } else {
+                @Suppress("DEPRECATION") audio.stopBluetoothSco()
+                @Suppress("DEPRECATION") audio.isBluetoothScoOn = false
+                audio.mode = AudioManager.MODE_NORMAL
+            }
+        } catch (_: Exception) {}
+        btEnabled = false
     }
 
     private fun newRecorder(file: File): MediaRecorder {
