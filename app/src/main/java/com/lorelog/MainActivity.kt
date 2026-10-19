@@ -70,6 +70,7 @@ import com.lorelog.data.TimelineItem
 import com.lorelog.net.EndpointConfig
 import com.lorelog.net.LlmConfig
 import com.lorelog.net.TranscribeConfig
+import com.lorelog.net.UpdateChecker
 import com.lorelog.net.WhisperModels
 import com.lorelog.stt.ModelDownloader
 import com.lorelog.stt.WhisperEngine
@@ -159,6 +160,8 @@ private fun HomeScreen() {
     var txEngine by remember { mutableStateOf(TranscribeConfig.engine(context)) }
     var whisperId by remember { mutableStateOf(TranscribeConfig.modelId(context)) }
     val dlState by ModelDownloader.state.collectAsStateWithLifecycle()
+    var update by remember { mutableStateOf<UpdateChecker.Result?>(null) }
+    var checking by remember { mutableStateOf(false) }
     var btMic by remember { mutableStateOf(AudioPrefs.btMic(context)) }
     var summaryOn by remember { mutableStateOf(SummaryPrefs.enabled(context)) }
     var callFolder by remember { mutableStateOf(CallRecordingImporter.folder(context)?.toString()) }
@@ -558,6 +561,40 @@ private fun HomeScreen() {
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             )
         }) { Text("Gemini 키 발급 (무료)") }
+
+        Text("버전 / 업데이트", style = MaterialTheme.typography.labelLarge)
+        Text("현재 버전 ${UpdateChecker.currentVersion(context)}", style = MaterialTheme.typography.bodySmall)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(
+                enabled = !checking,
+                onClick = {
+                    checking = true
+                    LogRepository.setStatus("업데이트 확인 중…")
+                    coroutineScope.launch {
+                        val r = UpdateChecker.check(context)
+                        update = r
+                        checking = false
+                        LogRepository.setStatus(
+                            when {
+                                r == null -> "업데이트 확인 실패(네트워크·제한)"
+                                r.newer -> "새 버전 ${r.latest} 있음 (현재 ${r.current})"
+                                else -> "최신 버전입니다 (${r.current})"
+                            },
+                        )
+                    }
+                },
+            ) { Text(if (checking) "확인 중…" else "업데이트 확인") }
+            update?.let { u ->
+                if (u.newer) {
+                    Button(onClick = {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(u.apkUrl ?: u.pageUrl))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }) { Text("${u.latest} 받기") }
+                }
+            }
+        }
 
         Text("음성 전사 방식", style = MaterialTheme.typography.labelLarge)
         Text(
