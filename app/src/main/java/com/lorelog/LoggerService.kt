@@ -52,6 +52,7 @@ class LoggerService : Service() {
         NotificationManagerCompat.from(this).cancel(IDLE_NOTIF_ID)
         startForegroundSafe()
         _isRunning.value = true
+        setWantRunning(this, true)
         startCollectors()
         applyOverlay()
         return START_STICKY
@@ -108,6 +109,7 @@ class LoggerService : Service() {
 
     private fun stopLogging() {
         _isRunning.value = false
+        setWantRunning(this, false)
         stopCollectors()
         OverlayBadge.hide(this)
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -162,6 +164,20 @@ class LoggerService : Service() {
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning
+
+        private const val RUN_PREF = "run_state"
+        private const val RUN_KEY = "want"
+
+        /** 사용자가 기록을 켠 상태인지 디스크에 남긴다(업데이트·부팅 후 자동 재개 판단용). */
+        fun setWantRunning(context: Context, want: Boolean) {
+            context.applicationContext.getSharedPreferences(RUN_PREF, Context.MODE_PRIVATE)
+                .edit().putBoolean(RUN_KEY, want).apply()
+        }
+
+        /** 마지막에 기록이 켜져 있었는지. */
+        fun wasRunning(context: Context): Boolean =
+            context.applicationContext.getSharedPreferences(RUN_PREF, Context.MODE_PRIVATE)
+                .getBoolean(RUN_KEY, false)
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, LoggerService::class.java))
