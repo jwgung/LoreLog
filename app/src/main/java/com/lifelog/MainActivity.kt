@@ -213,6 +213,51 @@ private fun HomeScreen() {
             Text(status, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
 
+        if (!screenGranted && CollectorPrefs.enabled(context, CollectorPrefs.SCREEN)) {
+            Surface(
+                color = MaterialTheme.colorScheme.errorContainer,
+                shape = MaterialTheme.shapes.medium,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Text(
+                        "화면 수집이 꺼져 있습니다",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                    Text(
+                        "접근성이 꺼지면 앱 안에서 본 내용이 안 쌓입니다. 새 버전 설치나 절전(앱 재우기)으로 꺼지기도 합니다.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = {
+                            context.startActivity(
+                                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }) { Text("접근성 켜기") }
+                        OutlinedButton(onClick = {
+                            context.startActivity(
+                                Intent(
+                                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    Uri.parse("package:${context.packageName}"),
+                                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                        }) { Text("앱 정보") }
+                    }
+                    Text(
+                        "토글이 회색이면: 앱 정보 → ⋮ → '제한된 설정 허용'. 덜 꺼지게 하려면 배터리를 '제한 없음'으로.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                }
+            }
+        }
+
         Button(onClick = {
             if (running) {
                 LoggerService.stop(context)
