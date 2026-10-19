@@ -11,8 +11,8 @@ android {
         applicationId = "com.lorelog"
         minSdk = 29
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.3.1"
+        versionCode = 4
+        versionName = "0.3.2"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
@@ -64,7 +64,6 @@ dependencies {
     implementation("androidx.security:security-crypto:1.1.0")
     implementation("androidx.work:work-runtime-ktx:2.10.5")
     implementation("androidx.documentfile:documentfile:1.0.1")
-    implementation("ai.picovoice:eagle-android:3.0.2")
     implementation("com.github.gkonovalov.android-vad:webrtc:2.0.10")
     implementation("dev.ffmpegkit-maintained:whisper-android:1.0.0")
     implementation("com.google.mlkit:genai-summarization:1.0.0-beta1")

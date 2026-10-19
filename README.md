@@ -23,7 +23,7 @@ Your phone is a sensor that's always with you. LoreLog collects what happens on 
 - **Your device, your data only.** Not third-party surveillance or covert collection.
 - **Visible.** All collection is surfaced through standard OS permission prompts and a **persistent notification**. Nothing is hidden. It collects only while recording.
 - **Stored locally, encrypted.** Records live on-device in a SQLCipher-encrypted DB; API keys sit in a Keystore-backed store. This app stores nothing in the cloud.
-- **Processing is cloud by default, but transcription can be fully on-device.** Out of the box, voice transcription and summaries run in the cloud with your own keys, so speech audio and text leave the device. You can switch transcription to **on-device whisper.cpp** (download a model once; then nothing leaves the device), and summaries fall back to on-device **Gemini Nano** where supported. Exposure is kept minimal (VAD sends only speech, speaker ID stays on-device) and you control every endpoint and key. Only text is stored; audio is discarded after transcription (kept offline only until it can be processed).
+- **Processing is cloud by default, but transcription can be fully on-device.** Out of the box, voice transcription and summaries run in the cloud with your own keys, so speech audio and text leave the device. You can switch transcription to **on-device whisper.cpp** (download a model once; then nothing leaves the device), and summaries fall back to on-device **Gemini Nano** where supported. Exposure is kept minimal (VAD sends only speech) and you control every endpoint and key. Only text is stored; audio is discarded after transcription (kept offline only until it can be processed).
 
 ## What it collects
 
@@ -50,7 +50,6 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 
   Cloud is more accurate; on-device trades some accuracy for full privacy and no key. Nearby utterances are batched into ~15s chunks before transcription — fewer requests (free-tier friendly) and better accuracy than tiny clips.
 - **Offline: keep, then transcribe** — when the chosen engine isn't ready (no key, or the on-device model isn't downloaded), speech segments are kept as voice files in an app folder, and once it's ready they are transcribed **automatically (a periodic worker) or manually ("Transcribe pending voice")**. Recording and keeping continue regardless.
-- **Speaker ID (optional)** — enroll your own voice once (**on-device Picovoice Eagle**) and each segment is tagged `me / other / unknown`. Audio never leaves the device.
 - **Bluetooth earbud mic (optional)** — route recording input to a BT headset mic.
 - **Import call recordings** — the OS blocks live call audio. Instead, point LoreLog at the folder where your dialer saves call recordings (via SAF) and it transcribes those files (devices with a built-in recorder, e.g. Samsung).
 
@@ -79,7 +78,7 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 1. Download `app-release.apk` from [Releases](https://github.com/jwgung/lifelog/releases/latest) and install it.
 2. **Play Protect warning**: with this many permissions, sideloading triggers a warning. It can't be removed in code; to use the app, turn off Play Protect scanning in the Play Store (or "install without scanning"), and on Samsung turn off Auto Blocker.
 3. In the app, tap **Start** and grant the prompted permissions (it starts with just the mic granted).
-4. Paste the **keys** for the features you want into settings: voice transcription (Gemini — or pick on-device whisper and download a model instead of a key), summaries (Gemini), speaker ID (Picovoice). Each field has a "get key" link. Without a key (or a downloaded model), only that feature sits idle; everything else works.
+4. Paste the **keys** for the features you want into settings: voice transcription (Gemini — or pick on-device whisper and download a model instead of a key), summaries (Gemini). Each field has a "get key" link. Without a key (or a downloaded model), only that feature sits idle; everything else works.
 
 **Special permissions** (you enable these yourself): usage access, accessibility (on-screen content), notification access, background location.
 
@@ -93,7 +92,7 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 ```
 
 - Toolchain: AGP 9.4.1 (built-in Kotlin), Gradle 9.8.0, compileSdk 37 / targetSdk 36 / minSdk 29, Jetpack Compose.
-- Key dependencies: SQLCipher (net.zetetic), security-crypto, WorkManager, play-services-location, ML Kit genai-summarization, Picovoice Eagle, android-vad (WebRTC), whisper-android (dev.ffmpegkit-maintained, no NDK).
+- Key dependencies: SQLCipher (net.zetetic), security-crypto, WorkManager, play-services-location, ML Kit genai-summarization, android-vad (WebRTC), whisper-android (dev.ffmpegkit-maintained, no NDK).
 - Set the Android SDK path via `sdk.dir` in `local.properties`. Keep the release signing keystore and passwords outside the repo.
 
 ## Structure
@@ -107,7 +106,6 @@ collect/
   AppUsage / Location / Comms / Calendar Collector
   CallRecordingImporter    transcribe a call-recording folder (SAF)
   SensitiveApps · CollectorPrefs · AudioPrefs
-speaker/  SpeakerId (Picovoice Eagle) · PcmDecoder
 service/  ScreenContentService (accessibility) · NotificationService (notification listener)
 data/     LogStore (SQLCipher) · LogRepository (StateFlow) · DbKey · event models
 net/      GeminiTranscriber · LlmConfig · ModelCatalog · TranscribeConfig · WhisperModels · EndpointConfig · HttpSink
@@ -117,7 +115,7 @@ work/     Export · Summary · Prune · Conversation · PendingVoice · CallReco
 OverlayBadge · NotifPrefs · NotifReviveReceiver · BootReceiver
 ```
 
-**Design note** — the phone captures what only exists because the phone is beside you, or what the phone gives for free locally (the sources above); things that live only in the cloud and need auth (email, etc.) are pulled on the server / knowledge-graph side. Voice STT, summarization, and speaker ID all sit behind interfaces so the engines can be swapped.
+**Design note** — the phone captures what only exists because the phone is beside you, or what the phone gives for free locally (the sources above); things that live only in the cloud and need auth (email, etc.) are pulled on the server / knowledge-graph side. Voice STT and summarization sit behind interfaces so the engines can be swapped.
 
 ## Legal note
 

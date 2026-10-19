@@ -13,7 +13,6 @@ import com.konovalov.vad.webrtc.config.Mode
 import com.konovalov.vad.webrtc.config.SampleRate
 import com.lorelog.data.LogRepository
 import com.lorelog.collect.PendingVoice
-import com.lorelog.speaker.SpeakerId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -152,7 +151,7 @@ class RecordingVoiceCollector(context: Context) {
         }
     }
 
-    /** 말 구간 PCM 을 WAV 로 저장하고, 화자 라벨을 뽑아 전사·저장 큐에 넣는다. */
+    /** 묶은 말 구간 PCM 을 WAV 로 저장하고 전사·저장 큐에 넣는다. */
     private fun flush(frames: List<ShortArray>) {
         if (frames.isEmpty()) return
         val total = frames.sumOf { it.size }
@@ -160,12 +159,7 @@ class RecordingVoiceCollector(context: Context) {
         val pcm = ShortArray(total)
         var off = 0
         for (f in frames) { f.copyInto(pcm, off); off += f.size }
-        val speaker = if (SpeakerId.isConfigured(appContext) && SpeakerId.isEnrolled(appContext)) {
-            SpeakerId.labelFor(appContext, pcm)
-        } else {
-            null
-        }
-        val file = PendingVoice.fileFor(appContext, speaker)
+        val file = PendingVoice.fileFor(appContext, null)
         if (!writeWav(file, pcm)) return
         // 즉시 1회 전사 시도. 실패(키 없음·오프라인)하면 파일이 남아 워커가 나중에 전사한다.
         scope.launch { PendingVoice.transcribeFile(appContext, file) }
