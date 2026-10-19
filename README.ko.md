@@ -6,7 +6,7 @@
 
 개인용 · 로컬 암호화 저장 · 클라우드 또는 온디바이스 전사 · 클라우드 요약(본인 키)
 
-[**APK 다운로드**](https://github.com/jwgung/lorelog/releases/latest) · [릴리스](https://github.com/jwgung/lorelog/releases)
+[**APK 다운로드**](https://github.com/jwgung/LoreLog/releases/latest) · [릴리스](https://github.com/jwgung/LoreLog/releases)
 
 [English](README.md) · 한국어
 
@@ -75,7 +75,7 @@ LoreLog의 핵심이자 가장 까다로운 부분. 구글 실시간 인식기�
 
 ## 설치 & 설정
 
-1. [릴리스](https://github.com/jwgung/lorelog/releases/latest)에서 APK(`LoreLog-<버전>.apk`)를 받아 설치한다.
+1. [릴리스](https://github.com/jwgung/LoreLog/releases/latest)에서 APK(`LoreLog-<버전>.apk`)를 받아 설치한다.
 2. **Play 프로텍트 경고**: 권한이 많아 사이드로드 시 경고가 뜬다. 코드로 없앨 수 없으니, 쓰려면 Play 스토어 → Play 프로텍트 검사 끄기(또는 "검사 없이 설치"), 삼성은 Auto Blocker 끄기.
 3. 앱에서 **기록 시작** → 뜨는 권한을 허용한다(마이크만 허용해도 시작된다).
 4. 쓰려는 기능의 **키**를 설정에 넣는다: 음성 전사(Gemini — 또는 온디바이스 whisper를 골라 키 대신 모델 다운로드), 요약(Gemini). 각 칸에 "키 발급" 링크가 있다. 키(또는 받은 모델)가 없으면 그 기능만 쉬고 나머지는 동작한다.
