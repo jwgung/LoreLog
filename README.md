@@ -16,7 +16,7 @@ voice-keyboard(PC 음성 입력·자막)의 모바일 상시판에 해당한다.
 
 | 종류 | 출처 | 비고 |
 |---|---|---|
-| 음성 | 내장 SpeechRecognizer(구글) **또는** 녹음+클라우드(Groq Whisper) | 상시, 텍스트만 저장. 녹음+클라우드는 화면 꺼져도 안 끊기고 무음은 건너뜀 |
+| 음성 | 내장 SpeechRecognizer(구글) **또는** 녹음+클라우드(Groq Whisper) | 상시, 텍스트만. 녹음+클라우드는 WebRTC VAD로 말할 때만 캡처(무음엔 소리 크기만 훑음) |
 | 앱 사용 | UsageStatsManager | 어떤 앱을 언제 전면에 |
 | 앱 내 화면 내용 | AccessibilityService | 화면 텍스트. **민감 앱(은행·결제·비밀번호)은 제외 목록** |
 | 위치 | FusedLocationProvider | 간격·이동 거리마다 |
