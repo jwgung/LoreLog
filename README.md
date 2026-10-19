@@ -4,7 +4,7 @@
 
 **A personal lifelog app that gathers your day as text on your own Android, as raw material for a personal knowledge graph about you.**
 
-Personal use · On-device first · Locally encrypted
+Personal use · Encrypted local storage · Cloud transcription & summaries (your keys)
 
 [**Download APK**](https://github.com/jwgung/lifelog/releases/latest) · [Releases](https://github.com/jwgung/lifelog/releases)
 
@@ -22,8 +22,8 @@ Your phone is a sensor that's always with you. LoreLog collects what happens on 
 
 - **Your device, your data only.** Not third-party surveillance or covert collection.
 - **Visible.** All collection is surfaced through standard OS permission prompts and a **persistent notification**. Nothing is hidden. It collects only while recording.
-- **Local first.** Data is stored on-device, **encrypted with SQLCipher**. The only way out is an export you set up yourself.
-- **Text only.** Audio is discarded after transcription — except that when there is no AI connection, voice files are kept until they can be transcribed.
+- **Stored locally, encrypted.** Records live on-device in a SQLCipher-encrypted DB; API keys sit in a Keystore-backed store. This app stores nothing in the cloud.
+- **But processing is cloud by default — this is not a local-only app.** Voice transcription (Groq) and summaries (Gemini) run in the cloud with your own keys, so speech audio and text leave the device for that. Exposure is kept minimal (VAD sends only speech, speaker ID stays on-device, summaries can run on-device via Gemini Nano where supported) and you control every endpoint and key. Only text is stored; audio is discarded after transcription (kept offline only until it can be sent).
 
 ## What it collects
 
