@@ -19,8 +19,6 @@ import com.lifelog.collect.CalendarCollector
 import com.lifelog.collect.CommsCollector
 import com.lifelog.collect.LocationCollector
 import com.lifelog.collect.RecordingVoiceCollector
-import com.lifelog.collect.VoiceCollector
-import com.lifelog.net.SttConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -30,7 +28,6 @@ import kotlinx.coroutines.flow.StateFlow
  */
 class LoggerService : Service() {
 
-    private var voice: VoiceCollector? = null
     private var recordingVoice: RecordingVoiceCollector? = null
     private var appUsage: AppUsageCollector? = null
     private var location: LocationCollector? = null
@@ -80,13 +77,8 @@ class LoggerService : Service() {
         if (CollectorPrefs.enabled(this, CollectorPrefs.VOICE) &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         ) {
-            if (SttConfig.useCloud(this)) {
-                if (recordingVoice == null) recordingVoice = RecordingVoiceCollector(this)
-                recordingVoice?.start()
-            } else {
-                if (voice == null) voice = VoiceCollector(this)
-                voice?.start()
-            }
+            if (recordingVoice == null) recordingVoice = RecordingVoiceCollector(this)
+            recordingVoice?.start()
         }
         if (CollectorPrefs.enabled(this, CollectorPrefs.APPS)) {
             if (appUsage == null) appUsage = AppUsageCollector(this)
@@ -107,7 +99,6 @@ class LoggerService : Service() {
     }
 
     private fun stopCollectors() {
-        voice?.stop()
         recordingVoice?.stop()
         appUsage?.stop()
         location?.stop()

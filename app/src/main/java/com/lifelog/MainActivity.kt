@@ -151,7 +151,6 @@ private fun HomeScreen() {
     var llmUrl by remember { mutableStateOf(LlmConfig.baseUrl(context)) }
     var llmModel by remember { mutableStateOf(LlmConfig.model(context)) }
     var llmKey by remember { mutableStateOf(LlmConfig.apiKey(context) ?: "") }
-    var sttMode by remember { mutableStateOf(SttConfig.cloudMode(context)) }
     var sttUrl by remember { mutableStateOf(SttConfig.baseUrl(context)) }
     var sttModel by remember { mutableStateOf(SttConfig.model(context)) }
     var sttKey by remember { mutableStateOf(SttConfig.apiKey(context) ?: "") }
@@ -519,22 +518,11 @@ private fun HomeScreen() {
             )
         }) { Text("Gemini 키 발급 (무료)") }
 
-        Text("음성 전사 (녹음+클라우드)", style = MaterialTheme.typography.labelLarge)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("녹음+클라우드 사용 (화면 꺼져도 유지)", style = MaterialTheme.typography.bodyMedium)
-            Switch(
-                checked = sttMode,
-                onCheckedChange = {
-                    sttMode = it
-                    SttConfig.set(context, sttUrl, sttModel, sttKey, it)
-                    LoggerService.reapply(context)
-                },
-            )
-        }
+        Text("음성 전사 (Groq)", style = MaterialTheme.typography.labelLarge)
+        Text(
+            "음성은 녹음→Groq 전사로만 수집합니다(VAD로 말할 때만, 화면 꺼져도 유지). 키가 없으면 음성은 쉽니다.",
+            style = MaterialTheme.typography.bodySmall,
+        )
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -561,7 +549,7 @@ private fun HomeScreen() {
         )
         OutlinedTextField(value = sttKey, onValueChange = { sttKey = it }, label = { Text("Groq API 키") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         OutlinedButton(onClick = {
-            SttConfig.set(context, sttUrl, sttModel, sttKey, sttMode)
+            SttConfig.set(context, sttUrl, sttModel, sttKey)
             LogRepository.setStatus("음성 전사 저장됨")
             LoggerService.reapply(context)
         }) { Text("음성 전사 저장") }
