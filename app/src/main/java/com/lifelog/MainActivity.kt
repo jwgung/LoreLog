@@ -62,6 +62,7 @@ import kotlinx.coroutines.launch
 import com.lifelog.collect.UsageAccess
 import com.lifelog.data.LogRepository
 import com.lifelog.collect.CallRecordingImporter
+import com.lifelog.collect.PendingVoice
 import com.lifelog.collect.AudioPrefs
 import com.lifelog.collect.CollectorPrefs
 import com.lifelog.data.TimelineItem
@@ -553,6 +554,19 @@ private fun HomeScreen() {
             LogRepository.setStatus("음성 전사 저장됨")
             LoggerService.reapply(context)
         }) { Text("음성 전사 저장") }
+        OutlinedButton(onClick = {
+            LogRepository.setStatus("밀린 음성 전사 중…")
+            coroutineScope.launch {
+                val done = PendingVoice.transcribePending(context)
+                LogRepository.setStatus(
+                    if (done > 0) "밀린 음성 ${done}건 전사됨" else "전사할 밀린 음성이 없거나 키가 없습니다",
+                )
+            }
+        }) { Text("밀린 음성 전사 (${PendingVoice.pendingCount(context)}건 대기)") }
+        Text(
+            "AI(Groq) 연결이 없으면 말소리를 음성파일로 보관했다가(앱 폴더 voice_pending), 연결되면 자동/수동으로 그 파일만 전사합니다.",
+            style = MaterialTheme.typography.bodySmall,
+        )
         TextButton(onClick = {
             context.startActivity(
                 Intent(Intent.ACTION_VIEW, Uri.parse("https://console.groq.com/keys"))

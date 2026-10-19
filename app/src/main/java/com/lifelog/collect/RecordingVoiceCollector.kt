@@ -12,8 +12,7 @@ import com.konovalov.vad.webrtc.config.FrameSize
 import com.konovalov.vad.webrtc.config.Mode
 import com.konovalov.vad.webrtc.config.SampleRate
 import com.lifelog.data.LogRepository
-import com.lifelog.net.GroqTranscriber
-import com.lifelog.net.SttConfig
+import com.lifelog.collect.PendingVoice
 import com.lifelog.speaker.SpeakerId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -34,7 +33,6 @@ class RecordingVoiceCollector(context: Context) {
 
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val dir = File(appContext.cacheDir, "audio").apply { mkdirs() }
     private val audio = appContext.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
     @Volatile private var running = false
@@ -43,14 +41,10 @@ class RecordingVoiceCollector(context: Context) {
 
     fun start() {
         if (loopJob?.isActive == true) return
-        if (!SttConfig.isConfigured(appContext)) {
-            LogRepository.setStatus("녹음+클라우드 음성엔 전사 키가 필요합니다")
-            return
-        }
         running = true
         enableBtMic()
         loopJob = scope.launch {
-            sweepLeftovers()
+            PendingVoice.transcribePending(appContext)
             runVadLoop()
         }
     }
@@ -138,20 +132,15 @@ class RecordingVoiceCollector(context: Context) {
         val pcm = ShortArray(total)
         var off = 0
         for (f in frames) { f.copyInto(pcm, off); off += f.size }
-        val file = File(dir, "seg_${System.currentTimeMillis()}.wav")
-        if (!writeWav(file, pcm)) return
         val speaker = if (SpeakerId.isConfigured(appContext) && SpeakerId.isEnrolled(appContext)) {
             SpeakerId.labelFor(appContext, pcm)
         } else {
             null
         }
-        scope.launch {
-            val text = GroqTranscriber.transcribe(appContext, file)
-            if (text != null) {
-                LogRepository.addVoice(text, speaker = speaker)
-                file.delete()
-            }
-        }
+        val file = PendingVoice.fileFor(appContext, speaker)
+        if (!writeWav(file, pcm)) return
+        // 즉시 1회 전사 시도. 실패(키 없음·오프라인)하면 파일이 남아 워커가 나중에 전사한다.
+        scope.launch { PendingVoice.transcribeFile(appContext, file) }
     }
 
     private fun writeWav(file: File, pcm: ShortArray): Boolean = try {
@@ -185,17 +174,6 @@ class RecordingVoiceCollector(context: Context) {
         ((v shr 16) and 0xff).toByte(), ((v shr 24) and 0xff).toByte(),
     )
     private fun shortLe(v: Int) = byteArrayOf((v and 0xff).toByte(), ((v shr 8) and 0xff).toByte())
-
-    private fun sweepLeftovers() {
-        dir.listFiles()?.forEach { f ->
-            if (f.name.endsWith(".wav") || f.name.endsWith(".m4a")) {
-                scope.launch {
-                    val text = GroqTranscriber.transcribe(appContext, f)
-                    if (text != null) { LogRepository.addVoice(text); f.delete() }
-                }
-            }
-        }
-    }
 
     private fun enableBtMic() {
         if (!AudioPrefs.btMic(appContext)) return
