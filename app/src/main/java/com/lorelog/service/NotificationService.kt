@@ -11,8 +11,9 @@ import com.lorelog.data.LogRepository
 /**
  * 받은 알림 수집. NotificationListenerService 로 올라오는 알림의 제목·본문을 기록한다.
  * - '기록 중'일 때만 수집.
- * - 제외 목록(은행·결제 등)·시스템 UI(충전·배터리 등)·상시(ongoing)·포그라운드 서비스 알림은 건너뛴다.
- * - 짧은 시간 내 같은 알림 반복은 중복 제거.
+ * - 제외 목록(은행·결제 등)·포그라운드 서비스 알림은 건너뛴다.
+ * - 상시(ongoing) 알림(충전·음악·내비처럼 자주 갱신)은 버리지 않고 제목 기준으로 길게 스로틀해
+ *   도배를 막는다(= 정보는 남되 가끔만). 일반 알림은 동일 내용 반복만 중복 제거.
  * 사용자가 설정 > 알림 접근에서 직접 켜야 동작한다.
  */
 class NotificationService : NotificationListenerService() {
@@ -26,28 +27,28 @@ class NotificationService : NotificationListenerService() {
 
         val pkg = sbn.packageName ?: return
         if (pkg == packageName) return
-        if (pkg in SYSTEM_PKGS) return
         if (SensitiveApps.isExcluded(this, pkg)) return
 
         val notification = sbn.notification ?: return
         val flags = notification.flags
         if (flags and Notification.FLAG_FOREGROUND_SERVICE != 0) return
-        // 상시 알림(충전·음악·내비 등)은 자주 갱신돼 스팸이라 제외
-        if (flags and Notification.FLAG_ONGOING_EVENT != 0) return
+        val ongoing = flags and Notification.FLAG_ONGOING_EVENT != 0
 
         val extras = notification.extras
         val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty().trim()
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty().trim()
         if (title.isEmpty() && text.isEmpty()) return
 
-        // 짧은 시간 내 동일 알림(제목+본문) 반복 제거
         val now = System.currentTimeMillis()
-        val key = "$pkg|$title|$text"
+        // 상시 알림: 제목만으로 묶어 길게 스로틀(충전 %처럼 본문만 바뀌며 쏟아지는 것 방지).
+        // 일반 알림: 동일 내용(제목+본문) 짧게 중복 제거.
+        val key = if (ongoing) "$pkg|$title" else "$pkg|$title|$text"
+        val window = if (ongoing) ONGOING_THROTTLE_MS else DEDUPE_MS
         val last = recent[key]
-        if (last != null && now - last < DEDUPE_MS) return
+        if (last != null && now - last < window) return
         recent[key] = now
         if (recent.size > 200) {
-            val cutoff = now - DEDUPE_MS
+            val cutoff = now - ONGOING_THROTTLE_MS
             recent.entries.removeAll { it.value < cutoff }
         }
 
@@ -63,7 +64,7 @@ class NotificationService : NotificationListenerService() {
     }
 
     private companion object {
-        val SYSTEM_PKGS = setOf("com.android.systemui", "android")
-        const val DEDUPE_MS = 60_000L
+        const val DEDUPE_MS = 60_000L          // 일반 알림 동일 내용 중복 제거 창
+        const val ONGOING_THROTTLE_MS = 600_000L // 상시 알림(충전 등) 제목 기준 10분에 1회
     }
 }
