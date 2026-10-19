@@ -10,6 +10,8 @@ import android.Manifest
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.ServiceCompat
+import android.content.pm.ServiceInfo
 import androidx.core.content.ContextCompat
 import com.lifelog.collect.AppUsageCollector
 import com.lifelog.collect.CollectorPrefs
@@ -45,13 +47,13 @@ class LoggerService : Service() {
         if (intent?.action == ACTION_REAPPLY) {
             if (_isRunning.value) {
                 stopCollectors(); startCollectors()
-                startForeground(NOTIF_ID, buildRecordingNotification())
+                startForegroundSafe()
                 applyOverlay()
             }
             return START_STICKY
         }
         NotificationManagerCompat.from(this).cancel(IDLE_NOTIF_ID)
-        startForeground(NOTIF_ID, buildRecordingNotification())
+        startForegroundSafe()
         _isRunning.value = true
         startCollectors()
         applyOverlay()
@@ -120,6 +122,28 @@ class LoggerService : Service() {
         stopForeground(STOP_FOREGROUND_REMOVE)
         showIdle(this)
         stopSelf()
+    }
+
+    /** 권한이 있는 포그라운드 타입만 지정해 시작한다. 위치 권한이 없어도 마이크만으로 뜬다. */
+    private fun startForegroundSafe() {
+        var type = 0
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        }
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        ) {
+            type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+        }
+        try {
+            if (type != 0) {
+                ServiceCompat.startForeground(this, NOTIF_ID, buildRecordingNotification(), type)
+            } else {
+                startForeground(NOTIF_ID, buildRecordingNotification())
+            }
+        } catch (e: Exception) {
+            try { startForeground(NOTIF_ID, buildRecordingNotification()) } catch (_: Exception) {}
+        }
     }
 
     private fun buildRecordingNotification(): Notification {
