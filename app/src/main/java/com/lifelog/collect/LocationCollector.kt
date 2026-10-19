@@ -26,8 +26,10 @@ class LocationCollector(context: Context) {
 
     private val callback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
-            val loc = result.lastLocation ?: return
-            LogRepository.addLocation(loc.latitude, loc.longitude, loc.accuracy, loc.time)
+            // 배치로 여러 점이 한 번에 올 수 있으므로 전부 저장한다.
+            for (loc in result.locations) {
+                LogRepository.addLocation(loc.latitude, loc.longitude, loc.accuracy, loc.time)
+            }
         }
     }
 
@@ -41,6 +43,7 @@ class LocationCollector(context: Context) {
         val request = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, INTERVAL_MS)
             .setMinUpdateIntervalMillis(MIN_INTERVAL_MS)
             .setMinUpdateDistanceMeters(MIN_DISTANCE_M)
+            .setMaxUpdateDelayMillis(MAX_DELAY_MS)
             .build()
         try {
             // 캐시된 마지막 위치가 있으면 첫 점으로 바로 남긴다.
@@ -60,8 +63,9 @@ class LocationCollector(context: Context) {
     }
 
     companion object {
-        private const val INTERVAL_MS = 60_000L
-        private const val MIN_INTERVAL_MS = 30_000L
-        private const val MIN_DISTANCE_M = 20f
+        private const val INTERVAL_MS = 300_000L      // 5분
+        private const val MIN_INTERVAL_MS = 120_000L  // 빨라도 2분
+        private const val MIN_DISTANCE_M = 50f
+        private const val MAX_DELAY_MS = 600_000L     // 배치 허용(최대 10분 지연)
     }
 }
