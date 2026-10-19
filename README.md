@@ -1,101 +1,127 @@
+<div align="center">
+
 # LoreLog
 
-내 안드로이드 기기에서 **내** 하루를 텍스트로 기록하는 개인용(quantified-self) 앱.
-voice-keyboard(PC 음성 입력·자막)의 모바일 상시판에 해당한다. 폰은 늘 곁에 있는 센서이므로,
-"폰에서 일어나는 일 + 폰이 곁에서 본 일상"을 모아 개인 지식그래프의 재료로 내보낸다.
+**내 안드로이드에서 내 하루를 텍스트로 모아, 나에 관한 개인 지식그래프의 재료로 내보내는 라이프로그 앱.**
 
-## 원칙 (경계)
+개인용 · 온디바이스 우선 · 로컬 암호화
+
+[**APK 다운로드**](https://github.com/jwgung/lifelog/releases/latest) · [릴리스](https://github.com/jwgung/lifelog/releases)
+
+</div>
+
+---
+
+폰은 늘 곁에 있는 센서다. LoreLog는 "폰에서 일어나는 일 + 폰이 곁에서 본 일상"(음성·앱 사용·화면 내용·위치·알림·통화/문자·일정)을 하나의 시간순 타임라인으로 모은다. 모은 기록은 기기에만 암호화해 두고, 원할 때 JSON·파일·HTTP로 내보내 개인 지식그래프(*your lore*)에 붙인다.
+
+> ⚠️ **개인용 도구다.** 본인 기기에서 본인 데이터만 수집하도록 만들어졌다. 다른 사람을 몰래 감시하는 용도가 아니며, 그렇게 쓰면 안 된다.
+
+## 원칙
+
 - **본인 기기, 본인 데이터만.** 제3자 감시·은닉 수집이 아니다.
-- 모든 수집은 OS 표준 권한과 **지울 수 없는 상시 알림**으로 드러난다. 숨기지 않는다. 기록 중일 때만 수집한다.
-- 데이터는 **기기 로컬에만** 저장(SQLCipher 암호화). 원본 오디오는 보관하지 않고 텍스트만 남긴다.
-- 음성에 다른 사람과의 대화가 들어올 수 있다. 한국은 **본인이 참여한 대화** 녹음은 합법,
-  끼지 않은 남들끼리의 대화 녹음은 불법. 기록은 개인용으로만 쓴다.
+- **드러낸다.** 모든 수집은 OS 표준 권한 동의와 **상시 알림**으로 보인다. 숨기지 않는다. 기록 중일 때만 수집한다.
+- **로컬 우선.** 데이터는 기기에 **SQLCipher로 암호화**해 저장한다. 밖으로 나가는 유일한 경로는 사용자가 직접 설정한 내보내기다.
+- **텍스트만.** 음성은 전사 후 원본 오디오를 지운다(단, AI 연결이 없을 땐 전사 전까지 음성파일을 보관한다).
 
-## 수집 범위
-전부 같은 포그라운드 서비스에서 돌고, 하나의 시간순 타임라인으로 합쳐진다.
+## 수집하는 것
+
+전부 같은 포그라운드 서비스에서 돌고, 설정에서 항목별로 켜고 끈다.
 
 | 종류 | 출처 | 비고 |
 |---|---|---|
-| 음성 | 녹음 → Groq Whisper 전사 (WebRTC VAD) | 말할 때만 캡처, 텍스트만 저장. 화면 꺼져도 유지. Groq 키 필요 |
-| 앱 사용 | UsageStatsManager | 어떤 앱을 언제 전면에 |
-| 앱 내 화면 내용 | AccessibilityService | 화면 텍스트. **민감 앱(은행·결제·비밀번호)은 제외 목록** |
-| 위치 | FusedLocationProvider | 간격·이동 거리마다 |
-| 알림 | NotificationListenerService | 받은 알림 제목·본문(민감 앱·상시 알림 제외) |
-| 통화·문자 | CallLog·SMS + 연락처 | 누구와 언제. 번호→이름 매칭 |
-| 캘린더 | CalendarContract(+참석자) | 일정 시작 시각 자리에. 폰의 모든 캘린더(로컬 포함) |
+| **음성** | 녹음 → Groq Whisper 전사 | WebRTC VAD로 **말할 때만** 캡처. 화면 꺼져도 유지. 텍스트만 저장 |
+| **앱 사용** | UsageStatsManager | 어떤 앱을 언제 썼나 |
+| **화면 내용** | AccessibilityService | 앱 안에서 본 텍스트. 은행·결제 등 **민감 앱 제외** |
+| **위치** | FusedLocationProvider | 5분 간격·저전력·배치 |
+| **알림** | NotificationListenerService | 받은 알림 제목·본문 |
+| **통화·문자** | CallLog · SMS · 연락처 | 누구와 언제(번호→이름 매칭) |
+| **캘린더** | CalendarContract (+참석자) | 폰의 모든 캘린더(로컬 포함) |
 
-## 대화 ("누구와 대화했나")
-화자 식별(목소리 구분)은 원본 오디오 엔진이 필요해 보류 상태다. 대신:
-- 음성 조각을 시간 간격(5분)으로 묶어 **대화** 단위로 만든다.
-- 대화 시간대와 겹치는 **통화(연락처 이름)·회의(캘린더 참석자)**로 참석자를 **자동 연결**.
-- 자동으로 못 채운 대화는 **검토 큐**("태그할 대화")에 모아 직접 입력.
+## 음성
 
-## 요약
-수집한 기록을 묶어 주기적으로 요약한다. 요약 엔진은 인터페이스(`Summarizer`) 뒤에 두어 바꿔 낀다.
-- **클라우드 LLM(무료 티어)**: OpenAI 호환 방식. 기본값은 Gemini 2.0 Flash.
-  앱 "요약 LLM" 칸의 **"Gemini 키 발급 (무료)"** 버튼으로 키를 받아 붙여넣으면 끝. URL·모델만 바꾸면 Groq 등도 가능.
-- **온디바이스 Gemini Nano**: 지원 기기(Pixel 8+/Galaxy S24+·Android 14+)에서 데이터 안 내보내고 요약.
-- 클라우드 키가 있으면 클라우드, 없으면 Nano 로 폴백. 매일 1회 워커 + 수동 "지금 요약".
+LoreLog의 핵심이자 가장 까다로운 부분. 구글 실시간 인식기는 오디오 포커스를 계속 뺏어(미디어 끊김) 상시 수집에 안 맞아, **녹음 기반**으로 설계했다.
+
+- **VAD 캡처** — `AudioRecord`로 원본 PCM을 받아 **WebRTC VAD**로 사람 말이 있을 때만 구간을 모은다. 조용할 땐 소리 크기만 훑어 부하가 거의 없다. 오디오 포커스를 뺏지 않아 미디어가 안 끊긴다.
+- **전사** — 말 구간을 Groq Whisper(`/audio/transcriptions`)로 전사. 무료 키가 필요하다.
+- **오프라인이면 보관 후 전사** — AI 연결이 없으면 말 구간을 음성파일로 앱 폴더에 쌓아 두고, 연결되면 **자동(주기 워커) 또는 수동("밀린 음성 전사")**으로 그 파일만 변환한다. 키가 없어도 녹음·보관은 이어진다.
+- **화자 식별(선택)** — 내 목소리를 한 번 등록(**온디바이스 Picovoice Eagle**)하면 조각마다 `나 / 상대 / 모름` 태그가 붙는다. 소리는 기기 밖으로 안 나간다.
+- **블루투스 이어폰 마이크(선택)** — 녹음 입력을 BT 헤드셋 마이크로 돌린다.
+- **통화 녹음 가져오기** — 라이브 통화 음성은 OS가 막는다. 대신 전화앱이 저장한 통화 녹음 폴더를 지정(SAF)하면 그 파일을 전사한다(삼성 등 내장 녹음 기종).
+
+## 대화 · 요약
+
+- **대화 묶기** — 음성 조각을 시간 간격으로 묶어 "대화" 단위로 만들고, 겹치는 통화(연락처)·회의(캘린더 참석자)로 참석자를 자동 연결한다. 애매하면 **검토 큐**에 올려 직접 태그한다.
+- **요약** — 수집본을 주기적으로 요약한다. 기본은 클라우드 LLM(OpenAI 호환, 기본값 Gemini 2.0 Flash), 지원 기기는 온디바이스 **Gemini Nano**로 폴백. 모델은 앱에서 API `/models`로 받아 **드롭다운**으로 고른다(앱 업데이트 불필요).
 
 ## 내보내기 / 삭제
-- **내보내기(JSON)**: 모든 기록을 한 JSON 으로 공유 시트(그때그때 아무 앱·위치).
-- **폴더(증분 NDJSON)**: 지난 이후 새 기록만 앱 전용 외부 폴더에 append.
-  `Android/data/com.lifelog/files/exports/lifelog-<날짜>.ndjson`. USB·adb 로 PC 에서 접근.
-- **HTTP 엔드포인트**: 지정 URL 로 새 기록을 POST(Authorization: Bearer <토큰>, NDJSON).
-  지식그래프 수집 엔드포인트로 직행. 폴더와 독립된 커서.
-- 셋 다 줄마다 `type`(voice/app/screen/location/notification/comm/calendar/conversation/summary)이 붙는다.
-- **전체 삭제**: 확인 후 모든 기록 삭제(되돌릴 수 없음).
 
-## 보존 / 저장 보안
-- **보존 정리**: 기기엔 최근 **30일**만. 이미 내보냈고 30일 지난 원본은 자동 삭제(요약·대화는 유지). 장기 보관은 내보낸 KG 쪽이 맡는다.
-- **암호화**: DB 파일은 SQLCipher 로 암호화(`lifelog_enc.db`). 키는 랜덤 32바이트로,
-  Android Keystore 로 보호되는 EncryptedSharedPreferences 에 보관(기기를 벗어나지 않음).
-- 주의: 내보낸 파일·HTTP 본문·클라우드 요약 입력은 **평문**으로 밖으로 나간다. 민감하면 대상(폴더 접근·https 엔드포인트·학습 미사용 약관)을 관리한다.
+- **JSON** — 전체 기록을 공유 시트로.
+- **폴더(증분 NDJSON)** — 새 기록만 앱 전용 외부 폴더에 append. `Android/data/com.lorelog/files/exports/`. USB·adb로 PC에서 접근.
+- **HTTP 엔드포인트** — 지정 URL로 새 기록을 POST(`Authorization: Bearer <토큰>`, NDJSON). 지식그래프 수집기로 직행.
+- 모든 줄에 `type`(voice/app/screen/location/notification/comm/calendar/conversation/summary)이 붙는다.
+- **전체 삭제** — 확인 후 모든 기록 삭제(되돌릴 수 없음).
 
-## 설계 원칙
-- **폰 vs 서버 역할 분담**: 폰은 곁에 있어야 생기거나 폰이 공짜 로컬로 주는 것(음성·화면·앱·위치·알림·통화/문자·연락처·캘린더)을 잡는다.
-  클라우드에만 있고 인증이 필요한 것(이메일 등)은 **서버/KG 쪽**에서 당긴다. 캘린더는 폰 로컬 provider 가 모든 계정+로컬을 공짜로 주므로 폰이 더 완전하다.
-- **엔진 교체 가능**: 음성 STT(`SttEngine`), 요약(`Summarizer`)을 인터페이스 뒤에 둔다.
+## 저장 · 보안 · 보존
 
-## 구조
-```
-MainActivity (Compose)  — 시작/정지, 타임라인, 권한 안내, 설정(HTTP·요약 LLM), 검토 큐, 내보내기/삭제
-LoggerService (FGS)     — 상시 알림 + 수집기 묶음
- ├─ VoiceCollector / AppUsageCollector / LocationCollector / CommsCollector / CalendarCollector
-service/ ScreenContentService(접근성) · NotificationService(알림 리스너)
-data/   LogStore(SQLCipher) · LogRepository(StateFlow) · DbKey · 각 이벤트 모델
-stt/    SttEngine · AndroidSpeechEngine (음성→텍스트)
-summary/ Summarizer · GeminiNanoSummarizer · CloudSummarizer (요약)
-net/    EndpointConfig(HTTP) · HttpSink · LlmConfig(요약 LLM) · SttConfig · GroqTranscriber(음성 전사)
-work/   ExportWorker(폴더+HTTP) · SummaryWorker · PruneWorker · ConversationWorker
-```
+- **암호화** — DB는 SQLCipher로 암호화. 키는 랜덤 32바이트를 Android Keystore가 보호하는 `EncryptedSharedPreferences`에 보관(기기를 벗어나지 않음). API 키도 같은 방식으로 암호화 저장하며 커밋하지 않는다.
+- **보존** — 기기엔 최근 **30일**만. 이미 내보냈고 30일 지난 원본은 자동 삭제(요약·대화는 유지). 장기 보관은 내보낸 지식그래프 쪽이 맡는다.
+- **알림/표시** — 상시 알림은 지워도 복귀(항상 유지). 설정에서 알림 숨기기(멈춤 알림 숨김 + 기록 알림 최소화)와 백그라운드 "감시중" 플로팅 배지(오버레이)를 켤 수 있다.
+- 주의: 내보낸 파일·HTTP 본문·클라우드 전사/요약 입력은 **평문**으로 밖으로 나간다. 민감하면 대상(폴더 접근·HTTPS 엔드포인트·학습 미사용 약관)을 직접 관리한다.
+
+## 설치 & 설정
+
+1. [릴리스](https://github.com/jwgung/lifelog/releases/latest)에서 `app-release.apk`를 받아 설치한다.
+2. **Play 프로텍트 경고**: 권한이 많아 사이드로드 시 경고가 뜬다. 코드로 없앨 수 없으니, 쓰려면 Play 스토어 → Play 프로텍트 검사 끄기(또는 "검사 없이 설치"), 삼성은 Auto Blocker 끄기.
+3. 앱에서 **기록 시작** → 뜨는 권한을 허용한다(마이크만 허용해도 시작된다).
+4. 쓰려는 기능의 **키**를 설정에 넣는다: 음성 전사(Groq), 요약(Gemini), 화자 식별(Picovoice). 각 칸에 "키 발급" 링크가 있다. 키가 없으면 그 기능만 쉬고 나머지는 동작한다.
+
+**특수 권한**(사용자가 직접 켜야 함): 사용 정보 접근, 접근성(화면 내용), 알림 접근, 백그라운드 위치.
+
+> 🔒 **신형 안드로이드/삼성 주의**: 접근성(화면 내용 수집)은 보안 강화로 사이드로드 앱에 하드 차단될 수 있다. 앱 정보 → ⋮ → "제한된 설정 허용"을 거쳐야 하고, 그래도 막히면 그 기기에선 화면 수집만 포기하고 나머지로 쓴다. 접근성에 의존하지 않는 소스가 뼈대다.
 
 ## 빌드
+
 ```bash
 ./gradlew :app:assembleDebug      # 디버그 APK
+./gradlew :app:assembleRelease    # 릴리스 APK (서명 설정 필요)
 ```
+
 - 툴체인: AGP 9.4.1(내장 Kotlin), Gradle 9.8.0, compileSdk 37 / targetSdk 36 / minSdk 29, Jetpack Compose.
-- 주요 의존성: play-services-location, SQLCipher(net.zetetic), security-crypto, WorkManager, ML Kit genai-summarization.
-- `local.properties` 의 `sdk.dir` 로 Android SDK 경로 지정.
+- 주요 의존성: SQLCipher(net.zetetic), security-crypto, WorkManager, play-services-location, ML Kit genai-summarization, Picovoice Eagle, android-vad(WebRTC).
+- `local.properties`의 `sdk.dir`로 Android SDK 경로 지정. 릴리스 서명 키스토어·비밀번호는 저장소 밖에 둔다.
 
-## 권한 (전부 사용자가 직접 켬)
-- 마이크(`RECORD_AUDIO`) + 포그라운드 서비스(마이크·위치 타입), `POST_NOTIFICATIONS`
-- 사용 정보 접근(`PACKAGE_USAGE_STATS`, 특수), 접근성 서비스(특수), 알림 접근(특수)
-- 위치(`ACCESS_FINE/COARSE/BACKGROUND_LOCATION`)
-- 통화·문자·연락처(`READ_CALL_LOG`/`READ_SMS`/`READ_CONTACTS`), 캘린더(`READ_CALENDAR`)
-- `INTERNET`(HTTP 내보내기·클라우드 요약), 앱 이름 해석용 `QUERY_ALL_PACKAGES`
+## 구조
 
-## 현재 상태 / 검증
-실기기 SM-P200(Android 11)에서 확인:
-- 음성·앱·화면·알림 수집, 통합 타임라인, 상시 알림, 내보내기(JSON·폴더 NDJSON·HTTP), 보존 정리, 암호화 DB, 클라우드 요약(모의 서버).
-- 알림: 지워도 복귀(상시 유지), '알림 숨기기'(멈춤 알림 숨김+기록 알림 최소화), 백그라운드 '감시중' 플로팅 배지(오버레이).
-- 통화 녹음 가져오기(라이브 통화는 OS가 막음 → 전화앱이 저장한 녹음을 폴더 지정해 전사), 블루투스 이어폰 마이크로 녹음, 모델은 /models 드롭다운 선택.
-- 화자 식별: 내 목소리 등록(온디바이스 Picovoice Eagle) 후 녹음 조각마다 나/상대/모름 태그.
-- 대화 묶기·검토 큐·수동 태그, 캘린더 일정(참석자 포함).
-- **미검증(기기 한계)**: 위치 실측(Wi-Fi 전용 모델이라 측위 없음), 통화·문자 실제 캡처(통신 없음),
-  온디바이스 Gemini Nano(미지원 기기). 코드·등록·저장 경로는 다른 수집기와 동일 패턴으로 확인.
+```
+MainActivity (Compose)   시작/정지 · 타임라인 · 권한 안내 · 설정 · 검토 큐 · 내보내기/삭제
+LoggerService (FGS)      상시 알림 + 수집기 묶음 (권한 있는 타입만 포그라운드 시작)
+collect/
+  RecordingVoiceCollector  AudioRecord + WebRTC VAD -> WAV -> 전사
+  PendingVoice             오프라인 음성 보관 + 밀린 전사
+  AppUsage / Location / Comms / Calendar Collector
+  CallRecordingImporter    통화 녹음 폴더(SAF) 전사
+  SensitiveApps · CollectorPrefs · AudioPrefs
+speaker/  SpeakerId(Picovoice Eagle) · PcmDecoder
+service/  ScreenContentService(접근성) · NotificationService(알림 리스너)
+data/     LogStore(SQLCipher) · LogRepository(StateFlow) · DbKey · 이벤트 모델
+net/      SttConfig · GroqTranscriber · LlmConfig · ModelCatalog · EndpointConfig · HttpSink
+summary/  Summarizer · CloudSummarizer · GeminiNanoSummarizer
+work/     Export · Summary · Prune · Conversation · PendingVoice · CallRecording Worker
+OverlayBadge · NotifPrefs · NotifReviveReceiver · BootReceiver
+```
 
-## 남은 후속 과제
-- 화자 식별(내 목소리 vs 상대): 원본 오디오 엔진(Vosk/Picovoice + 음성 임베딩)으로 교체해야 가능.
+**설계 메모** — 폰은 곁에 있어야 생기거나 폰이 공짜 로컬로 주는 것을 잡고(위 소스들), 클라우드에만 있고 인증이 필요한 것(이메일 등)은 서버/지식그래프 쪽에서 당긴다. 음성 STT·요약·화자 식별은 모두 인터페이스 뒤에 두어 엔진을 바꿔 낄 수 있다.
+
+## 법적 주의
+
+한국은 **본인이 참여한 대화** 녹음은 합법이지만, 끼지 않은 남들끼리의 대화 녹음은 불법이다. 통화·대화 녹음의 합법 요건은 나라마다 다르다(일부는 당사자 전원 동의 필요). 기록은 개인용으로만 쓰고, 다른 사람의 데이터를 공개·배포하지 않는다.
+
+## 로드맵
+
+- 신형 기기용 화면 수집 대안(MediaProjection + 온디바이스 OCR) — 접근성 차단 우회.
 - 통화·회의 자동 연결의 실기기 검증, 배터리 영향 측정·튜닝.
-- 생활 소스 추가 후보: 헬스(걸음·수면), 사진·미디어 메타. 이메일은 폰이 아니라 **서버/KG** 쪽에서 당기는 게 맞다.
+- 생활 소스 후보: 헬스(걸음·수면), 사진·미디어 메타. 이메일은 폰이 아니라 서버/KG 쪽에서 당기는 게 맞다.
+
+## 면책
+
+개인 학습·실험용 프로젝트다. 무보증 제공. 수집·녹음에 관한 현지 법률 준수 책임은 사용자에게 있다.
