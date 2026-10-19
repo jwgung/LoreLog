@@ -4,7 +4,7 @@
 
 **A personal lifelog app that gathers your day as text on your own Android, as raw material for a personal knowledge graph about you.**
 
-Personal use · Encrypted local storage · Cloud transcription & summaries (your keys)
+Personal use · Encrypted local storage · Cloud or on-device transcription · cloud summaries (your keys)
 
 [**Download APK**](https://github.com/jwgung/lifelog/releases/latest) · [Releases](https://github.com/jwgung/lifelog/releases)
 
@@ -23,7 +23,7 @@ Your phone is a sensor that's always with you. LoreLog collects what happens on 
 - **Your device, your data only.** Not third-party surveillance or covert collection.
 - **Visible.** All collection is surfaced through standard OS permission prompts and a **persistent notification**. Nothing is hidden. It collects only while recording.
 - **Stored locally, encrypted.** Records live on-device in a SQLCipher-encrypted DB; API keys sit in a Keystore-backed store. This app stores nothing in the cloud.
-- **But processing is cloud by default — this is not a local-only app.** Voice transcription (Groq) and summaries (Gemini) run in the cloud with your own keys, so speech audio and text leave the device for that. Exposure is kept minimal (VAD sends only speech, speaker ID stays on-device, summaries can run on-device via Gemini Nano where supported) and you control every endpoint and key. Only text is stored; audio is discarded after transcription (kept offline only until it can be sent).
+- **Processing is cloud by default, but transcription can be fully on-device.** Out of the box, voice transcription and summaries run in the cloud with your own keys, so speech audio and text leave the device. You can switch transcription to **on-device whisper.cpp** (download a model once; then nothing leaves the device), and summaries fall back to on-device **Gemini Nano** where supported. Exposure is kept minimal (VAD sends only speech, speaker ID stays on-device) and you control every endpoint and key. Only text is stored; audio is discarded after transcription (kept offline only until it can be processed).
 
 ## What it collects
 
@@ -31,7 +31,7 @@ Everything runs in one foreground service, and you toggle each source in setting
 
 | Source | How | Notes |
 |---|---|---|
-| **Voice** | Record → Groq Whisper transcription | WebRTC VAD captures **only when someone speaks**. Keeps running with the screen off. Text only |
+| **Voice** | Record → transcription (Gemini / Groq / on-device whisper) | WebRTC VAD captures **only when someone speaks**. Keeps running with the screen off. Text only |
 | **App usage** | UsageStatsManager | Which app, when |
 | **On-screen content** | AccessibilityService | Text you see inside apps. **Sensitive apps (banking, payments) excluded** |
 | **Location** | FusedLocationProvider | Every 5 min, low power, batched |
@@ -44,8 +44,13 @@ Everything runs in one foreground service, and you toggle each source in setting
 The core of LoreLog, and the trickiest part. Google's live recognizer keeps grabbing audio focus (interrupting your media), which is wrong for always-on capture, so voice is **recording-based**.
 
 - **VAD capture** — `AudioRecord` reads raw PCM and **WebRTC VAD** keeps only the segments where a human is speaking. When it's quiet, it just watches the sound level, so the load is near zero. It never grabs audio focus, so your media keeps playing.
-- **Transcription** — speech segments go to Groq Whisper (`/audio/transcriptions`). A free key is required.
-- **Offline: keep, then transcribe** — with no AI connection, speech segments are kept as voice files in an app folder, and once connected they are transcribed **automatically (a periodic worker) or manually ("Transcribe pending voice")**. Recording and keeping continue even without a key.
+- **Transcription — you choose the engine** (settings → "Voice transcription"):
+  - **Cloud · Gemini** — reuses the Gemini key you already set for summaries. Free tier. (audio goes to Google)
+  - **Cloud · Groq (Whisper)** — a dedicated STT model, most accurate verbatim (`/audio/transcriptions`, free key).
+  - **On-device · whisper.cpp** — runs inside the phone, nothing leaves the device. Pick accuracy by model: tiny (~75MB) / base (~142MB, recommended) / small (~466MB); the model downloads once. arm64 devices only.
+
+  Cloud is the most accurate; on-device trades some accuracy for full privacy and no key.
+- **Offline: keep, then transcribe** — when the chosen engine isn't ready (no key, or the on-device model isn't downloaded), speech segments are kept as voice files in an app folder, and once it's ready they are transcribed **automatically (a periodic worker) or manually ("Transcribe pending voice")**. Recording and keeping continue regardless.
 - **Speaker ID (optional)** — enroll your own voice once (**on-device Picovoice Eagle**) and each segment is tagged `me / other / unknown`. Audio never leaves the device.
 - **Bluetooth earbud mic (optional)** — route recording input to a BT headset mic.
 - **Import call recordings** — the OS blocks live call audio. Instead, point LoreLog at the folder where your dialer saves call recordings (via SAF) and it transcribes those files (devices with a built-in recorder, e.g. Samsung).
@@ -53,14 +58,14 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 ## Conversations · Summaries
 
 - **Conversation grouping** — voice segments are grouped by time gaps into "conversations," and attendees are auto-linked from overlapping calls (contacts) and meetings (calendar attendees). Ambiguous ones go to a **review queue** to tag by hand.
-- **Summaries** — the collection is summarized periodically. Default is a cloud LLM (OpenAI-compatible, default Gemini 2.0 Flash), falling back to on-device **Gemini Nano** on supported devices. Models are fetched from the API's `/models` and chosen from a **dropdown** (no app update needed).
+- **Summaries (optional, off by default)** — summarizing on the phone is optional, because the knowledge graph is better fed a faithful export and left to summarize there (and to re-summarize as its schema evolves). Turn it on and the collection is summarized periodically for in-app reading, and summaries are included in exports. Engine is a cloud LLM (OpenAI-compatible, default Gemini 2.0 Flash), falling back to on-device **Gemini Nano** on supported devices; models come from the API's `/models` via a **dropdown**.
 
 ## Export / Delete
 
 - **JSON** — the whole log via the share sheet.
 - **Folder (incremental NDJSON)** — only new records appended to an app-private external folder. `Android/data/com.lorelog/files/exports/`. Reachable from a PC over USB/adb.
 - **HTTP endpoint** — POST new records to a URL you set (`Authorization: Bearer <token>`, NDJSON). Straight into a knowledge-graph ingest.
-- Every line carries a `type` (voice/app/screen/location/notification/comm/calendar/conversation/summary).
+- Every line carries a `type` (voice/app/screen/location/notification/comm/calendar/conversation/summary); `summary` lines are included only when summaries are enabled.
 - **Delete all** — wipes every record after confirmation (irreversible).
 
 ## Storage · Security · Retention
@@ -75,7 +80,7 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 1. Download `app-release.apk` from [Releases](https://github.com/jwgung/lifelog/releases/latest) and install it.
 2. **Play Protect warning**: with this many permissions, sideloading triggers a warning. It can't be removed in code; to use the app, turn off Play Protect scanning in the Play Store (or "install without scanning"), and on Samsung turn off Auto Blocker.
 3. In the app, tap **Start** and grant the prompted permissions (it starts with just the mic granted).
-4. Paste the **keys** for the features you want into settings: voice transcription (Groq), summaries (Gemini), speaker ID (Picovoice). Each field has a "get key" link. Without a key, only that feature sits idle; everything else works.
+4. Paste the **keys** for the features you want into settings: voice transcription (Gemini/Groq — or pick on-device whisper and download a model instead of a key), summaries (Gemini), speaker ID (Picovoice). Each field has a "get key" link. Without a key (or a downloaded model), only that feature sits idle; everything else works.
 
 **Special permissions** (you enable these yourself): usage access, accessibility (on-screen content), notification access, background location.
 
@@ -89,7 +94,7 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 ```
 
 - Toolchain: AGP 9.4.1 (built-in Kotlin), Gradle 9.8.0, compileSdk 37 / targetSdk 36 / minSdk 29, Jetpack Compose.
-- Key dependencies: SQLCipher (net.zetetic), security-crypto, WorkManager, play-services-location, ML Kit genai-summarization, Picovoice Eagle, android-vad (WebRTC).
+- Key dependencies: SQLCipher (net.zetetic), security-crypto, WorkManager, play-services-location, ML Kit genai-summarization, Picovoice Eagle, android-vad (WebRTC), whisper-android (dev.ffmpegkit-maintained, no NDK).
 - Set the Android SDK path via `sdk.dir` in `local.properties`. Keep the release signing keystore and passwords outside the repo.
 
 ## Structure
@@ -106,8 +111,9 @@ collect/
 speaker/  SpeakerId (Picovoice Eagle) · PcmDecoder
 service/  ScreenContentService (accessibility) · NotificationService (notification listener)
 data/     LogStore (SQLCipher) · LogRepository (StateFlow) · DbKey · event models
-net/      SttConfig · GroqTranscriber · LlmConfig · ModelCatalog · EndpointConfig · HttpSink
-summary/  Summarizer · CloudSummarizer · GeminiNanoSummarizer
+net/      SttConfig · GroqTranscriber · GeminiTranscriber · LlmConfig · ModelCatalog · TranscribeConfig · WhisperModels · EndpointConfig · HttpSink
+  stt/      WhisperEngine (whisper.cpp) · ModelDownloader
+  summary/  Summarizer · CloudSummarizer · GeminiNanoSummarizer
 work/     Export · Summary · Prune · Conversation · PendingVoice · CallRecording Worker
 OverlayBadge · NotifPrefs · NotifReviveReceiver · BootReceiver
 ```

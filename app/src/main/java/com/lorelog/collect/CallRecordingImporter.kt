@@ -5,8 +5,6 @@ import android.content.Intent
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import com.lorelog.data.LogRepository
-import com.lorelog.net.GroqTranscriber
-import com.lorelog.net.SttConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -50,8 +48,8 @@ object CallRecordingImporter {
             LogRepository.setStatus("통화 녹음 폴더를 먼저 지정하세요")
             return@withContext 0
         }
-        if (!SttConfig.isConfigured(context)) {
-            LogRepository.setStatus("통화 녹음 전사엔 STT 키가 필요합니다")
+        if (!PendingVoice.isReady(context)) {
+            LogRepository.setStatus("통화 녹음 전사엔 전사 엔진 준비가 필요합니다")
             return@withContext 0
         }
         val dir = DocumentFile.fromTreeUri(context, tree) ?: return@withContext 0
@@ -73,7 +71,7 @@ object CallRecordingImporter {
             } catch (_: Exception) { false }
 
             if (ok && tmp.length() > 0) {
-                val text = GroqTranscriber.transcribe(context, tmp)
+                val text = PendingVoice.transcribeViaEngine(context, tmp)
                 if (text != null) {
                     LogRepository.addVoice(text, speaker = "통화 · ${party(name)}")
                     count++

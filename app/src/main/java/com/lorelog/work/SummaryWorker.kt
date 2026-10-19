@@ -7,6 +7,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkerParameters
 import androidx.work.WorkManager
 import com.lorelog.data.LogRepository
+import com.lorelog.summary.SummaryPrefs
 import java.util.concurrent.TimeUnit
 
 /**
@@ -15,7 +16,9 @@ import java.util.concurrent.TimeUnit
  */
 class SummaryWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = try {
-        LogRepository.summarizeRecent(applicationContext, TimeUnit.HOURS.toMillis(24))
+        if (SummaryPrefs.enabled(applicationContext)) {
+            LogRepository.summarizeRecent(applicationContext, TimeUnit.HOURS.toMillis(24))
+        }
         Result.success()
     } catch (e: Exception) {
         Result.retry()

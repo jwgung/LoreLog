@@ -6,6 +6,7 @@ import com.lorelog.net.HttpSink
 import com.lorelog.net.LlmConfig
 import com.lorelog.summary.CloudSummarizer
 import com.lorelog.summary.GeminiNanoSummarizer
+import com.lorelog.summary.SummaryPrefs
 import com.lorelog.summary.Summarizer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -150,7 +151,7 @@ object LogRepository {
 
     /** 모든 기록을 JSON 파일로 내보내 반환한다(공유용, 캐시 폴더). */
     suspend fun exportToFile(context: Context): File = withContext(Dispatchers.IO) {
-        val json = store.exportJson(System.currentTimeMillis())
+        val json = store.exportJson(System.currentTimeMillis(), includeSummary = SummaryPrefs.enabled(context))
         val dir = File(context.cacheDir, "exports").apply { mkdirs() }
         val file = File(dir, "lifelog_${System.currentTimeMillis()}.json")
         file.writeText(json)
@@ -164,7 +165,7 @@ object LogRepository {
     suspend fun exportIncremental(context: Context): Int = withContext(Dispatchers.IO) {
         val prefs = context.getSharedPreferences("export_state", Context.MODE_PRIVATE)
         val lastIds = store.tables().associateWith { prefs.getLong("last_$it", 0L) }
-        val result = store.newRows(lastIds)
+        val result = store.newRows(lastIds, includeSummary = SummaryPrefs.enabled(context))
         if (result.lines.isEmpty()) return@withContext 0
         val dir = File(context.getExternalFilesDir(null), "exports").apply { mkdirs() }
         val date = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
@@ -183,6 +184,7 @@ object LogRepository {
         context: Context,
         periodMs: Long,
     ): Summarizer.SummaryResult = withContext(Dispatchers.IO) {
+        if (!SummaryPrefs.enabled(context)) return@withContext Summarizer.SummaryResult.Unavailable("요약이 꺼져 있습니다(설정에서 켜기)")
         val until = System.currentTimeMillis()
         val since = until - periodMs
         val digest = store.digest(since, until, DIGEST_MAX_CHARS)
@@ -226,7 +228,7 @@ object LogRepository {
         val url = EndpointConfig.url(context) ?: return@withContext -1
         val prefs = context.getSharedPreferences("http_state", Context.MODE_PRIVATE)
         val lastIds = store.tables().associateWith { prefs.getLong("last_$it", 0L) }
-        val result = store.newRows(lastIds)
+        val result = store.newRows(lastIds, includeSummary = SummaryPrefs.enabled(context))
         if (result.lines.isEmpty()) return@withContext 0
         val body = result.lines.joinToString("\n", postfix = "\n")
         val ok = HttpSink.post(url, EndpointConfig.token(context), body)

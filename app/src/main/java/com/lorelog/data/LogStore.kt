@@ -158,7 +158,7 @@ class LogStore(context: Context, password: ByteArray) {
     }
 
     /** 모든 기록을 JSON 문자열로. 지식그래프 등 외부로 내보낼 때 쓴다. */
-    fun exportJson(exportedAtMs: Long): String {
+    fun exportJson(exportedAtMs: Long, includeSummary: Boolean = true): String {
         val root = JSONObject()
         root.put("exportedAt", exportedAtMs)
         root.put("voice", dump(TABLE_VOICE, arrayOf("id", "ts", "text", "speaker")))
@@ -166,7 +166,7 @@ class LogStore(context: Context, password: ByteArray) {
         root.put("screen", dump(TABLE_SCREEN, arrayOf("id", "ts", "pkg", "label", "text")))
         root.put("locations", dump(TABLE_LOCATION, arrayOf("id", "ts", "lat", "lon", "accuracy")))
         root.put("notifications", dump(TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text")))
-        root.put("summaries", dump(TABLE_SUMMARY, arrayOf("id", "ts", "period_start", "period_end", "text")))
+        if (includeSummary) root.put("summaries", dump(TABLE_SUMMARY, arrayOf("id", "ts", "period_start", "period_end", "text")))
         root.put("comms", dump(TABLE_COMM, arrayOf("id", "ts", "kind", "direction", "party", "party_name", "content")))
         root.put("calendar", dump(TABLE_CAL, arrayOf("id", "ts", "title", "location", "end_ms", "attendees")))
         root.put("conversations", dump(TABLE_CONV, arrayOf("id", "start_ms", "end_ms", "participants", "source", "status", "context")))
@@ -340,7 +340,7 @@ class LogStore(context: Context, password: ByteArray) {
     /** 증분 내보내기용 새 행(각 테이블에서 id > 마지막 내보낸 id). 줄마다 type 이 붙은 NDJSON. */
     data class NewRows(val lines: List<String>, val newLastIds: Map<String, Long>)
 
-    fun newRows(lastIds: Map<String, Long>): NewRows {
+    fun newRows(lastIds: Map<String, Long>, includeSummary: Boolean = true): NewRows {
         val lines = ArrayList<String>()
         val newIds = HashMap(lastIds)
         fun emit(type: String, table: String, cols: Array<String>) {
@@ -361,7 +361,7 @@ class LogStore(context: Context, password: ByteArray) {
         emit("screen", TABLE_SCREEN, arrayOf("id", "ts", "pkg", "label", "text"))
         emit("location", TABLE_LOCATION, arrayOf("id", "ts", "lat", "lon", "accuracy"))
         emit("notification", TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text"))
-        emit("summary", TABLE_SUMMARY, arrayOf("id", "ts", "period_start", "period_end", "text"))
+        if (includeSummary) emit("summary", TABLE_SUMMARY, arrayOf("id", "ts", "period_start", "period_end", "text"))
         emit("comm", TABLE_COMM, arrayOf("id", "ts", "kind", "direction", "party", "party_name", "content"))
         emit("calendar", TABLE_CAL, arrayOf("id", "ts", "title", "location", "end_ms", "attendees"))
         emit("conversation", TABLE_CONV, arrayOf("id", "start_ms", "end_ms", "participants", "source", "status", "context"))

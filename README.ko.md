@@ -4,7 +4,7 @@
 
 **내 안드로이드에서 내 하루를 텍스트로 모아, 나에 관한 개인 지식그래프의 재료로 내보내는 라이프로그 앱.**
 
-개인용 · 로컬 암호화 저장 · 클라우드 전사·요약(본인 키)
+개인용 · 로컬 암호화 저장 · 클라우드 또는 온디바이스 전사 · 클라우드 요약(본인 키)
 
 [**APK 다운로드**](https://github.com/jwgung/lifelog/releases/latest) · [릴리스](https://github.com/jwgung/lifelog/releases)
 
@@ -23,7 +23,7 @@
 - **본인 기기, 본인 데이터만.** 제3자 감시·은닉 수집이 아니다.
 - **드러낸다.** 모든 수집은 OS 표준 권한 동의와 **상시 알림**으로 보인다. 숨기지 않는다. 기록 중일 때만 수집한다.
 - **로컬 암호화 저장.** 기록은 기기 안 SQLCipher 암호화 DB에, API 키는 Keystore 기반 저장소에 둔다. 이 앱이 클라우드에 저장하는 것은 없다.
-- **단, 처리(전사·요약)는 기본이 클라우드다 — 완전 로컬 앱이 아니다.** 음성 전사(Groq)와 요약(Gemini)은 본인 키로 클라우드에서 돈다. 즉 말소리와 텍스트가 그 처리를 위해 **기기 밖으로 나간다.** 노출은 최소화한다(VAD로 말할 때만 전송, 화자 식별은 온디바이스, 요약은 지원 기기면 온디바이스 Gemini Nano). 엔드포인트·키는 전부 사용자가 통제한다. 저장은 텍스트만, 오디오는 전사 후 삭제(오프라인일 때만 보낼 수 있을 때까지 보관).
+- **처리는 기본이 클라우드지만, 전사는 완전 온디바이스로 돌릴 수 있다.** 기본값은 음성 전사·요약이 본인 키로 클라우드에서 돌아 말소리·텍스트가 기기 밖으로 나간다. 전사는 **온디바이스 whisper.cpp**로 바꿀 수 있고(모델을 한 번 받으면 그 뒤론 아무것도 밖으로 안 나감), 요약은 지원 기기면 온디바이스 **Gemini Nano**로 폴백한다. 노출은 최소화하고(VAD로 말할 때만 전송, 화자 식별은 온디바이스), 엔드포인트·키는 전부 사용자가 통제한다. 저장은 텍스트만, 오디오는 전사 후 삭제(오프라인일 때만 처리할 수 있을 때까지 보관).
 
 ## 수집하는 것
 
@@ -31,7 +31,7 @@
 
 | 종류 | 출처 | 비고 |
 |---|---|---|
-| **음성** | 녹음 → Groq Whisper 전사 | WebRTC VAD로 **말할 때만** 캡처. 화면 꺼져도 유지. 텍스트만 저장 |
+| **음성** | 녹음 → 전사(Gemini / Groq / 온디바이스 whisper) | WebRTC VAD로 **말할 때만** 캡처. 화면 꺼져도 유지. 텍스트만 저장 |
 | **앱 사용** | UsageStatsManager | 어떤 앱을 언제 썼나 |
 | **화면 내용** | AccessibilityService | 앱 안에서 본 텍스트. 은행·결제 등 **민감 앱 제외** |
 | **위치** | FusedLocationProvider | 5분 간격·저전력·배치 |
@@ -44,8 +44,13 @@
 LoreLog의 핵심이자 가장 까다로운 부분. 구글 실시간 인식기는 오디오 포커스를 계속 뺏어(미디어 끊김) 상시 수집에 안 맞아, **녹음 기반**으로 설계했다.
 
 - **VAD 캡처** — `AudioRecord`로 원본 PCM을 받아 **WebRTC VAD**로 사람 말이 있을 때만 구간을 모은다. 조용할 땐 소리 크기만 훑어 부하가 거의 없다. 오디오 포커스를 뺏지 않아 미디어가 안 끊긴다.
-- **전사** — 말 구간을 Groq Whisper(`/audio/transcriptions`)로 전사. 무료 키가 필요하다.
-- **오프라인이면 보관 후 전사** — AI 연결이 없으면 말 구간을 음성파일로 앱 폴더에 쌓아 두고, 연결되면 **자동(주기 워커) 또는 수동("밀린 음성 전사")**으로 그 파일만 변환한다. 키가 없어도 녹음·보관은 이어진다.
+- **전사 — 엔진을 고른다**(설정 → "음성 전사 방식"):
+  - **클라우드 · Gemini** — 요약용으로 이미 넣은 Gemini 키를 재사용. 무료 티어. (소리가 구글로 감)
+  - **클라우드 · Groq (Whisper)** — STT 전용 모델이라 축자 전사가 가장 정확(`/audio/transcriptions`, 무료 키).
+  - **온디바이스 · whisper.cpp** — 폰 안에서 전사, 아무것도 밖으로 안 나감. 정확도를 모델로 선택: tiny(~75MB) / base(~142MB, 추천) / small(~466MB), 모델은 1회 다운로드. arm64 기기만.
+
+  클라우드가 가장 정확하고, 온디바이스는 정확도를 조금 내주는 대신 완전한 프라이버시와 키 불필요를 얻는다.
+- **준비 안 됐으면 보관 후 전사** — 고른 엔진이 준비 안 됐으면(키 없음, 또는 온디바이스 모델 미다운로드) 말 구간을 음성파일로 앱 폴더에 쌓아 두고, 준비되면 **자동(주기 워커) 또는 수동("밀린 음성 전사")**으로 그 파일만 변환한다. 녹음·보관은 상관없이 이어진다.
 - **화자 식별(선택)** — 내 목소리를 한 번 등록(**온디바이스 Picovoice Eagle**)하면 조각마다 `나 / 상대 / 모름` 태그가 붙는다. 소리는 기기 밖으로 안 나간다.
 - **블루투스 이어폰 마이크(선택)** — 녹음 입력을 BT 헤드셋 마이크로 돌린다.
 - **통화 녹음 가져오기** — 라이브 통화 음성은 OS가 막는다. 대신 전화앱이 저장한 통화 녹음 폴더를 지정(SAF)하면 그 파일을 전사한다(삼성 등 내장 녹음 기종).
@@ -53,14 +58,14 @@ LoreLog의 핵심이자 가장 까다로운 부분. 구글 실시간 인식기�
 ## 대화 · 요약
 
 - **대화 묶기** — 음성 조각을 시간 간격으로 묶어 "대화" 단위로 만들고, 겹치는 통화(연락처)·회의(캘린더 참석자)로 참석자를 자동 연결한다. 애매하면 **검토 큐**에 올려 직접 태그한다.
-- **요약** — 수집본을 주기적으로 요약한다. 기본은 클라우드 LLM(OpenAI 호환, 기본값 Gemini 2.0 Flash), 지원 기기는 온디바이스 **Gemini Nano**로 폴백. 모델은 앱에서 API `/models`로 받아 **드롭다운**으로 고른다(앱 업데이트 불필요).
+- **요약(선택, 기본 꺼짐)** — 폰에서의 요약은 선택이다. 지식그래프엔 원본을 충실히 넘기고 요약은 KG 쪽에서(스키마가 바뀌면 다시 요약) 하는 게 낫기 때문. 켜면 앱에서 읽을 요약을 주기적으로 쌓고 내보내기에도 요약을 포함한다. 엔진은 클라우드 LLM(OpenAI 호환, 기본 Gemini 2.0 Flash), 지원 기기는 온디바이스 **Gemini Nano** 폴백. 모델은 API `/models`를 **드롭다운**으로.
 
 ## 내보내기 / 삭제
 
 - **JSON** — 전체 기록을 공유 시트로.
 - **폴더(증분 NDJSON)** — 새 기록만 앱 전용 외부 폴더에 append. `Android/data/com.lorelog/files/exports/`. USB·adb로 PC에서 접근.
 - **HTTP 엔드포인트** — 지정 URL로 새 기록을 POST(`Authorization: Bearer <토큰>`, NDJSON). 지식그래프 수집기로 직행.
-- 모든 줄에 `type`(voice/app/screen/location/notification/comm/calendar/conversation/summary)이 붙는다.
+- 모든 줄에 `type`(voice/app/screen/location/notification/comm/calendar/conversation/summary)이 붙는다. `summary` 줄은 요약을 켰을 때만 포함된다.
 - **전체 삭제** — 확인 후 모든 기록 삭제(되돌릴 수 없음).
 
 ## 저장 · 보안 · 보존
@@ -75,7 +80,7 @@ LoreLog의 핵심이자 가장 까다로운 부분. 구글 실시간 인식기�
 1. [릴리스](https://github.com/jwgung/lifelog/releases/latest)에서 `app-release.apk`를 받아 설치한다.
 2. **Play 프로텍트 경고**: 권한이 많아 사이드로드 시 경고가 뜬다. 코드로 없앨 수 없으니, 쓰려면 Play 스토어 → Play 프로텍트 검사 끄기(또는 "검사 없이 설치"), 삼성은 Auto Blocker 끄기.
 3. 앱에서 **기록 시작** → 뜨는 권한을 허용한다(마이크만 허용해도 시작된다).
-4. 쓰려는 기능의 **키**를 설정에 넣는다: 음성 전사(Groq), 요약(Gemini), 화자 식별(Picovoice). 각 칸에 "키 발급" 링크가 있다. 키가 없으면 그 기능만 쉬고 나머지는 동작한다.
+4. 쓰려는 기능의 **키**를 설정에 넣는다: 음성 전사(Gemini/Groq — 또는 온디바이스 whisper를 골라 키 대신 모델 다운로드), 요약(Gemini), 화자 식별(Picovoice). 각 칸에 "키 발급" 링크가 있다. 키(또는 받은 모델)가 없으면 그 기능만 쉬고 나머지는 동작한다.
 
 **특수 권한**(사용자가 직접 켜야 함): 사용 정보 접근, 접근성(화면 내용), 알림 접근, 백그라운드 위치.
 
@@ -89,7 +94,7 @@ LoreLog의 핵심이자 가장 까다로운 부분. 구글 실시간 인식기�
 ```
 
 - 툴체인: AGP 9.4.1(내장 Kotlin), Gradle 9.8.0, compileSdk 37 / targetSdk 36 / minSdk 29, Jetpack Compose.
-- 주요 의존성: SQLCipher(net.zetetic), security-crypto, WorkManager, play-services-location, ML Kit genai-summarization, Picovoice Eagle, android-vad(WebRTC).
+- 주요 의존성: SQLCipher(net.zetetic), security-crypto, WorkManager, play-services-location, ML Kit genai-summarization, Picovoice Eagle, android-vad(WebRTC), whisper-android(dev.ffmpegkit-maintained, NDK 불필요).
 - `local.properties`의 `sdk.dir`로 Android SDK 경로 지정. 릴리스 서명 키스토어·비밀번호는 저장소 밖에 둔다.
 
 ## 구조
@@ -106,7 +111,8 @@ collect/
 speaker/  SpeakerId(Picovoice Eagle) · PcmDecoder
 service/  ScreenContentService(접근성) · NotificationService(알림 리스너)
 data/     LogStore(SQLCipher) · LogRepository(StateFlow) · DbKey · 이벤트 모델
-net/      SttConfig · GroqTranscriber · LlmConfig · ModelCatalog · EndpointConfig · HttpSink
+net/      SttConfig · GroqTranscriber · GeminiTranscriber · LlmConfig · ModelCatalog · TranscribeConfig · WhisperModels · EndpointConfig · HttpSink
+stt/      WhisperEngine(whisper.cpp) · ModelDownloader
 summary/  Summarizer · CloudSummarizer · GeminiNanoSummarizer
 work/     Export · Summary · Prune · Conversation · PendingVoice · CallRecording Worker
 OverlayBadge · NotifPrefs · NotifReviveReceiver · BootReceiver

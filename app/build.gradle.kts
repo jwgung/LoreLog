@@ -66,6 +66,7 @@ dependencies {
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("ai.picovoice:eagle-android:3.0.2")
     implementation("com.github.gkonovalov.android-vad:webrtc:2.0.10")
+    implementation("dev.ffmpegkit-maintained:whisper-android:1.0.0")
     implementation("com.google.mlkit:genai-summarization:1.0.0-beta1")
     implementation("androidx.concurrent:concurrent-futures-ktx:1.2.0")
 

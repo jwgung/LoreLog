@@ -32,6 +32,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -69,9 +70,13 @@ import com.lorelog.data.TimelineItem
 import com.lorelog.net.EndpointConfig
 import com.lorelog.net.LlmConfig
 import com.lorelog.net.SttConfig
+import com.lorelog.net.TranscribeConfig
+import com.lorelog.net.WhisperModels
+import com.lorelog.stt.ModelDownloader
 import com.lorelog.speaker.SpeakerId
 import com.lorelog.net.ModelCatalog
 import com.lorelog.summary.Summarizer
+import com.lorelog.summary.SummaryPrefs
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -155,7 +160,11 @@ private fun HomeScreen() {
     var sttUrl by remember { mutableStateOf(SttConfig.baseUrl(context)) }
     var sttModel by remember { mutableStateOf(SttConfig.model(context)) }
     var sttKey by remember { mutableStateOf(SttConfig.apiKey(context) ?: "") }
+    var txEngine by remember { mutableStateOf(TranscribeConfig.engine(context)) }
+    var whisperId by remember { mutableStateOf(TranscribeConfig.modelId(context)) }
+    val dlState by ModelDownloader.state.collectAsStateWithLifecycle()
     var btMic by remember { mutableStateOf(AudioPrefs.btMic(context)) }
+    var summaryOn by remember { mutableStateOf(SummaryPrefs.enabled(context)) }
     var eagleKey by remember { mutableStateOf(SpeakerId.accessKey(context) ?: "") }
     var enrolled by remember { mutableStateOf(SpeakerId.isEnrolled(context)) }
     var callFolder by remember { mutableStateOf(CallRecordingImporter.folder(context)?.toString()) }
@@ -481,6 +490,27 @@ private fun HomeScreen() {
             }) { Text("지금 전송") }
         }
 
+        Text("요약", style = MaterialTheme.typography.labelLarge)
+        Text(
+            "요약은 선택입니다. 끄면 원본만 모으고 내보냅니다(권장 — 요약은 지식그래프 쪽에서). " +
+                "켜면 앱에서 읽을 요약을 주기적으로 쌓고, 내보내기에도 요약을 포함합니다.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("요약 사용", style = MaterialTheme.typography.bodyMedium)
+            Switch(
+                checked = summaryOn,
+                onCheckedChange = {
+                    summaryOn = it
+                    SummaryPrefs.setEnabled(context, it)
+                },
+            )
+        }
+
         Text("요약 LLM (클라우드, 무료 티어 키)", style = MaterialTheme.typography.labelLarge)
         OutlinedTextField(
             value = llmUrl,
@@ -519,9 +549,10 @@ private fun HomeScreen() {
             )
         }) { Text("Gemini 키 발급 (무료)") }
 
-        Text("음성 전사 (Groq)", style = MaterialTheme.typography.labelLarge)
+        Text("음성 전사 방식", style = MaterialTheme.typography.labelLarge)
         Text(
-            "음성은 녹음→Groq 전사로만 수집합니다(VAD로 말할 때만, 화면 꺼져도 유지). 키가 없으면 음성은 쉽니다.",
+            "녹음은 VAD로 말할 때만, 화면 꺼져도 유지됩니다. 전사 방식을 고르세요. " +
+                "준비가 안 됐으면 말소리는 음성파일(voice_pending)로 쌓였다가 준비되면 자동 전사됩니다.",
             style = MaterialTheme.typography.bodySmall,
         )
         Row(
@@ -539,41 +570,127 @@ private fun HomeScreen() {
                 },
             )
         }
-        OutlinedTextField(value = sttUrl, onValueChange = { sttUrl = it }, label = { Text("베이스 URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        ModelPicker(
-            label = "모델",
-            baseUrl = sttUrl,
-            apiKey = sttKey,
-            value = sttModel,
-            onValue = { sttModel = it },
-            filter = { it.contains("whisper", true) },
-        )
-        OutlinedTextField(value = sttKey, onValueChange = { sttKey = it }, label = { Text("Groq API 키") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-        OutlinedButton(onClick = {
-            SttConfig.set(context, sttUrl, sttModel, sttKey)
-            LogRepository.setStatus("음성 전사 저장됨")
+        EngineOption(
+            selected = txEngine == TranscribeConfig.Engine.GEMINI,
+            title = "클라우드 · Gemini",
+            desc = "요약용 Gemini 키 재사용. 무료. 소리가 구글로 감.",
+        ) {
+            txEngine = TranscribeConfig.Engine.GEMINI
+            TranscribeConfig.setEngine(context, txEngine)
             LoggerService.reapply(context)
-        }) { Text("음성 전사 저장") }
+        }
+        EngineOption(
+            selected = txEngine == TranscribeConfig.Engine.GROQ,
+            title = "클라우드 · Groq (Whisper)",
+            desc = "STT 전용, 축자 정확. 소리가 Groq로 감.",
+        ) {
+            txEngine = TranscribeConfig.Engine.GROQ
+            TranscribeConfig.setEngine(context, txEngine)
+            LoggerService.reapply(context)
+        }
+        EngineOption(
+            selected = txEngine == TranscribeConfig.Engine.WHISPER,
+            title = "온디바이스 · whisper.cpp",
+            desc = "기기 안에서 전사(소리 안 나감). 모델 다운로드 필요.",
+        ) {
+            txEngine = TranscribeConfig.Engine.WHISPER
+            TranscribeConfig.setEngine(context, txEngine)
+            LoggerService.reapply(context)
+        }
+
+        when (txEngine) {
+            TranscribeConfig.Engine.GEMINI -> {
+                Text(
+                    "위 '요약 LLM(Gemini)' 설정을 그대로 씁니다. 키만 있으면 바로 전사됩니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            TranscribeConfig.Engine.GROQ -> {
+                OutlinedTextField(value = sttUrl, onValueChange = { sttUrl = it }, label = { Text("베이스 URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                ModelPicker(
+                    label = "모델",
+                    baseUrl = sttUrl,
+                    apiKey = sttKey,
+                    value = sttModel,
+                    onValue = { sttModel = it },
+                    filter = { it.contains("whisper", true) },
+                )
+                OutlinedTextField(value = sttKey, onValueChange = { sttKey = it }, label = { Text("Groq API 키") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedButton(onClick = {
+                    SttConfig.set(context, sttUrl, sttModel, sttKey)
+                    LogRepository.setStatus("Groq 전사 설정 저장됨")
+                    LoggerService.reapply(context)
+                }) { Text("Groq 설정 저장") }
+                TextButton(onClick = {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse("https://console.groq.com/keys"))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    )
+                }) { Text("Groq 키 발급 (무료)") }
+            }
+            TranscribeConfig.Engine.WHISPER -> {
+                Text("정확도 — 클수록 정확·느림", style = MaterialTheme.typography.bodySmall)
+                WhisperModels.ALL.forEach { m ->
+                    val ready = WhisperModels.isReady(context, m.id)
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        RadioButton(
+                            selected = whisperId == m.id,
+                            onClick = {
+                                whisperId = m.id
+                                TranscribeConfig.setModelId(context, m.id)
+                                LoggerService.reapply(context)
+                            },
+                        )
+                        Column {
+                            Text(m.label, style = MaterialTheme.typography.bodyMedium)
+                            Text(if (ready) "다운로드됨" else "다운로드 필요", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+                val selReady = WhisperModels.isReady(context, whisperId)
+                val dl = dlState
+                val downloadingThis = dl is ModelDownloader.State.Downloading && dl.id == whisperId
+                OutlinedButton(
+                    enabled = !downloadingThis && !selReady,
+                    onClick = {
+                        coroutineScope.launch {
+                            val ok = ModelDownloader.download(context, whisperId)
+                            LogRepository.setStatus(if (ok) "모델 다운로드 완료" else "모델 다운로드 실패")
+                            LoggerService.reapply(context)
+                        }
+                    },
+                ) {
+                    Text(
+                        when {
+                            selReady -> "다운로드됨"
+                            downloadingThis -> "다운로드 중…"
+                            else -> "모델 다운로드 (~${WhisperModels.byId(whisperId).approxMb}MB)"
+                        },
+                    )
+                }
+                when (dl) {
+                    is ModelDownloader.State.Downloading -> if (dl.id == whisperId) {
+                        Text("다운로드 중… ${dl.pct}%", style = MaterialTheme.typography.bodySmall)
+                    }
+                    is ModelDownloader.State.Failed -> Text("실패: ${dl.reason}", style = MaterialTheme.typography.bodySmall)
+                    else -> {}
+                }
+                Text(
+                    "arm64 기기만 지원. 첫 전사에서 모델 로딩에 수 초 걸릴 수 있습니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+
         OutlinedButton(onClick = {
             LogRepository.setStatus("밀린 음성 전사 중…")
             coroutineScope.launch {
                 val done = PendingVoice.transcribePending(context)
                 LogRepository.setStatus(
-                    if (done > 0) "밀린 음성 ${done}건 전사됨" else "전사할 밀린 음성이 없거나 키가 없습니다",
+                    if (done > 0) "밀린 음성 ${done}건 전사됨" else "전사할 밀린 음성이 없거나 전사 준비가 안 됐습니다",
                 )
             }
         }) { Text("밀린 음성 전사 (${PendingVoice.pendingCount(context)}건 대기)") }
-        Text(
-            "AI(Groq) 연결이 없으면 말소리를 음성파일로 보관했다가(앱 폴더 voice_pending), 연결되면 자동/수동으로 그 파일만 전사합니다.",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        TextButton(onClick = {
-            context.startActivity(
-                Intent(Intent.ACTION_VIEW, Uri.parse("https://console.groq.com/keys"))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
-        }) { Text("Groq 키 발급 (무료)") }
-
         Text("통화 녹음 가져오기", style = MaterialTheme.typography.labelLarge)
         Text(
             "라이브 통화는 OS가 막습니다. 전화앱 설정에서 '통화 자동 녹음'을 켜 두고, " +
@@ -689,6 +806,22 @@ private fun HomeScreen() {
             ) {
                 timeline.take(200).forEach { item -> TimelineRow(item) }
             }
+        }
+    }
+}
+
+@Composable
+private fun EngineOption(
+    selected: Boolean,
+    title: String,
+    desc: String,
+    onSelect: () -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        RadioButton(selected = selected, onClick = onSelect)
+        Column {
+            Text(title, style = MaterialTheme.typography.bodyMedium)
+            Text(desc, style = MaterialTheme.typography.bodySmall)
         }
     }
 }
