@@ -6,7 +6,7 @@
 
 Personal use · Encrypted local storage · Cloud or on-device transcription · cloud summaries (your keys)
 
-[**Download APK**](https://github.com/jwgung/lifelog/releases/latest) · [Releases](https://github.com/jwgung/lifelog/releases)
+[**Download APK**](https://github.com/jwgung/lorelog/releases/latest) · [Releases](https://github.com/jwgung/lorelog/releases)
 
 English · [한국어](README.ko.md)
 
@@ -75,7 +75,7 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 
 ## Install & Setup
 
-1. Download the APK (`LoreLog-<version>.apk`) from [Releases](https://github.com/jwgung/lifelog/releases/latest) and install it.
+1. Download the APK (`LoreLog-<version>.apk`) from [Releases](https://github.com/jwgung/lorelog/releases/latest) and install it.
 2. **Play Protect warning**: with this many permissions, sideloading triggers a warning. It can't be removed in code; to use the app, turn off Play Protect scanning in the Play Store (or "install without scanning"), and on Samsung turn off Auto Blocker.
 3. In the app, tap **Start** and grant the prompted permissions (it starts with just the mic granted).
 4. Paste the **keys** for the features you want into settings: voice transcription (Gemini — or pick on-device whisper and download a model instead of a key), summaries (Gemini). Each field has a "get key" link. Without a key (or a downloaded model), only that feature sits idle; everything else works.
