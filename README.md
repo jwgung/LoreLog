@@ -1,4 +1,4 @@
-# LifeLog
+# LoreLog
 
 내 안드로이드 기기에서 **내** 하루를 텍스트로 기록하는 개인용(quantified-self) 앱.
 voice-keyboard(PC 음성 입력·자막)의 모바일 상시판에 해당한다. 폰은 늘 곁에 있는 센서이므로,

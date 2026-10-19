@@ -1,15 +1,15 @@
 <resources>
-    <string name="app_name">LifeLog</string>
+    <string name="app_name">LoreLog</string>
     <string name="channel_logging_name">기록 중</string>
     <string name="channel_logging_desc">기록이 도는 동안 상시 표시되는 알림</string>
     <string name="channel_logging_min_name">기록(최소)</string>
-    <string name="notif_title">LifeLog 기록 중</string>
+    <string name="notif_title">LoreLog 기록 중</string>
     <string name="notif_text">내 활동을 이 기기에만 기록하고 있습니다</string>
     <string name="action_stop">정지</string>
-    <string name="accessibility_label">LifeLog 화면 내용 기록</string>
+    <string name="accessibility_label">LoreLog 화면 내용 기록</string>
     <string name="accessibility_desc">기록 중일 때, 앱 화면에 보이는 텍스트를 읽어 이 기기에만 저장합니다. 은행·결제 등 제외 목록 앱은 읽지 않습니다. 본인 기록용입니다.</string>
-    <string name="notif_listener_label">LifeLog 알림 기록</string>
-    <string name="notif_idle_title">LifeLog — 멈춤</string>
+    <string name="notif_listener_label">LoreLog 알림 기록</string>
+    <string name="notif_idle_title">LoreLog — 멈춤</string>
     <string name="notif_idle_text">눌러서 기록을 시작하세요</string>
     <string name="action_start">기록 시작</string>
     <string name="overlay_watching">● 감시중</string>

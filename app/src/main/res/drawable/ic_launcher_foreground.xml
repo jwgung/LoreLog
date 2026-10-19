@@ -1,14 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <group android:name="bars">
-        <path android:pathData="M34,44 L34,64" android:strokeColor="#FFFFFFFF" android:strokeWidth="8" android:strokeLineCap="round" />
-        <path android:pathData="M46,34 L46,74" android:strokeColor="#FFFFFFFF" android:strokeWidth="8" android:strokeLineCap="round" />
-        <path android:pathData="M58,25 L58,83" android:strokeColor="#FFFFFFFF" android:strokeWidth="8" android:strokeLineCap="round" />
-        <path android:pathData="M70,38 L70,70" android:strokeColor="#FFFFFFFF" android:strokeWidth="8" android:strokeLineCap="round" />
-        <path android:pathData="M82,46 L82,62" android:strokeColor="#FFFFFFFF" android:strokeWidth="8" android:strokeLineCap="round" />
-    </group>
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFFFFF" android:pathData="M26,22 H36 V82 H26 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M26,72 H60 V82 H26 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M72,26 H82 V84 H72 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M48,26 H82 V36 H48 Z" />
 </vector>

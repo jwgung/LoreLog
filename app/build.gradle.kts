@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.lifelog"
+    namespace = "com.lorelog"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.lifelog"
+        applicationId = "com.lorelog"
         minSdk = 29
         targetSdk = 36
         versionCode = 1
