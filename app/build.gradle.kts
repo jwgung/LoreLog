@@ -11,8 +11,8 @@ android {
         applicationId = "com.lorelog"
         minSdk = 29
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.3.2"
+        versionCode = (providers.gradleProperty("appVersionCode").orNull?.toIntOrNull()) ?: 4
+        versionName = providers.gradleProperty("appVersionName").orNull ?: "0.3.2"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
