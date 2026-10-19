@@ -69,10 +69,10 @@ import com.lorelog.collect.CollectorPrefs
 import com.lorelog.data.TimelineItem
 import com.lorelog.net.EndpointConfig
 import com.lorelog.net.LlmConfig
-import com.lorelog.net.SttConfig
 import com.lorelog.net.TranscribeConfig
 import com.lorelog.net.WhisperModels
 import com.lorelog.stt.ModelDownloader
+import com.lorelog.stt.WhisperEngine
 import com.lorelog.speaker.SpeakerId
 import com.lorelog.net.ModelCatalog
 import com.lorelog.summary.Summarizer
@@ -157,9 +157,6 @@ private fun HomeScreen() {
     var llmUrl by remember { mutableStateOf(LlmConfig.baseUrl(context)) }
     var llmModel by remember { mutableStateOf(LlmConfig.model(context)) }
     var llmKey by remember { mutableStateOf(LlmConfig.apiKey(context) ?: "") }
-    var sttUrl by remember { mutableStateOf(SttConfig.baseUrl(context)) }
-    var sttModel by remember { mutableStateOf(SttConfig.model(context)) }
-    var sttKey by remember { mutableStateOf(SttConfig.apiKey(context) ?: "") }
     var txEngine by remember { mutableStateOf(TranscribeConfig.engine(context)) }
     var whisperId by remember { mutableStateOf(TranscribeConfig.modelId(context)) }
     val dlState by ModelDownloader.state.collectAsStateWithLifecycle()
@@ -530,6 +527,22 @@ private fun HomeScreen() {
                     !it.contains("tts", true) && !it.contains("imagen", true) &&
                     !it.contains("veo", true) && !it.contains("aqa", true)
             },
+            badge = { id ->
+                if (!llmUrl.contains("generativelanguage", true)) {
+                    null
+                } else {
+                    val l = id.lowercase()
+                    when {
+                        l.contains("flash") -> "무료 티어"
+                        l.contains("pro") -> "유료"
+                        else -> null
+                    }
+                }
+            },
+        )
+        Text(
+            "Gemini: Flash/Flash-Lite = 무료 티어, Pro = 유료. 실제 한도는 AI Studio에서 확인.",
+            style = MaterialTheme.typography.bodySmall,
         )
         OutlinedTextField(
             value = llmKey,
@@ -573,19 +586,11 @@ private fun HomeScreen() {
         EngineOption(
             selected = txEngine == TranscribeConfig.Engine.GEMINI,
             title = "클라우드 · Gemini",
-            desc = "요약용 Gemini 키 재사용. 무료. 소리가 구글로 감.",
+            desc = "요약용 Gemini 키 재사용. 무료 티어 가능. 소리가 구글로 감.",
         ) {
             txEngine = TranscribeConfig.Engine.GEMINI
             TranscribeConfig.setEngine(context, txEngine)
-            LoggerService.reapply(context)
-        }
-        EngineOption(
-            selected = txEngine == TranscribeConfig.Engine.GROQ,
-            title = "클라우드 · Groq (Whisper)",
-            desc = "STT 전용, 축자 정확. 소리가 Groq로 감.",
-        ) {
-            txEngine = TranscribeConfig.Engine.GROQ
-            TranscribeConfig.setEngine(context, txEngine)
+            coroutineScope.launch { WhisperEngine.release() }
             LoggerService.reapply(context)
         }
         EngineOption(
@@ -601,32 +606,13 @@ private fun HomeScreen() {
         when (txEngine) {
             TranscribeConfig.Engine.GEMINI -> {
                 Text(
-                    "위 '요약 LLM(Gemini)' 설정을 그대로 씁니다. 키만 있으면 바로 전사됩니다.",
+                    if (LlmConfig.isConfigured(context)) {
+                        "✓ Gemini 키 있음 — 바로 전사됩니다. (아래 '요약 LLM(Gemini)'의 키·모델을 그대로 사용)"
+                    } else {
+                        "⚠ 아래 '요약 LLM(Gemini)'에 키가 없어 전사가 안 됩니다. 키를 넣으세요."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                 )
-            }
-            TranscribeConfig.Engine.GROQ -> {
-                OutlinedTextField(value = sttUrl, onValueChange = { sttUrl = it }, label = { Text("베이스 URL") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                ModelPicker(
-                    label = "모델",
-                    baseUrl = sttUrl,
-                    apiKey = sttKey,
-                    value = sttModel,
-                    onValue = { sttModel = it },
-                    filter = { it.contains("whisper", true) },
-                )
-                OutlinedTextField(value = sttKey, onValueChange = { sttKey = it }, label = { Text("Groq API 키") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedButton(onClick = {
-                    SttConfig.set(context, sttUrl, sttModel, sttKey)
-                    LogRepository.setStatus("Groq 전사 설정 저장됨")
-                    LoggerService.reapply(context)
-                }) { Text("Groq 설정 저장") }
-                TextButton(onClick = {
-                    context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse("https://console.groq.com/keys"))
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                    )
-                }) { Text("Groq 키 발급 (무료)") }
             }
             TranscribeConfig.Engine.WHISPER -> {
                 Text("정확도 — 클수록 정확·느림", style = MaterialTheme.typography.bodySmall)
@@ -695,7 +681,7 @@ private fun HomeScreen() {
         Text(
             "라이브 통화는 OS가 막습니다. 전화앱 설정에서 '통화 자동 녹음'을 켜 두고, " +
                 "그 저장 폴더(예: 내장메모리 Recordings/Call)를 지정하면 새 녹음을 전사합니다. " +
-                "전사는 위 STT(Groq) 키를 씁니다.",
+                "전사는 위에서 고른 전사 엔진(Gemini/온디바이스)을 씁니다.",
             style = MaterialTheme.typography.bodySmall,
         )
         Text(
@@ -834,6 +820,7 @@ private fun ModelPicker(
     value: String,
     onValue: (String) -> Unit,
     filter: (String) -> Boolean,
+    badge: (String) -> String? = { null },
 ) {
     var expanded by remember { mutableStateOf(false) }
     var models by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -870,8 +857,9 @@ private fun ModelPicker(
                 )
             } else {
                 models.forEach { m ->
+                    val b = badge(m)
                     DropdownMenuItem(
-                        text = { Text(m) },
+                        text = { Text(if (b != null) "$m   ·  $b" else m) },
                         onClick = { onValue(m); expanded = false },
                     )
                 }

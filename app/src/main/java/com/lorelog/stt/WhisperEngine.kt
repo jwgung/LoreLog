@@ -43,4 +43,11 @@ object WhisperEngine {
             null
         }
     }
+
+    /** 로드된 모델을 메모리에서 즉시 해제(엔진 전환·유휴 시). 다음 전사에서 다시 로드한다. */
+    suspend fun release() = lock.withLock {
+        try { model?.let { Whisper.releaseModel(it) } } catch (_: Throwable) {}
+        model = null
+        loadedId = null
+    }
 }

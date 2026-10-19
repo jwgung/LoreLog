@@ -26,7 +26,8 @@ import java.nio.ByteOrder
 
 /**
  * 녹음+클라우드 음성 수집(VAD 기반). AudioRecord 로 원본 PCM 을 받아, WebRTC VAD 로
- * 말이 있을 때만 구간을 모아 WAV 로 저장하고 Groq 로 전사한다. 조용할 땐 소리 크기만
+ * 말이 있을 때만 구간을 모아, 가까운 발화들을 ~15초로 묶어 WAV 로 저장하고 선택한 엔진으로
+ * 전사한다(짧은 토막은 오인식·요청 과다라 묶는다). 조용할 땐 소리 크기만
  * 훑어 부하가 거의 없다. 화면이 꺼져도 끊기지 않는다. 전사 후 오디오는 삭제.
  */
 class RecordingVoiceCollector(context: Context) {
@@ -80,7 +81,24 @@ class RecordingVoiceCollector(context: Context) {
             val frame = ShortArray(FRAME)
             val preRoll = ArrayDeque<ShortArray>(PREROLL_FRAMES)
             val segment = ArrayList<ShortArray>()
+            val batch = ArrayList<ShortArray>()
+            var batchSamples = 0
+            var silenceRun = 0
             var inSpeech = false
+
+            fun sealSegmentIntoBatch() {
+                if (segment.isEmpty()) return
+                batch.addAll(segment)
+                batchSamples += segment.sumOf { it.size }
+                segment.clear()
+            }
+            fun emitBatch() {
+                sealSegmentIntoBatch()
+                if (batch.isEmpty()) return
+                val b = ArrayList(batch)
+                batch.clear(); batchSamples = 0; silenceRun = 0
+                flush(b)
+            }
 
             while (running && loopJob?.isActive == true) {
                 var read = 0
@@ -93,28 +111,38 @@ class RecordingVoiceCollector(context: Context) {
                 val speech = try { vad.isSpeech(frame) } catch (_: Exception) { false }
 
                 if (speech) {
+                    silenceRun = 0
                     if (!inSpeech) {
                         inSpeech = true
                         segment.clear()
                         segment.addAll(preRoll)
                     }
                     segment.add(frame.copyOf())
+                    // 한 발화가 너무 길면 조각으로 끊어 배치에 넣는다
                     if (segment.size >= MAX_SEG_FRAMES) {
-                        flush(segment)
-                        segment.clear()
+                        sealSegmentIntoBatch()
                         inSpeech = false
+                    }
+                    // 배치가 목표 길이(~15초)를 넘으면 바로 내보낸다
+                    if (batchSamples + segment.sumOf { it.size } >= BATCH_TARGET_SAMPLES) {
+                        emitBatch()
                     }
                 } else {
                     if (inSpeech) {
                         inSpeech = false
-                        flush(segment)
-                        segment.clear()
+                        sealSegmentIntoBatch()
+                        if (batchSamples >= BATCH_TARGET_SAMPLES) emitBatch()
                     }
                     preRoll.addLast(frame.copyOf())
                     while (preRoll.size > PREROLL_FRAMES) preRoll.removeFirst()
+                    // 말이 멈춘 뒤 일정 시간(대화 끊김) 지나면 배치 마감
+                    if (batch.isNotEmpty()) {
+                        silenceRun++
+                        if (silenceRun >= BATCH_IDLE_FRAMES) emitBatch()
+                    }
                 }
             }
-            if (inSpeech && segment.isNotEmpty()) flush(segment)
+            emitBatch()
         } catch (e: Exception) {
             // 마이크 분실 등: 조용히 종료, 서비스가 다시 시작한다.
         } finally {
@@ -213,5 +241,8 @@ class RecordingVoiceCollector(context: Context) {
         private const val PREROLL_FRAMES = 25
         private const val MAX_SEG_FRAMES = 3000
         private const val MIN_SEG_SAMPLES = 8000
+        // 가까운 발화들을 ~15초로 묶어 한 번에 전사(요청 수↓, whisper 정확도↑)
+        private const val BATCH_TARGET_SAMPLES = 240000 // 15초 @16kHz
+        private const val BATCH_IDLE_FRAMES = 150 // 침묵 ~3초면 배치 마감
     }
 }

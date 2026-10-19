@@ -31,7 +31,7 @@ Everything runs in one foreground service, and you toggle each source in setting
 
 | Source | How | Notes |
 |---|---|---|
-| **Voice** | Record → transcription (Gemini / Groq / on-device whisper) | WebRTC VAD captures **only when someone speaks**. Keeps running with the screen off. Text only |
+| **Voice** | Record → transcription (Gemini / on-device whisper) | WebRTC VAD captures **only when someone speaks**. Keeps running with the screen off. Text only |
 | **App usage** | UsageStatsManager | Which app, when |
 | **On-screen content** | AccessibilityService | Text you see inside apps. **Sensitive apps (banking, payments) excluded** |
 | **Location** | FusedLocationProvider | Every 5 min, low power, batched |
@@ -45,11 +45,10 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 
 - **VAD capture** — `AudioRecord` reads raw PCM and **WebRTC VAD** keeps only the segments where a human is speaking. When it's quiet, it just watches the sound level, so the load is near zero. It never grabs audio focus, so your media keeps playing.
 - **Transcription — you choose the engine** (settings → "Voice transcription"):
-  - **Cloud · Gemini** — reuses the Gemini key you already set for summaries. Free tier. (audio goes to Google)
-  - **Cloud · Groq (Whisper)** — a dedicated STT model, most accurate verbatim (`/audio/transcriptions`, free key).
-  - **On-device · whisper.cpp** — runs inside the phone, nothing leaves the device. Pick accuracy by model: tiny (~75MB) / base (~142MB, recommended) / small (~466MB); the model downloads once. arm64 devices only.
+  - **Cloud · Gemini** — reuses the Gemini key you already set for summaries. Free tier (Flash/Flash-Lite are free; the model dropdown marks which are free). (audio goes to Google)
+  - **On-device · whisper.cpp** — runs inside the phone, nothing leaves the device. Pick accuracy by model: tiny (~75MB) / base (~142MB, recommended) / small (~466MB); the model downloads once. arm64 devices only. The model is released from RAM when you switch to cloud.
 
-  Cloud is the most accurate; on-device trades some accuracy for full privacy and no key.
+  Cloud is more accurate; on-device trades some accuracy for full privacy and no key. Nearby utterances are batched into ~15s chunks before transcription — fewer requests (free-tier friendly) and better accuracy than tiny clips.
 - **Offline: keep, then transcribe** — when the chosen engine isn't ready (no key, or the on-device model isn't downloaded), speech segments are kept as voice files in an app folder, and once it's ready they are transcribed **automatically (a periodic worker) or manually ("Transcribe pending voice")**. Recording and keeping continue regardless.
 - **Speaker ID (optional)** — enroll your own voice once (**on-device Picovoice Eagle**) and each segment is tagged `me / other / unknown`. Audio never leaves the device.
 - **Bluetooth earbud mic (optional)** — route recording input to a BT headset mic.
@@ -80,7 +79,7 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 1. Download `app-release.apk` from [Releases](https://github.com/jwgung/lifelog/releases/latest) and install it.
 2. **Play Protect warning**: with this many permissions, sideloading triggers a warning. It can't be removed in code; to use the app, turn off Play Protect scanning in the Play Store (or "install without scanning"), and on Samsung turn off Auto Blocker.
 3. In the app, tap **Start** and grant the prompted permissions (it starts with just the mic granted).
-4. Paste the **keys** for the features you want into settings: voice transcription (Gemini/Groq — or pick on-device whisper and download a model instead of a key), summaries (Gemini), speaker ID (Picovoice). Each field has a "get key" link. Without a key (or a downloaded model), only that feature sits idle; everything else works.
+4. Paste the **keys** for the features you want into settings: voice transcription (Gemini — or pick on-device whisper and download a model instead of a key), summaries (Gemini), speaker ID (Picovoice). Each field has a "get key" link. Without a key (or a downloaded model), only that feature sits idle; everything else works.
 
 **Special permissions** (you enable these yourself): usage access, accessibility (on-screen content), notification access, background location.
 
@@ -111,7 +110,7 @@ collect/
 speaker/  SpeakerId (Picovoice Eagle) · PcmDecoder
 service/  ScreenContentService (accessibility) · NotificationService (notification listener)
 data/     LogStore (SQLCipher) · LogRepository (StateFlow) · DbKey · event models
-net/      SttConfig · GroqTranscriber · GeminiTranscriber · LlmConfig · ModelCatalog · TranscribeConfig · WhisperModels · EndpointConfig · HttpSink
+net/      GeminiTranscriber · LlmConfig · ModelCatalog · TranscribeConfig · WhisperModels · EndpointConfig · HttpSink
   stt/      WhisperEngine (whisper.cpp) · ModelDownloader
   summary/  Summarizer · CloudSummarizer · GeminiNanoSummarizer
 work/     Export · Summary · Prune · Conversation · PendingVoice · CallRecording Worker
