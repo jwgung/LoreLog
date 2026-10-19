@@ -12,7 +12,7 @@ import java.net.URL
  * 네트워크는 수동 '업데이트 확인'에서만 호출. 실패하면 null.
  */
 object UpdateChecker {
-    private const val REPO = "jwgung/lorelog"
+    private const val REPO = "jwgung/LoreLog"
 
     data class Result(
         val current: String,
