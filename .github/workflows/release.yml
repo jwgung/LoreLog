@@ -22,10 +22,16 @@ jobs:
       - name: Resolve version
         id: ver
         run: |
+          # versionCode 는 태그에서 유도(major*10000 + minor*100 + patch): v0.3.15 → 315.
+          # run_number 를 쓰면 로컬 빌드(versionCode 8~15)보다 작아져 다운그레이드로 설치가 막힌다.
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            echo "name=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+            name="${GITHUB_REF_NAME#v}"
+            IFS=. read -r a b c <<< "${name%%-*}"
+            echo "name=${name}" >> "$GITHUB_OUTPUT"
+            echo "code=$(( ${a:-0} * 10000 + ${b:-0} * 100 + ${c:-0} ))" >> "$GITHUB_OUTPUT"
           else
             echo "name=0.0.0-dev${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+            echo "code=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Decode keystore
@@ -39,7 +45,7 @@ jobs:
           -Plifelog.keyAlias="${{ secrets.RELEASE_KEY_ALIAS }}"
           -Plifelog.keyPassword="${{ secrets.RELEASE_KEY_PASSWORD }}"
           -PappVersionName="${{ steps.ver.outputs.name }}"
-          -PappVersionCode="${{ github.run_number }}"
+          -PappVersionCode="${{ steps.ver.outputs.code }}"
 
       - name: Rename APK
         run: cp app/build/outputs/apk/release/app-release.apk "LoreLog-${{ steps.ver.outputs.name }}.apk"
