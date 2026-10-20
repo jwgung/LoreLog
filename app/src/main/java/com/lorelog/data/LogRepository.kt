@@ -364,6 +364,14 @@ object LogRepository {
         }
     }
 
+    /** 검토 큐에서 "넘기기". 참석자 없이 닫는다(status=skipped). */
+    fun skipConversation(id: Long) {
+        scope.launch {
+            store.skipConversation(id)
+            _conversations.value = store.recentConversation(KEEP)
+        }
+    }
+
     fun setPartial(text: String) { _partial.value = text }
     fun setStatus(text: String) { _status.value = text }
 }

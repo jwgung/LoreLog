@@ -333,6 +333,12 @@ class LogStore(context: Context, password: ByteArray) {
         db.update(TABLE_CONV, values, "id = ?", arrayOf(id.toString()))
     }
 
+    /** 누구와였는지 모르겠다고 넘긴 대화. 검토 큐에서 빠지고 참석자는 비워 둔다. */
+    fun skipConversation(id: Long) {
+        val values = ContentValues().apply { put("status", "skipped") }
+        db.update(TABLE_CONV, values, "id = ?", arrayOf(id.toString()))
+    }
+
     fun insertSummary(timestampMs: Long, periodStartMs: Long, periodEndMs: Long, text: String): Long {
         val values = ContentValues().apply {
             put("ts", timestampMs)

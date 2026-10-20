@@ -123,6 +123,7 @@ private fun HomeScreen() {
     val status by LogRepository.status.collectAsStateWithLifecycle()
     val summaries by LogRepository.summaries.collectAsStateWithLifecycle()
     val conversations by LogRepository.conversations.collectAsStateWithLifecycle()
+    val voiceSegments by LogRepository.voiceSegments.collectAsStateWithLifecycle()
 
     // 특수 권한(사용 정보 접근, 접근성)은 설정에서 켜고 돌아온다. 화면이 다시 보일 때 다시 확인한다.
     var usageGranted by remember { mutableStateOf(UsageAccess.isGranted(context)) }
@@ -768,15 +769,36 @@ private fun HomeScreen() {
         val pending = conversations.filter { it.status == "pending" }
         if (pending.isNotEmpty()) {
             Text("태그할 대화 (${pending.size})", style = MaterialTheme.typography.labelLarge)
+            Text(
+                "통화·일정으로 상대를 못 알아낸 대화입니다. 아래 내용을 보거나 들어 보고 누구와였는지 적어 주세요.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             pending.take(10).forEach { conv ->
+                // 이 대화에 속한 음성 조각(오래된 것부터). 뭘 말했는지 보여 주고, 보관 오디오가 있으면 들려 준다.
+                val segs = voiceSegments.filter { it.timestampMs in conv.startMs..conv.endMs }.sortedBy { it.timestampMs }
+                val playable = segs.firstOrNull { it.audio != null }
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            timeFormat.format(Date(conv.startMs)) + "\u2013" + timeFormat.format(Date(conv.endMs)) +
+                                " \u00b7 ${segs.size}조각" +
+                                if (conv.context.isNotEmpty()) " \u00b7 ${conv.context}" else "",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        playable?.audio?.let { PlayButton(VoiceAudio.file(context, it), playable.text) }
+                    }
+                    val excerpt = segs.take(3).joinToString("\n") { s ->
+                        (s.speaker?.let { "$it: " } ?: "") + s.text.replace('\n', ' ').take(80)
+                    }
                     Text(
-                        timeFormat.format(Date(conv.startMs)) + "\u2013" + timeFormat.format(Date(conv.endMs)) +
-                            if (conv.context.isNotEmpty()) " \u00b7 ${conv.context}" else "",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        if (excerpt.isEmpty()) "(음성 조각이 지워졌거나 아직 불러오지 않았습니다)"
+                        else excerpt + if (segs.size > 3) "\n… 외 ${segs.size - 3}조각" else "",
+                        style = MaterialTheme.typography.bodySmall,
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                         OutlinedTextField(
                             value = tagInputs[conv.id] ?: "",
                             onValueChange = { tagInputs[conv.id] = it },
@@ -788,6 +810,10 @@ private fun HomeScreen() {
                             LogRepository.tagConversation(conv.id, tagInputs[conv.id].orEmpty())
                             tagInputs.remove(conv.id)
                         }) { Text("저장") }
+                        TextButton(onClick = {
+                            LogRepository.skipConversation(conv.id)
+                            tagInputs.remove(conv.id)
+                        }) { Text("넘기기") }
                     }
                 }
             }
