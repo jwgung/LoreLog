@@ -1,6 +1,7 @@
 package com.lorelog.stt
 
 import android.content.Context
+import android.util.Log
 import com.lorelog.net.TranscribeConfig
 import com.lorelog.net.WhisperModels
 import dev.ffmpegkit.whisper.Whisper
@@ -15,6 +16,7 @@ import java.io.File
  * 모델 선택이 바뀌면 이전 모델을 풀고 새로 로드한다. 미지원 ABI 등은 null 로 떨어진다.
  */
 object WhisperEngine {
+    private const val TAG = "WhisperEngine"
     private val lock = Mutex()
     private var loadedId: String? = null
     private var model: WhisperModel? = null
@@ -25,7 +27,9 @@ object WhisperEngine {
     suspend fun transcribe(context: Context, file: File): String? = lock.withLock {
         val id = TranscribeConfig.modelId(context)
         val path = WhisperModels.fileFor(context, id)
-        if (!path.exists() || path.length() < 1_000_000L) return@withLock null
+        if (!path.exists() || path.length() < 1_000_000L) {
+            Log.w(TAG, "model $id not ready at $path"); return@withLock null
+        }
         try {
             if (loadedId != id || model == null) {
                 model?.let { Whisper.releaseModel(it) }
@@ -37,6 +41,7 @@ object WhisperEngine {
             val res = Whisper.transcribe(m, file.absolutePath, WhisperConfig(language = "ko"))
             res.text.trim().takeIf { it.isNotEmpty() }
         } catch (e: Throwable) {
+            Log.w(TAG, "transcribe failed (model=$id): ${e.javaClass.simpleName}: ${e.message}")
             runCatching { model?.let { Whisper.releaseModel(it) } }
             model = null
             loadedId = null

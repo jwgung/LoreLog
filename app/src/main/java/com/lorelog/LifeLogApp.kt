@@ -4,6 +4,7 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
+import com.lorelog.collect.PendingVoice
 import com.lorelog.data.LogRepository
 import com.lorelog.work.ExportWorker
 import com.lorelog.work.CallRecordingWorker
@@ -17,6 +18,7 @@ class LifeLogApp : Application() {
     override fun onCreate() {
         super.onCreate()
         LogRepository.init(this)
+        Thread { PendingVoice.refresh(this) }.start()
         ExportWorker.schedule(this)
         SummaryWorker.schedule(this)
         PruneWorker.schedule(this)

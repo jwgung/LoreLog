@@ -1,6 +1,7 @@
 package com.lorelog.data
 
 import android.content.Context
+import com.lorelog.audio.VoiceAudio
 import com.lorelog.net.EndpointConfig
 import com.lorelog.net.HttpSink
 import com.lorelog.net.LlmConfig
@@ -64,6 +65,10 @@ object LogRepository {
     private val _conversations = MutableStateFlow<List<Conversation>>(emptyList())
     val conversations: StateFlow<List<Conversation>> = _conversations.asStateFlow()
 
+    /** 전사 대기 중인 음성 파일(PendingVoice 가 갱신). 타임라인에 "전사 대기"로 섞여 보인다. */
+    private val _pendingVoice = MutableStateFlow<List<PendingAudio>>(emptyList())
+    val pendingVoice: StateFlow<List<PendingAudio>> = _pendingVoice.asStateFlow()
+
     /** 모든 수집 종류를 시간순(최신 먼저)으로 합친 타임라인. */
     val timeline: StateFlow<List<TimelineItem>> =
         combine(
@@ -77,8 +82,9 @@ object LogRepository {
             },
             _commEvents,
             _calendarEvents,
-        ) { base, comms, cals ->
-            (base + comms.map { TimelineItem.Comm(it) } + cals.map { TimelineItem.Calendar(it) })
+            _pendingVoice,
+        ) { base, comms, cals, pending ->
+            (base + comms.map { TimelineItem.Comm(it) } + cals.map { TimelineItem.Calendar(it) } + pending.map { TimelineItem.Pending(it) })
                 .sortedByDescending { it.timestampMs }
                 .take(KEEP)
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
@@ -106,15 +112,41 @@ object LogRepository {
         }
     }
 
-    fun addVoice(text: String, speaker: String? = null) {
+    /**
+     * 음성 기록 추가. timestampMs 는 실제 말한 시각(밀린 파일을 나중에 전사해도 그 시각으로 들어간다).
+     * [audio] 는 다시 들어볼 보관 오디오 파일명(voice_kept/). 없으면 null.
+     */
+    fun addVoice(text: String, speaker: String? = null, timestampMs: Long = System.currentTimeMillis(), audio: String? = null) {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return
         scope.launch {
-            val ts = System.currentTimeMillis()
-            val id = store.insertVoice(ts, trimmed, speaker)
-            val seg = VoiceSegment(id, ts, trimmed, speaker)
-            _voiceSegments.update { (listOf(seg) + it).take(KEEP) }
+            val id = store.insertVoice(timestampMs, trimmed, speaker, audio)
+            val seg = VoiceSegment(id, timestampMs, trimmed, speaker, audio)
+            _voiceSegments.update { (listOf(seg) + it).sortedByDescending { s -> s.timestampMs }.take(KEEP) }
         }
+    }
+
+    fun setPendingVoice(list: List<PendingAudio>) { _pendingVoice.value = list }
+
+    /**
+     * 보관 오디오 정리. (1) 내보낸 음성(폴더·HTTP 커서 중 큰 쪽 이하 id)과 (2) 7일 넘은 음성의 오디오 파일을
+     * 지우고 행의 참조를 비운다. 텍스트 행은 그대로. 지운 파일 수 반환.
+     */
+    suspend fun pruneVoiceAudio(context: Context): Int = withContext(Dispatchers.IO) {
+        if (!::store.isInitialized) return@withContext 0
+        val voiceTable = store.tables().first()
+        val exportedId = maxOf(
+            context.getSharedPreferences("export_state", Context.MODE_PRIVATE).getLong("last_$voiceTable", 0L),
+            context.getSharedPreferences("http_state", Context.MODE_PRIVATE).getLong("last_$voiceTable", 0L),
+        )
+        val cutoff = System.currentTimeMillis() - VoiceAudio.RETENTION_MS
+        val rows = store.voiceAudioToDrop(exportedId, cutoff)
+        var deleted = 0
+        rows.forEach { (_, name) -> if (VoiceAudio.file(context, name).delete()) deleted++ }
+        store.clearVoiceAudio(rows.map { it.first })
+        VoiceAudio.deleteUnreferenced(context, store.referencedVoiceAudio())
+        if (rows.isNotEmpty()) _voiceSegments.value = store.recentVoice(KEEP)
+        deleted
     }
 
     fun addApp(packageName: String, label: String, timestampMs: Long) {
@@ -173,6 +205,7 @@ object LogRepository {
         prefs.edit().apply {
             result.newLastIds.forEach { (table, id) -> putLong("last_$table", id) }
         }.apply()
+        pruneVoiceAudio(context)
         result.lines.size
     }
 
@@ -236,13 +269,16 @@ object LogRepository {
         prefs.edit().apply {
             result.newLastIds.forEach { (table, id) -> putLong("last_$table", id) }
         }.apply()
+        pruneVoiceAudio(context)
         result.lines.size
     }
 
-    /** 모든 기록을 지운다(되돌릴 수 없음). */
-    fun deleteAll() {
+    /** 모든 기록을 지운다(되돌릴 수 없음). 보관 오디오도 함께. */
+    fun deleteAll(context: Context) {
         scope.launch {
             store.deleteAll()
+            VoiceAudio.deleteAll(context)
+            _pendingVoice.value = emptyList()
             _voiceSegments.value = emptyList()
             _appEvents.value = emptyList()
             _screenEvents.value = emptyList()

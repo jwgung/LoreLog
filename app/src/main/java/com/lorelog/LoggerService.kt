@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.Manifest
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
@@ -50,7 +51,15 @@ class LoggerService : Service() {
             return START_STICKY
         }
         NotificationManagerCompat.from(this).cancel(IDLE_NOTIF_ID)
-        startForegroundSafe()
+        if (!startForegroundSafe()) {
+            // Android 14+: 부팅·앱 업데이트 등 백그라운드에서 마이크 타입 FGS 는 시작할 수 없다.
+            // 조용히 돌면 마이크가 무음이라 음성이 하나도 안 잡히므로, 멈춤 알림으로 폴백해 한 번 눌러 켜게 한다.
+            _isRunning.value = false
+            stopCollectors()
+            showIdle(this)
+            stopSelf()
+            return START_NOT_STICKY
+        }
         _isRunning.value = true
         setWantRunning(this, true)
         startCollectors()
@@ -117,8 +126,12 @@ class LoggerService : Service() {
         stopSelf()
     }
 
-    /** 권한이 있는 포그라운드 타입만 지정해 시작한다. 위치 권한이 없어도 마이크만으로 뜬다. */
-    private fun startForegroundSafe() {
+    /**
+     * 권한이 있는 포그라운드 타입만 지정해 시작한다. 위치 권한이 없어도 마이크만으로 뜬다.
+     * OS 가 거부하면(백그라운드에서 마이크 타입 시작 등) false. 이때 타입 없이 올리는 폴백은 하지 않는다:
+     * 타입 없는 서비스는 마이크가 무음이라 "켜져 있는데 아무것도 안 잡히는" 상태가 된다.
+     */
+    private fun startForegroundSafe(): Boolean {
         var type = 0
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
             type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
@@ -128,14 +141,17 @@ class LoggerService : Service() {
         ) {
             type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
         }
-        try {
+        return try {
             if (type != 0) {
                 ServiceCompat.startForeground(this, NOTIF_ID, buildRecordingNotification(), type)
             } else {
                 startForeground(NOTIF_ID, buildRecordingNotification())
             }
+            true
         } catch (e: Exception) {
-            try { startForeground(NOTIF_ID, buildRecordingNotification()) } catch (_: Exception) {}
+            Log.w(TAG, "startForeground(type=$type) refused: ${e.javaClass.simpleName}: ${e.message}")
+            com.lorelog.data.LogRepository.setStatus("기록 시작이 거부됨(${e.javaClass.simpleName}). 앱이나 알림에서 다시 켜세요.")
+            false
         }
     }
 
@@ -157,6 +173,7 @@ class LoggerService : Service() {
     }
 
     companion object {
+        private const val TAG = "LoggerService"
         private const val NOTIF_ID = 1
         private const val IDLE_NOTIF_ID = 2
         const val ACTION_STOP = "com.lorelog.action.STOP"

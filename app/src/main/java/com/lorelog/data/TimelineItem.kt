@@ -8,6 +8,10 @@ sealed interface TimelineItem {
         override val timestampMs: Long get() = seg.timestampMs
     }
 
+    data class Pending(val audio: PendingAudio) : TimelineItem {
+        override val timestampMs: Long get() = audio.timestampMs
+    }
+
     data class App(val event: AppEvent) : TimelineItem {
         override val timestampMs: Long get() = event.timestampMs
     }

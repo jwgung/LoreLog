@@ -12,10 +12,12 @@ import java.util.concurrent.TimeUnit
 /**
  * 보존 정리. 하루 한 번, 이미 내보냈고 보존 기간([RETENTION_DAYS]일)보다 오래된 원본을 지운다.
  * 장기 보관은 내보낸 쪽(KG)이 맡고, 기기엔 최근 구간만 남긴다. 요약은 지우지 않는다.
+ * 보관 오디오(voice_kept/)는 내보낸 것·7일 넘은 것을 지운다(텍스트는 유지).
  */
 class PruneWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = try {
         LogRepository.pruneExportedOlderThan(applicationContext, TimeUnit.DAYS.toMillis(RETENTION_DAYS))
+        LogRepository.pruneVoiceAudio(applicationContext)
         Result.success()
     } catch (e: Exception) {
         Result.retry()

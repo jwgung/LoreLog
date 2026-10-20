@@ -44,20 +44,23 @@ class LogStore(context: Context, password: ByteArray) {
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_conv_start ON $TABLE_CONV(start_ms)")
         // 기존 DB(열 없는 calendar_event)를 위한 보강. 이미 있으면 무시.
         runCatching { db.execSQL("ALTER TABLE $TABLE_CAL ADD COLUMN attendees TEXT NOT NULL DEFAULT ''") }
+        // 음성 행에 보관 오디오 파일명(voice_kept/ 아래). 내보낸 뒤 또는 보존 기간 뒤 지우면 NULL.
+        runCatching { db.execSQL("ALTER TABLE $TABLE_VOICE ADD COLUMN audio TEXT") }
     }
 
-    fun insertVoice(timestampMs: Long, text: String, speaker: String?): Long {
+    fun insertVoice(timestampMs: Long, text: String, speaker: String?, audio: String? = null): Long {
         val values = ContentValues().apply {
             put("ts", timestampMs)
             put("text", text)
             put("speaker", speaker)
+            put("audio", audio)
         }
         return db.insert(TABLE_VOICE, null, values)
     }
 
     fun recentVoice(limit: Int): List<VoiceSegment> {
         val out = ArrayList<VoiceSegment>()
-        db.query(TABLE_VOICE, arrayOf("id", "ts", "text", "speaker"), null, null, null, null, "ts DESC", limit.toString()).use { c ->
+        db.query(TABLE_VOICE, arrayOf("id", "ts", "text", "speaker", "audio"), null, null, null, null, "ts DESC", limit.toString()).use { c ->
             while (c.moveToNext()) {
                 out.add(
                     VoiceSegment(
@@ -65,9 +68,44 @@ class LogStore(context: Context, password: ByteArray) {
                         timestampMs = c.getLong(1),
                         text = c.getString(2),
                         speaker = if (c.isNull(3)) null else c.getString(3),
+                        audio = if (c.isNull(4)) null else c.getString(4),
                     ),
                 )
             }
+        }
+        return out
+    }
+
+    /** 보관 오디오가 붙은 음성 행 중 조건에 맞는 (id, 파일명). [maxId] 이하 또는 ts < [beforeMs]. */
+    fun voiceAudioToDrop(maxId: Long, beforeMs: Long): List<Pair<Long, String>> {
+        val out = ArrayList<Pair<Long, String>>()
+        db.query(TABLE_VOICE, arrayOf("id", "audio"), "audio IS NOT NULL AND (id <= ? OR ts < ?)",
+            arrayOf(maxId.toString(), beforeMs.toString()), null, null, "id ASC").use { c ->
+            while (c.moveToNext()) out.add(c.getLong(0) to c.getString(1))
+        }
+        return out
+    }
+
+    /** 음성 행들의 보관 오디오 참조를 지운다(파일은 호출자가 지운다). */
+    fun clearVoiceAudio(ids: Collection<Long>) {
+        if (ids.isEmpty()) return
+        db.beginTransaction()
+        try {
+            val values = ContentValues().apply { putNull("audio") }
+            ids.chunked(500).forEach { chunk ->
+                db.update(TABLE_VOICE, values, "id IN (${chunk.joinToString(",")})", null)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    /** 현재 보관 오디오로 참조 중인 파일명 전체(고아 파일 정리용). */
+    fun referencedVoiceAudio(): Set<String> {
+        val out = HashSet<String>()
+        db.query(TABLE_VOICE, arrayOf("audio"), "audio IS NOT NULL", null, null, null, null).use { c ->
+            while (c.moveToNext()) out.add(c.getString(0))
         }
         return out
     }

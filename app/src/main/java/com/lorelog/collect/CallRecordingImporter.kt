@@ -72,8 +72,8 @@ object CallRecordingImporter {
 
             if (ok && tmp.length() > 0) {
                 val text = PendingVoice.transcribeViaEngine(context, tmp)
-                if (text != null) {
-                    LogRepository.addVoice(text, speaker = "통화 · ${party(name)}")
+                if (!text.isNullOrEmpty()) {
+                    LogRepository.addVoice(text, speaker = "통화 · ${party(name)}", timestampMs = f.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis())
                     count++
                 }
             }
