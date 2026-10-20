@@ -56,7 +56,7 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 ## Conversations · Summaries
 
 - **Conversation grouping** — voice segments are grouped by time gaps into "conversations," and attendees are auto-linked from overlapping calls (contacts) and meetings (calendar attendees). Ambiguous ones go to a **review queue** to tag by hand.
-- **Summaries (optional, off by default)** — summarizing on the phone is optional, because the knowledge graph is better fed a faithful export and left to summarize there (and to re-summarize as its schema evolves). Turn it on and the collection is summarized periodically for in-app reading, and summaries are included in exports. Engine is a cloud LLM (OpenAI-compatible, default Gemini 3.5 Flash-Lite), falling back to on-device **Gemini Nano** on supported devices; models come from the API's `/models` via a **dropdown**.
+- **Summaries (optional, off by default)** — summarizing on the phone is optional, because the knowledge graph is better fed a faithful export and left to summarize there (and to re-summarize as its schema evolves). Turn it on and the collection is summarized periodically for in-app reading, and summaries are included in exports. Engine is Gemini Flash (default 3.5 Flash-Lite, switching to another Flash model automatically when the quota runs out — nothing to pick), falling back to on-device **Gemini Nano** on supported devices.
 
 ## Export / Delete
 
