@@ -29,8 +29,9 @@ object TranscribeConfig {
      */
     val GEMINI_FALLBACKS = listOf("gemini-3.5-flash", "gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-3-flash-preview")
 
-    fun fallbackEnabled(c: Context): Boolean = prefs(c).getBoolean(KEY_FALLBACK, true)
-    fun setFallbackEnabled(c: Context, on: Boolean) = prefs(c).edit().putBoolean(KEY_FALLBACK, on).apply()
+    /** 폴백은 항상 켜져 있다(화면에서 끄지 않는다). */
+    @Suppress("UNUSED_PARAMETER")
+    fun fallbackEnabled(c: Context): Boolean = true
 
     /** 실제 시도 순서: 선택한 모델 + (켜져 있으면) 폴백들. */
     fun geminiCandidates(c: Context): List<String> {
@@ -54,11 +55,7 @@ object TranscribeConfig {
     fun setModelId(c: Context, id: String) =
         prefs(c).edit().putString(KEY_MODEL, id).apply()
 
-    /** 전사용 Gemini 모델. 비어 있거나 종료된 모델이면 기본값. */
-    fun geminiModel(c: Context): String =
-        prefs(c).getString(KEY_GEMINI_MODEL, null)?.trim()?.takeIf { it.isNotEmpty() && !LlmConfig.isRetired(it) }
-            ?: DEFAULT_GEMINI_MODEL
-
-    fun setGeminiModel(c: Context, id: String) =
-        prefs(c).edit().putString(KEY_GEMINI_MODEL, LlmConfig.normalizeModel(id)).apply()
+    /** 전사용 Gemini 모델. 화면에서 고르지 않는다(항상 기본값 + 폴백 체인). 예전에 저장한 선택값은 무시. */
+    @Suppress("UNUSED_PARAMETER")
+    fun geminiModel(c: Context): String = DEFAULT_GEMINI_MODEL
 }

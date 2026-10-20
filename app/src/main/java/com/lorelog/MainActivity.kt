@@ -13,7 +13,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,7 +25,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -165,8 +163,6 @@ private fun HomeScreen() {
     var keyChecking by remember { mutableStateOf(false) }
     var txEngine by remember { mutableStateOf(TranscribeConfig.engine(context)) }
     var whisperId by remember { mutableStateOf(TranscribeConfig.modelId(context)) }
-    var txModel by remember { mutableStateOf(TranscribeConfig.geminiModel(context)) }
-    var txFallback by remember { mutableStateOf(TranscribeConfig.fallbackEnabled(context)) }
     val dlState by ModelDownloader.state.collectAsStateWithLifecycle()
     var update by remember { mutableStateOf<UpdateChecker.Result?>(null) }
     var checking by remember { mutableStateOf(false) }
@@ -666,54 +662,9 @@ private fun HomeScreen() {
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
-                ModelPicker(
-                    label = "전사 모델",
-                    baseUrl = llmUrl,
-                    apiKey = llmKey,
-                    value = txModel,
-                    onValue = {
-                        txModel = it
-                        TranscribeConfig.setGeminiModel(context, it)
-                    },
-                    filter = {
-                        val l = it.lowercase()
-                        l.contains("flash") && !l.contains("tts") && !l.contains("image") &&
-                            !l.contains("live") && !l.contains("native-audio") && !l.contains("omni") &&
-                            !l.contains("latest") // -latest 별칭은 실제 모델과 한도를 같이 쓰므로 중복
-                    },
-                    badge = { id ->
-                        val l = id.lowercase()
-                        when {
-                            LlmConfig.isRetired(l) -> "종료됨"
-                            l.contains("3.7-flash") || l.contains("3.8-flash") -> "느림(30초+)"
-                            l.contains("flash-lite") -> "무료 티어 · 추천"
-                            l.contains("flash") -> "무료 티어"
-                            else -> null
-                        }
-                    },
-                )
                 Text(
-                    "받아쓰기는 가벼워 Flash-Lite 로 충분합니다(기본 ${TranscribeConfig.DEFAULT_GEMINI_MODEL}). " +
-                        "요약 모델과 따로 두면 무료 한도를 나눠 쓰지 않습니다. 전사 실패 사유는 상태줄에 표시됩니다.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("일일 한도 소진 시 다른 Flash 모델로 자동 전환", style = MaterialTheme.typography.bodyMedium)
-                    Switch(
-                        checked = txFallback,
-                        onCheckedChange = {
-                            txFallback = it
-                            TranscribeConfig.setFallbackEnabled(context, it)
-                        },
-                    )
-                }
-                Text(
-                    "무료 한도는 모델당 하루 500회라 모델을 돌려 쓰면 예산이 모델 수만큼 늡니다. " +
-                        "순서: 선택 모델 → ${TranscribeConfig.GEMINI_FALLBACKS.joinToString(" → ")}",
+                    "모델은 자동입니다. ${TranscribeConfig.DEFAULT_GEMINI_MODEL} 로 받아쓰고, 하루 한도(모델당 500회)가 차면 " +
+                        "${TranscribeConfig.GEMINI_FALLBACKS.joinToString(" → ")} 순으로 넘어갑니다. 실패 사유는 상태줄에 표시됩니다.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -853,62 +804,6 @@ private fun EngineOption(
         Column {
             Text(title, style = MaterialTheme.typography.bodyMedium)
             Text(desc, style = MaterialTheme.typography.bodySmall)
-        }
-    }
-}
-
-@Composable
-private fun ModelPicker(
-    label: String,
-    baseUrl: String,
-    apiKey: String,
-    value: String,
-    onValue: (String) -> Unit,
-    filter: (String) -> Boolean,
-    badge: (String) -> String? = { null },
-) {
-    var expanded by remember { mutableStateOf(false) }
-    var models by remember { mutableStateOf<List<String>>(emptyList()) }
-    var loading by remember { mutableStateOf(false) }
-    var msg by remember { mutableStateOf<String?>(null) }
-    val scope = rememberCoroutineScope()
-
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValue,
-        label = { Text(label) },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-    )
-    Box {
-        TextButton(onClick = {
-            expanded = true
-            if (!loading) {
-                loading = true
-                msg = null
-                scope.launch {
-                    val list = ModelCatalog.fetch(baseUrl, apiKey).filter(filter)
-                    loading = false
-                    models = list
-                    msg = if (list.isEmpty()) "목록 없음 — URL·키 확인 후 다시" else null
-                }
-            }
-        }) { Text(if (loading) "불러오는 중…" else "모델 목록에서 고르기 ▾") }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            if (models.isEmpty()) {
-                DropdownMenuItem(
-                    text = { Text(msg ?: "불러오는 중…") },
-                    onClick = { expanded = false },
-                )
-            } else {
-                models.forEach { m ->
-                    val b = badge(m)
-                    DropdownMenuItem(
-                        text = { Text(if (b != null) "$m   ·  $b" else m) },
-                        onClick = { onValue(m); expanded = false },
-                    )
-                }
-            }
         }
     }
 }
