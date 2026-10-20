@@ -72,6 +72,19 @@ object GeminiTranscriber {
         if (t.isEmpty() || t.contains(SILENT) || t.equals("[silence]", true)) return ""
         val l = t.lowercase()
         if (HALLUCINATION_MARKERS.any { l.contains(it) }) return ""
+        // "네, 알겠습니다. 내용을 전사해 드릴게요." 식 서두 줄은 전사가 아니다
+        val lines = t.lines()
+        val body = if (lines.size > 1) {
+            // 짧은 서두 줄만 버린다. 실제 대화에서 나온 "네 알겠습니다"는 본문 안에 있어 길이로 구분된다.
+            lines.dropWhile { line -> line.length <= 40 && PREAMBLE.any { line.contains(it) } }.joinToString("\n").trim()
+        } else t
+        if (body.isEmpty()) return ""
+        return finish(body)
+    }
+
+    private val PREAMBLE = listOf("알겠습니다", "전사해 드", "전사해드", "전사 결과", "다음은 ", "받아쓰기 결과", "transcript:", "here is")
+
+    private fun finish(t: String): String {
         // 한글/영문 글자가 하나도 없으면(예: "0", "00:00", "...") 버린다
         if (!t.any { it.isLetter() }) return ""
         return t
@@ -80,6 +93,8 @@ object GeminiTranscriber {
     private sealed class Outcome {
         data class Ok(val text: String) : Outcome()
         data class DailyQuota(val retryMs: Long) : Outcome()
+        /** 이 모델만의 문제(응답 지연·과부하): 다음 모델로 넘어간다. */
+        object Retry : Outcome()
         object Fail : Outcome()
     }
 
@@ -102,11 +117,17 @@ object GeminiTranscriber {
                     Log.w(TAG, "$model daily quota exhausted, paused until $until; trying next")
                     continue
                 }
+                Outcome.Retry -> continue
                 Outcome.Fail -> return@withContext null
             }
         }
-        LogRepository.setStatus("Gemini 일일 무료 한도 모두 소진. ${resumeText(context)}부터 자동 재개 — 그동안 음성은 파일로 보관")
-        Log.i(TAG, "all candidates paused (${candidates.joinToString()}), keep ${file.name}")
+        if (isPaused(context)) {
+            LogRepository.setStatus("Gemini 일일 무료 한도 모두 소진. ${resumeText(context)}부터 자동 재개 — 그동안 음성은 파일로 보관")
+            Log.i(TAG, "all candidates paused (${candidates.joinToString()}), keep ${file.name}")
+        } else {
+            LogRepository.setStatus("전사 실패 — 모든 모델이 응답 지연/과부하. 나중에 자동 재시도")
+            Log.w(TAG, "all candidates failed transiently, keep ${file.name}")
+        }
         null
     }
 
@@ -136,7 +157,7 @@ object GeminiTranscriber {
                 requestMethod = "POST"
                 doOutput = true
                 connectTimeout = 15_000
-                readTimeout = 120_000
+                readTimeout = 150_000
                 setRequestProperty("Content-Type", "application/json")
             }
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
@@ -154,6 +175,7 @@ object GeminiTranscriber {
                     if (code == 429) "전사 한도 초과(분당, $model). 잠시 뒤 자동 재시도합니다."
                     else "전사 실패 HTTP $code ($model): ${msg.take(80)}",
                 )
+                if (code == 503 || code == 504) return Outcome.Retry
                 return Outcome.Fail
             }
             val resp = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
@@ -171,6 +193,11 @@ object GeminiTranscriber {
             val out = clean(sb.toString())
             if (out.isEmpty()) Log.i(TAG, "no speech / filtered ($model): ${sb.toString().trim().take(60)}")
             Outcome.Ok(out)
+        } catch (e: java.net.SocketTimeoutException) {
+            // 모델 대기열이 길어 응답이 안 온 것. 다른 모델은 멀쩡할 수 있으니 넘어간다.
+            Log.w(TAG, "transcribe timeout ($model), try next")
+            LogRepository.setStatus("전사 응답 지연($model) — 다음 모델 시도")
+            Outcome.Retry
         } catch (e: Exception) {
             Log.w(TAG, "transcribe failed ($model): ${e.javaClass.simpleName}: ${e.message}")
             LogRepository.setStatus("전사 실패: ${e.javaClass.simpleName}")
