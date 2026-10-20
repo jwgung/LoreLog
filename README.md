@@ -31,7 +31,7 @@ Everything runs in one foreground service, and you toggle each source in setting
 
 | Source | How | Notes |
 |---|---|---|
-| **Voice** | Record → transcription (Gemini / on-device whisper) | WebRTC VAD captures **only when someone speaks**. Keeps running with the screen off. Text only |
+| **Voice** | Record → transcription (Gemini / on-device whisper) | Silero VAD (neural) captures **only when someone speaks**. Keeps running with the screen off. Text only |
 | **App usage** | UsageStatsManager | Which app, when |
 | **On-screen content** | AccessibilityService | Text you see inside apps. **Sensitive apps (banking, payments) excluded** |
 | **Location** | FusedLocationProvider | Every 5 min, low power, batched |
@@ -43,12 +43,12 @@ Everything runs in one foreground service, and you toggle each source in setting
 
 The core of LoreLog, and the trickiest part. Google's live recognizer keeps grabbing audio focus (interrupting your media), which is wrong for always-on capture, so voice is **recording-based**.
 
-- **VAD capture** — `AudioRecord` reads raw PCM and **WebRTC VAD** keeps only the segments where a human is speaking. When it's quiet, it just watches the sound level, so the load is near zero. It never grabs audio focus, so your media keeps playing.
+- **VAD capture** — `AudioRecord` reads raw PCM and **Silero VAD** (a small neural network, ONNX) keeps only the segments where a human is speaking and ignores keyboards, dishes and air-con. Batches shorter than 3 s of speech are dropped. Inference is ~1 ms per 32 ms frame, so the idle load is near zero. It never grabs audio focus, so your media keeps playing.
 - **Transcription — you choose the engine** (settings → "Voice transcription"):
   - **Cloud · Gemini** — uses the "Gemini API key" from settings (shared with summaries). Free tier (Flash/Flash-Lite are free; the model dropdown marks free/paid, retired and slow models). (audio goes to Google)
   - **On-device · whisper.cpp** — runs inside the phone, nothing leaves the device. Pick accuracy by model: tiny (~75MB) / base (~142MB, recommended) / small (~466MB); the model downloads once. arm64 devices only. The model is released from RAM when you switch to cloud.
 
-  Cloud is more accurate; on-device trades some accuracy for full privacy and no key. Nearby utterances are batched into ~2-minute chunks before transcription — fewer requests (the free tier is ~500 requests/day/model) and better accuracy than tiny clips.
+  Cloud is more accurate; on-device trades some accuracy for full privacy and no key. Nearby utterances are batched into ~4-minute chunks before transcription (a batch also closes after a 3-minute lull) — fewer requests (the free tier is ~500 requests/day/model; 4-minute batches keep even non-stop talk at 15/hour) and better accuracy than tiny clips.
 - **Offline: keep, then transcribe** — when the chosen engine isn't ready (no key, or the on-device model isn't downloaded), speech segments are kept as voice files in an app folder, and once it's ready they are transcribed **automatically (a periodic worker) or manually ("Transcribe pending voice")**. Recording and keeping continue regardless.
 - **Bluetooth earbud mic (optional)** — route recording input to a BT headset mic.
 - **Import call recordings** — the OS blocks live call audio. Instead, point LoreLog at the folder where your dialer saves call recordings (via SAF) and it transcribes those files (devices with a built-in recorder, e.g. Samsung).
@@ -93,7 +93,7 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 ```
 
 - Toolchain: AGP 9.4.1 (built-in Kotlin), Gradle 9.8.0, compileSdk 37 / targetSdk 36 / minSdk 29, Jetpack Compose.
-- Key dependencies: SQLCipher (net.zetetic), security-crypto, WorkManager, play-services-location, ML Kit genai-summarization, android-vad (WebRTC), whisper-android (dev.ffmpegkit-maintained, no NDK).
+- Key dependencies: SQLCipher (net.zetetic), security-crypto, WorkManager, play-services-location, ML Kit genai-summarization, android-vad (Silero/ONNX), whisper-android (dev.ffmpegkit-maintained, no NDK).
 - Set the Android SDK path via `sdk.dir` in `local.properties`. Keep the release signing keystore and passwords outside the repo.
 
 ## Structure
@@ -102,7 +102,7 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 MainActivity (Compose)   start/stop · timeline · permission guidance · settings · review queue · export/delete
 LoggerService (FGS)      persistent notification + collectors (starts foreground with only granted types)
 collect/
-  RecordingVoiceCollector  AudioRecord + WebRTC VAD -> WAV -> transcription
+  RecordingVoiceCollector  AudioRecord + Silero VAD -> WAV -> transcription
   PendingVoice             offline voice keeping + pending transcription
   AppUsage / Location / Comms / Calendar Collector
   CallRecordingImporter    transcribe a call-recording folder (SAF)

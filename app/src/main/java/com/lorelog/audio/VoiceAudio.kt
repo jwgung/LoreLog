@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * 전사가 끝난 음성의 오디오 보관소. "무슨 소리였는지" 다시 들어볼 수 있게 WAV 를 AAC(m4a)로
- * 압축해 voice_kept/ 에 둔다(2분 배치 ≈ 0.7MB). 텍스트가 본체이고 오디오는 부속이라
+ * 압축해 voice_kept/ 에 둔다(4분 배치 ≈ 1.4MB). 텍스트가 본체이고 오디오는 부속이라
  * 내보낸 뒤에는 바로, 내보내지 않았으면 [RETENTION_MS] 뒤에 지운다. 내보내기에는 포함하지 않는다.
  */
 object VoiceAudio {
@@ -62,7 +62,7 @@ object VoiceAudio {
         return t.toString()
     }
 
-    /** 16kHz mono 16bit PCM WAV → AAC-LC m4a. 동기 인코딩(2분 분량에 1초 안팎). */
+    /** 16kHz mono 16bit PCM WAV → AAC-LC m4a. 동기 인코딩(4분 분량에 2초 안팎). */
     private fun encodeAac(wav: File, out: File): Boolean {
         val pcmBytes = wav.length() - WAV_HEADER
         if (pcmBytes <= 0) return false

@@ -12,10 +12,10 @@ import com.lorelog.audio.VoicePlayer
 import android.media.MediaRecorder
 import android.os.Build
 import android.util.Log
-import com.konovalov.vad.webrtc.VadWebRTC
-import com.konovalov.vad.webrtc.config.FrameSize
-import com.konovalov.vad.webrtc.config.Mode
-import com.konovalov.vad.webrtc.config.SampleRate
+import com.konovalov.vad.silero.VadSilero
+import com.konovalov.vad.silero.config.FrameSize
+import com.konovalov.vad.silero.config.Mode
+import com.konovalov.vad.silero.config.SampleRate
 import com.lorelog.data.LogRepository
 import com.lorelog.collect.PendingVoice
 import kotlinx.coroutines.CoroutineScope
@@ -29,10 +29,10 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * 녹음+클라우드 음성 수집(VAD 기반). AudioRecord 로 원본 PCM 을 받아, WebRTC VAD 로
- * 말이 있을 때만 구간을 모아, 가까운 발화들을 ~2분으로 묶어 WAV 로 저장하고 선택한 엔진으로
- * 전사한다(짧은 토막은 오인식·요청 과다라 묶는다). 조용할 땐 소리 크기만
- * 훑어 부하가 거의 없다. 화면이 꺼져도 끊기지 않는다. 전사 후 오디오는 삭제.
+ * 녹음+클라우드 음성 수집(VAD 기반). AudioRecord 로 원본 PCM 을 받아, Silero VAD(신경망, ONNX)로
+ * 사람 말이 있을 때만 구간을 모아, 가까운 발화들을 ~4분으로 묶어 WAV 로 저장하고 선택한 엔진으로
+ * 전사한다(짧은 토막은 오인식·요청 과다라 묶는다). WebRTC VAD 는 키보드·식기·에어컨 소리에 자주
+ * 깨어나 잡음 배치로 한도를 태워서 교체했다. 32ms 프레임당 추론 1ms 안쪽. 화면이 꺼져도 끊기지 않는다.
  */
 class RecordingVoiceCollector(context: Context) {
 
@@ -92,13 +92,14 @@ class RecordingVoiceCollector(context: Context) {
             runCatching { AutomaticGainControl.create(recorder.audioSessionId)?.apply { enabled = true } }.getOrNull()
         } else null
         Log.i(TAG, "AEC ${if (aec?.enabled == true) "on" else "unavailable"}, NS ${if (ns?.enabled == true) "on" else "off"}, AGC ${if (agc?.enabled == true) "on" else "off"}")
-        val vad = VadWebRTC(
-            SampleRate.SAMPLE_RATE_16K,
-            FrameSize.FRAME_SIZE_320,
-            Mode.AGGRESSIVE,
-            SPEECH_MS,
-            SILENCE_MS,
-        )
+        val vad = try {
+            VadSilero(appContext, SampleRate.SAMPLE_RATE_16K, FrameSize.FRAME_SIZE_512, Mode.NORMAL, SPEECH_MS, SILENCE_MS)
+        } catch (e: Exception) {
+            Log.w(TAG, "VadSilero init failed: ${e.javaClass.simpleName}: ${e.message}")
+            LogRepository.setStatus("음성 감지 모델 초기화 실패(${e.javaClass.simpleName}) — 기록을 껐다 켜 주세요")
+            try { recorder.release() } catch (_: Exception) {}
+            return
+        }
         try {
             recorder.startRecording()
             if (recorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
@@ -134,7 +135,7 @@ class RecordingVoiceCollector(context: Context) {
                 if (batch.isNotEmpty() && batchPlayback != segmentPlayback) flushBatchOnly()
                 if (batch.isEmpty()) {
                     // 프리롤(0.5초)만큼 앞당겨 실제 첫마디 시각에 맞춘다
-                    batchStartMs = System.currentTimeMillis() - segment.size * FRAME_MS
+                    batchStartMs = System.currentTimeMillis() - segment.size.toLong() * FRAME * 1000 / SAMPLE_RATE
                     batchPlayback = segmentPlayback
                 }
                 batch.addAll(segment)
@@ -185,7 +186,7 @@ class RecordingVoiceCollector(context: Context) {
                         sealSegmentIntoBatch()
                         inSpeech = false
                     }
-                    // 배치가 목표 길이(~2분)를 넘으면 바로 내보낸다
+                    // 배치가 목표 길이(~4분)를 넘으면 바로 내보낸다
                     if (batchSamples + segment.sumOf { it.size } >= BATCH_TARGET_SAMPLES) {
                         emitBatch()
                     }
@@ -307,18 +308,20 @@ class RecordingVoiceCollector(context: Context) {
     companion object {
         private const val TAG = "RecordingVoice"
         private const val SAMPLE_RATE = 16000
-        private const val SILENCE_CHECK_FRAMES = 250L // 20ms × 250 = 5초
-        private const val FRAME = 320
-        private const val FRAME_MS = 20L
-        private const val SPEECH_MS = 100
-        private const val SILENCE_MS = 600
-        private const val PREROLL_FRAMES = 25
-        private const val MAX_SEG_FRAMES = 3000
-        private const val MIN_SEG_SAMPLES = 8000
-        // 가까운 발화들을 ~2분으로 묶어 한 번에 전사. 요청 수가 곧 비용이다: Gemini 무료 티어는
-        // 모델당 하루 500회라 15초 배치(시간당 240회)로는 두 시간 대화에 바닥난다. 2분 배치면 시간당 30회.
-        // 전사 결과가 최대 2.5분 늦게 뜨는 대신 하루 종일 버틴다. (whisper 는 긴 배치가 정확도도 더 좋다)
-        private const val BATCH_TARGET_SAMPLES = 16000 * 120 // 120초 @16kHz (3.8MB PCM)
-        private const val BATCH_IDLE_FRAMES = 1500 // 침묵 ~30초(대화 끊김)면 배치 마감
+        // Silero 는 16kHz 에서 512 샘플(32ms) 프레임. 아래 "프레임 수" 상수는 전부 32ms 기준.
+        private const val FRAME = 512
+        private const val SILENCE_CHECK_FRAMES = 156L // 32ms × 156 ≈ 5초
+        private const val SPEECH_MS = 128 // 말로 치기까지 최소 지속(프레임 4개)
+        private const val SILENCE_MS = 640 // 말이 끝났다고 보기까지 침묵(프레임 20개)
+        private const val PREROLL_FRAMES = 16 // 첫마디 앞 ~0.5초
+        private const val MAX_SEG_FRAMES = 1875 // 한 발화 최대 60초
+        // 배치 안 말소리 합이 이보다 짧으면 버린다(3초). 사람 말 한마디는 보통 2~3초 넘고, 잡음에 잠깐
+        // 깨어난 0.5~1초짜리 조각은 전사해도 빈 문장·환각이라 요청만 낭비한다.
+        private const val MIN_SEG_SAMPLES = 16000 * 3
+        // 가까운 발화들을 ~4분으로 묶어 한 번에 전사. 요청 수가 곧 비용이다: Gemini 무료 티어는
+        // 모델당 하루 500회. 4분 배치면 연속 대화도 시간당 15회, 회의 6시간에 90회.
+        // 전사 결과가 최대 4분 늦게 뜨는 대신 하루 종일 버틴다. (whisper 는 긴 배치가 정확도도 더 좋다)
+        private const val BATCH_TARGET_SAMPLES = 16000 * 240 // 240초 @16kHz (7.7MB PCM, 인라인 한도 20MB 안)
+        private const val BATCH_IDLE_FRAMES = 5625 // 침묵 ~3분(대화 끊김)이면 배치 마감. 잠깐 조용한 틈엔 쪼개지 않는다
     }
 }

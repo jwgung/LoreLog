@@ -31,7 +31,7 @@
 
 | 종류 | 출처 | 비고 |
 |---|---|---|
-| **음성** | 녹음 → 전사(Gemini / 온디바이스 whisper) | WebRTC VAD로 **말할 때만** 캡처. 화면 꺼져도 유지. 텍스트만 저장 |
+| **음성** | 녹음 → 전사(Gemini / 온디바이스 whisper) | Silero VAD(신경망)로 **말할 때만** 캡처. 화면 꺼져도 유지. 텍스트만 저장 |
 | **앱 사용** | UsageStatsManager | 어떤 앱을 언제 썼나 |
 | **화면 내용** | AccessibilityService | 앱 안에서 본 텍스트. 은행·결제 등 **민감 앱 제외** |
 | **위치** | FusedLocationProvider | 5분 간격·저전력·배치 |
@@ -43,12 +43,12 @@
 
 LoreLog의 핵심이자 가장 까다로운 부분. 구글 실시간 인식기는 오디오 포커스를 계속 뺏어(미디어 끊김) 상시 수집에 안 맞아, **녹음 기반**으로 설계했다.
 
-- **VAD 캡처** — `AudioRecord`로 원본 PCM을 받아 **WebRTC VAD**로 사람 말이 있을 때만 구간을 모은다. 조용할 땐 소리 크기만 훑어 부하가 거의 없다. 오디오 포커스를 뺏지 않아 미디어가 안 끊긴다.
+- **VAD 캡처** — `AudioRecord`로 원본 PCM을 받아 **Silero VAD**(작은 신경망, ONNX)로 사람 말이 있을 때만 구간을 모은다. 키보드·식기·에어컨 소리에는 깨어나지 않고, 말소리 합이 3초 미만인 배치는 버린다. 32ms 프레임당 추론 1ms 안쪽이라 부하가 거의 없다. 오디오 포커스를 뺏지 않아 미디어가 안 끊긴다.
 - **전사 — 엔진을 고른다**(설정 → "음성 전사 방식"):
   - **클라우드 · Gemini** — 설정의 "Gemini API 키"를 사용(요약과 공용). 무료 티어(Flash/Flash-Lite 무료, 모델 드롭다운에 무료/유료·종료·느림 표시). (소리가 구글로 감)
   - **온디바이스 · whisper.cpp** — 폰 안에서 전사, 아무것도 밖으로 안 나감. 정확도를 모델로 선택: tiny(~75MB) / base(~142MB, 추천) / small(~466MB), 모델은 1회 다운로드. arm64 기기만. 클라우드로 바꾸면 모델은 RAM에서 해제된다.
 
-  클라우드가 더 정확하고, 온디바이스는 정확도를 조금 내주는 대신 완전한 프라이버시와 키 불필요를 얻는다. 가까운 발화는 ~2분으로 묶어 전사한다 — 요청 수가 줄고(무료 티어는 모델당 하루 500회) 짧은 토막보다 정확도도 낫다.
+  클라우드가 더 정확하고, 온디바이스는 정확도를 조금 내주는 대신 완전한 프라이버시와 키 불필요를 얻는다. 가까운 발화는 ~4분으로 묶어 전사한다(대화가 3분 넘게 끊기면 그때까지 모인 것으로 마감) — 요청 수가 줄고(무료 티어는 모델당 하루 500회, 4분 배치면 연속 대화도 시간당 15회) 짧은 토막보다 정확도도 낫다.
 - **준비 안 됐으면 보관 후 전사** — 고른 엔진이 준비 안 됐으면(키 없음, 또는 온디바이스 모델 미다운로드) 말 구간을 음성파일로 앱 폴더에 쌓아 두고, 준비되면 **자동(주기 워커) 또는 수동("밀린 음성 전사")**으로 그 파일만 변환한다. 녹음·보관은 상관없이 이어진다.
 - **블루투스 이어폰 마이크(선택)** — 녹음 입력을 BT 헤드셋 마이크로 돌린다.
 - **통화 녹음 가져오기** — 라이브 통화 음성은 OS가 막는다. 대신 전화앱이 저장한 통화 녹음 폴더를 지정(SAF)하면 그 파일을 전사한다(삼성 등 내장 녹음 기종).
@@ -93,7 +93,7 @@ LoreLog의 핵심이자 가장 까다로운 부분. 구글 실시간 인식기�
 ```
 
 - 툴체인: AGP 9.4.1(내장 Kotlin), Gradle 9.8.0, compileSdk 37 / targetSdk 36 / minSdk 29, Jetpack Compose.
-- 주요 의존성: SQLCipher(net.zetetic), security-crypto, WorkManager, play-services-location, ML Kit genai-summarization, android-vad(WebRTC), whisper-android(dev.ffmpegkit-maintained, NDK 불필요).
+- 주요 의존성: SQLCipher(net.zetetic), security-crypto, WorkManager, play-services-location, ML Kit genai-summarization, android-vad(Silero/ONNX), whisper-android(dev.ffmpegkit-maintained, NDK 불필요).
 - `local.properties`의 `sdk.dir`로 Android SDK 경로 지정. 릴리스 서명 키스토어·비밀번호는 저장소 밖에 둔다.
 
 ## 구조
@@ -102,7 +102,7 @@ LoreLog의 핵심이자 가장 까다로운 부분. 구글 실시간 인식기�
 MainActivity (Compose)   시작/정지 · 타임라인 · 권한 안내 · 설정 · 검토 큐 · 내보내기/삭제
 LoggerService (FGS)      상시 알림 + 수집기 묶음 (권한 있는 타입만 포그라운드 시작)
 collect/
-  RecordingVoiceCollector  AudioRecord + WebRTC VAD -> WAV -> 전사
+  RecordingVoiceCollector  AudioRecord + Silero VAD -> WAV -> 전사
   PendingVoice             오프라인 음성 보관 + 밀린 전사
   AppUsage / Location / Comms / Calendar Collector
   CallRecordingImporter    통화 녹음 폴더(SAF) 전사
