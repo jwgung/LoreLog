@@ -51,6 +51,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.FileProvider
@@ -65,6 +67,9 @@ import com.lorelog.data.LogRepository
 import com.lorelog.collect.CallRecordingImporter
 import com.lorelog.collect.PendingVoice
 import com.lorelog.collect.AudioPrefs
+import com.lorelog.audio.VoiceAudio
+import com.lorelog.audio.VoicePlayer
+import java.io.File
 import com.lorelog.collect.CollectorPrefs
 import com.lorelog.data.TimelineItem
 import com.lorelog.net.EndpointConfig
@@ -157,8 +162,12 @@ private fun HomeScreen() {
     var llmUrl by remember { mutableStateOf(LlmConfig.baseUrl(context)) }
     var llmModel by remember { mutableStateOf(LlmConfig.model(context)) }
     var llmKey by remember { mutableStateOf(LlmConfig.apiKey(context) ?: "") }
+    var showKey by remember { mutableStateOf(false) }
+    var keyChecking by remember { mutableStateOf(false) }
     var txEngine by remember { mutableStateOf(TranscribeConfig.engine(context)) }
     var whisperId by remember { mutableStateOf(TranscribeConfig.modelId(context)) }
+    var txModel by remember { mutableStateOf(TranscribeConfig.geminiModel(context)) }
+    var txFallback by remember { mutableStateOf(TranscribeConfig.fallbackEnabled(context)) }
     val dlState by ModelDownloader.state.collectAsStateWithLifecycle()
     var update by remember { mutableStateOf<UpdateChecker.Result?>(null) }
     var checking by remember { mutableStateOf(false) }
@@ -182,7 +191,7 @@ private fun HomeScreen() {
             text = { Text("이 기기에 쌓인 모든 기록을 지웁니다. 되돌릴 수 없습니다.") },
             confirmButton = {
                 TextButton(onClick = {
-                    LogRepository.deleteAll()
+                    LogRepository.deleteAll(context)
                     showDeleteDialog = false
                 }) { Text("삭제") }
             },
@@ -439,15 +448,6 @@ private fun HomeScreen() {
 
         OutlinedButton(onClick = {
             coroutineScope.launch {
-                when (val r = LogRepository.summarizeRecent(context, 24L * 60 * 60 * 1000)) {
-                    is Summarizer.SummaryResult.Ok -> LogRepository.setStatus("요약 완료")
-                    is Summarizer.SummaryResult.Unavailable -> LogRepository.setStatus("요약 불가: ${r.reason}")
-                }
-            }
-        }) { Text("지금 요약 (최근 24시간)") }
-
-        OutlinedButton(onClick = {
-            coroutineScope.launch {
                 val n = LogRepository.buildConversations(context)
                 LogRepository.setStatus("대화 묶기: ${n}건")
             }
@@ -487,10 +487,53 @@ private fun HomeScreen() {
             }) { Text("지금 전송") }
         }
 
+        Text("Gemini API 키", style = MaterialTheme.typography.labelLarge)
+        Text(
+            "클라우드 전사와 요약이 함께 쓰는 키입니다. 입력하면 바로 저장됩니다. " +
+                "AI Studio 무료 키면 됩니다(Flash 계열 무료, 한도는 모델별).",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        OutlinedTextField(
+            value = llmKey,
+            onValueChange = { llmKey = it; LlmConfig.setApi(context, llmUrl, it) },
+            label = { Text("API 키") },
+            singleLine = true,
+            visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = { TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "숨김" else "표시") } },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = llmUrl,
+            onValueChange = { llmUrl = it; LlmConfig.setApi(context, it, llmKey) },
+            label = { Text("베이스 URL (OpenAI 호환, 기본값 그대로 두면 Gemini)") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(
+                enabled = !keyChecking && llmKey.isNotBlank(),
+                onClick = {
+                    keyChecking = true
+                    LogRepository.setStatus("키 확인 중…")
+                    coroutineScope.launch {
+                        val n = ModelCatalog.fetch(llmUrl, llmKey).size
+                        keyChecking = false
+                        LogRepository.setStatus(if (n > 0) "✓ 키 유효 — 모델 ${n}개 사용 가능" else "✗ 키 또는 URL 이 틀렸습니다")
+                    }
+                },
+            ) { Text(if (keyChecking) "확인 중…" else "키 확인") }
+            TextButton(onClick = {
+                context.startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey"))
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }) { Text("키 발급 (무료)") }
+        }
+
         Text("요약", style = MaterialTheme.typography.labelLarge)
         Text(
-            "요약은 선택입니다. 끄면 원본만 모으고 내보냅니다(권장 — 요약은 지식그래프 쪽에서). " +
-                "켜면 앱에서 읽을 요약을 주기적으로 쌓고, 내보내기에도 요약을 포함합니다.",
+            "선택 기능입니다. 끄면 원본만 모으고 내보냅니다(권장 — 요약은 지식그래프 쪽에서). " +
+                "켜면 하루 한 번 최근 24시간을 요약해 앱에서 보여 주고 내보내기에도 포함합니다.",
             style = MaterialTheme.typography.bodySmall,
         )
         Row(
@@ -507,60 +550,60 @@ private fun HomeScreen() {
                 },
             )
         }
-
-        Text("요약 LLM (클라우드, 무료 티어 키)", style = MaterialTheme.typography.labelLarge)
-        OutlinedTextField(
-            value = llmUrl,
-            onValueChange = { llmUrl = it },
-            label = { Text("베이스 URL") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        ModelPicker(
-            label = "모델",
-            baseUrl = llmUrl,
-            apiKey = llmKey,
-            value = llmModel,
-            onValue = { llmModel = it },
-            filter = {
-                !it.contains("whisper", true) && !it.contains("embedding", true) &&
-                    !it.contains("tts", true) && !it.contains("imagen", true) &&
-                    !it.contains("veo", true) && !it.contains("aqa", true)
-            },
-            badge = { id ->
-                if (!llmUrl.contains("generativelanguage", true)) {
-                    null
-                } else {
+        if (summaryOn) {
+            ModelPicker(
+                label = "요약 모델",
+                baseUrl = llmUrl,
+                apiKey = llmKey,
+                value = llmModel,
+                onValue = {
+                    llmModel = it
+                    LlmConfig.setModel(context, it)
+                },
+                filter = { id ->
                     val l = id.lowercase()
-                    when {
-                        l.contains("flash") -> "무료 티어"
-                        l.contains("pro") -> "유료"
-                        else -> null
+                    val isGemini = llmUrl.contains("generativelanguage", true)
+                    if (!isGemini) {
+                        !l.contains("whisper") && !l.contains("embedding") && !l.contains("tts")
+                    } else {
+                        // 글 요약에 쓸 수 있는 텍스트 모델만. 이미지·음성·영상·임베딩·에이전트 전용은 뺀다.
+                        (l.contains("flash") || l.contains("-pro")) && listOf(
+                            "tts", "image", "live", "native-audio", "transcribe", "translate", "robotics",
+                            "computer-use", "omni", "latest", "embedding", "banana", "customtools",
+                        ).none { l.contains(it) }
+                    }
+                },
+                badge = { id ->
+                    if (!llmUrl.contains("generativelanguage", true)) {
+                        null
+                    } else {
+                        val l = id.lowercase()
+                        when {
+                            LlmConfig.isRetired(l) -> "종료됨"
+                            l.contains("3.7-flash") || l.contains("3.8-flash") -> "느림(30초+)"
+                            l.contains("flash-lite") -> "무료 티어 · 추천"
+                            l.contains("flash") -> "무료 티어"
+                            l.contains("pro") -> "유료 (무료 한도 0)"
+                            else -> null
+                        }
+                    }
+                },
+            )
+            Text(
+                "기본 ${LlmConfig.DEFAULT_MODEL}. 요약은 하루 한 번이라 어느 Flash 든 한도에 여유가 있습니다. " +
+                    "Pro 는 무료 키로는 안 됩니다. 3.7/3.8 Flash 는 서버 대기열 때문에 느립니다.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            OutlinedButton(onClick = {
+                LogRepository.setStatus("요약 중…")
+                coroutineScope.launch {
+                    when (val r = LogRepository.summarizeRecent(context, 24L * 60 * 60 * 1000)) {
+                        is Summarizer.SummaryResult.Ok -> LogRepository.setStatus("요약 완료")
+                        is Summarizer.SummaryResult.Unavailable -> LogRepository.setStatus("요약 불가: ${r.reason}")
                     }
                 }
-            },
-        )
-        Text(
-            "Gemini: Flash/Flash-Lite = 무료 티어, Pro = 유료. 실제 한도는 AI Studio에서 확인.",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        OutlinedTextField(
-            value = llmKey,
-            onValueChange = { llmKey = it },
-            label = { Text("API 키") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedButton(onClick = {
-            LlmConfig.set(context, llmUrl, llmModel, llmKey)
-            LogRepository.setStatus("요약 LLM 저장됨")
-        }) { Text("요약 LLM 저장") }
-        TextButton(onClick = {
-            context.startActivity(
-                Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey"))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
-        }) { Text("Gemini 키 발급 (무료)") }
+            }) { Text("지금 요약 (최근 24시간)") }
+        }
 
         Text("버전 / 업데이트", style = MaterialTheme.typography.labelLarge)
         Text("현재 버전 ${UpdateChecker.currentVersion(context)}", style = MaterialTheme.typography.bodySmall)
@@ -620,7 +663,7 @@ private fun HomeScreen() {
         EngineOption(
             selected = txEngine == TranscribeConfig.Engine.GEMINI,
             title = "클라우드 · Gemini",
-            desc = "요약용 Gemini 키 재사용. 무료 티어 가능. 소리가 구글로 감.",
+            desc = "위 'Gemini API 키' 사용, 모델은 따로 선택. 무료 티어 가능. 소리가 구글로 감.",
         ) {
             txEngine = TranscribeConfig.Engine.GEMINI
             TranscribeConfig.setEngine(context, txEngine)
@@ -641,10 +684,60 @@ private fun HomeScreen() {
             TranscribeConfig.Engine.GEMINI -> {
                 Text(
                     if (LlmConfig.isConfigured(context)) {
-                        "✓ Gemini 키 있음 — 바로 전사됩니다. (아래 '요약 LLM(Gemini)'의 키·모델을 그대로 사용)"
+                        "✓ Gemini 키 있음 — 바로 전사됩니다."
                     } else {
-                        "⚠ 아래 '요약 LLM(Gemini)'에 키가 없어 전사가 안 됩니다. 키를 넣으세요."
+                        "⚠ 위 'Gemini API 키'가 비어 있어 전사가 안 됩니다. 키를 넣으세요."
                     },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                ModelPicker(
+                    label = "전사 모델",
+                    baseUrl = llmUrl,
+                    apiKey = llmKey,
+                    value = txModel,
+                    onValue = {
+                        txModel = it
+                        TranscribeConfig.setGeminiModel(context, it)
+                    },
+                    filter = {
+                        val l = it.lowercase()
+                        l.contains("flash") && !l.contains("tts") && !l.contains("image") &&
+                            !l.contains("live") && !l.contains("native-audio") && !l.contains("omni") &&
+                            !l.contains("latest") // -latest 별칭은 실제 모델과 한도를 같이 쓰므로 중복
+                    },
+                    badge = { id ->
+                        val l = id.lowercase()
+                        when {
+                            LlmConfig.isRetired(l) -> "종료됨"
+                            l.contains("3.7-flash") || l.contains("3.8-flash") -> "느림(30초+)"
+                            l.contains("flash-lite") -> "무료 티어 · 추천"
+                            l.contains("flash") -> "무료 티어"
+                            else -> null
+                        }
+                    },
+                )
+                Text(
+                    "받아쓰기는 가벼워 Flash-Lite 로 충분합니다(기본 ${TranscribeConfig.DEFAULT_GEMINI_MODEL}). " +
+                        "요약 모델과 따로 두면 무료 한도를 나눠 쓰지 않습니다. 전사 실패 사유는 상태줄에 표시됩니다.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("일일 한도 소진 시 다른 Flash 모델로 자동 전환", style = MaterialTheme.typography.bodyMedium)
+                    Switch(
+                        checked = txFallback,
+                        onCheckedChange = {
+                            txFallback = it
+                            TranscribeConfig.setFallbackEnabled(context, it)
+                        },
+                    )
+                }
+                Text(
+                    "무료 한도는 모델당 하루 500회라 모델을 돌려 쓰면 예산이 모델 수만큼 늡니다. " +
+                        "순서: 선택 모델 → ${TranscribeConfig.GEMINI_FALLBACKS.joinToString(" → ")}",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
@@ -854,6 +947,7 @@ private fun ModelPicker(
 
 private fun itemKey(item: TimelineItem): String = when (item) {
     is TimelineItem.Voice -> "v${item.seg.id}"
+    is TimelineItem.Pending -> "p${item.audio.path}"
     is TimelineItem.App -> "a${item.event.id}"
     is TimelineItem.Screen -> "s${item.event.id}"
     is TimelineItem.Location -> "l${item.point.id}"
@@ -862,8 +956,19 @@ private fun itemKey(item: TimelineItem): String = when (item) {
     is TimelineItem.Calendar -> "k${item.entry.id}"
 }
 
+/** 음성 조각 옆 "▶ 듣기 / ■ 정지" 버튼. 보관 오디오가 있을 때만 그린다. */
+@Composable
+private fun PlayButton(file: File, text: String? = null) {
+    val playing by VoicePlayer.playing.collectAsStateWithLifecycle()
+    val isThis = playing == file.absolutePath
+    TextButton(onClick = { VoicePlayer.toggle(file, text) }) {
+        Text(if (isThis) "■ 정지" else "▶ 듣기", style = MaterialTheme.typography.labelMedium)
+    }
+}
+
 @Composable
 private fun TimelineRow(item: TimelineItem) {
+    val context = LocalContext.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -876,7 +981,24 @@ private fun TimelineRow(item: TimelineItem) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         when (item) {
-            is TimelineItem.Voice -> Text(item.seg.text, style = MaterialTheme.typography.bodyLarge)
+            is TimelineItem.Voice -> Row(verticalAlignment = Alignment.Top, modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    if (item.seg.speaker != null) {
+                        Text(item.seg.speaker, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Text(item.seg.text, style = MaterialTheme.typography.bodyLarge)
+                }
+                item.seg.audio?.let { PlayButton(VoiceAudio.file(context, it), item.seg.text) }
+            }
+            is TimelineItem.Pending -> Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "⏳ 전사 대기 · ${VoiceAudio.formatDuration(item.audio.durationMs)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                PlayButton(File(item.audio.path))
+            }
             is TimelineItem.App -> Text(
                 "▸ ${item.event.label}",
                 style = MaterialTheme.typography.bodyMedium,

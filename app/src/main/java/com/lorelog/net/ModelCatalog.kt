@@ -24,7 +24,8 @@ object ModelCatalog {
             val arr = JSONObject(body).optJSONArray("data") ?: return@withContext emptyList()
             buildList {
                 for (i in 0 until arr.length()) {
-                    arr.optJSONObject(i)?.optString("id")?.takeIf { it.isNotBlank() }?.let { add(it) }
+                    // Gemini 는 "models/gemini-…" 로 주는데 네이티브 URL(models/<id>:generateContent)엔 맨 id 가 필요하다
+                    arr.optJSONObject(i)?.optString("id")?.takeIf { it.isNotBlank() }?.let { add(it.removePrefix("models/")) }
                 }
             }.distinct().sorted()
         } catch (e: Exception) {

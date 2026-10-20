@@ -23,7 +23,7 @@ Your phone is a sensor that's always with you. LoreLog collects what happens on 
 - **Your device, your data only.** Not third-party surveillance or covert collection.
 - **Visible.** All collection is surfaced through standard OS permission prompts and a **persistent notification**. Nothing is hidden. It collects only while recording.
 - **Stored locally, encrypted.** Records live on-device in a SQLCipher-encrypted DB; API keys sit in a Keystore-backed store. This app stores nothing in the cloud.
-- **Processing is cloud by default, but transcription can be fully on-device.** Out of the box, voice transcription and summaries run in the cloud with your own keys, so speech audio and text leave the device. You can switch transcription to **on-device whisper.cpp** (download a model once; then nothing leaves the device), and summaries fall back to on-device **Gemini Nano** where supported. Exposure is kept minimal (VAD sends only speech) and you control every endpoint and key. Only text is stored; audio is discarded after transcription (kept offline only until it can be processed).
+- **Processing is cloud by default, but transcription can be fully on-device.** Out of the box, voice transcription and summaries run in the cloud with your own keys, so speech audio and text leave the device. You can switch transcription to **on-device whisper.cpp** (download a model once; then nothing leaves the device), and summaries fall back to on-device **Gemini Nano** where supported. Exposure is kept minimal (VAD sends only speech) and you control every endpoint and key. Text is the record; audio is kept only briefly (as AAC) so you can replay a segment and hear what it was. It is deleted as soon as the segment is exported, or after 7 days otherwise, and is never included in exports.
 
 ## What it collects
 
@@ -45,10 +45,10 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 
 - **VAD capture** — `AudioRecord` reads raw PCM and **WebRTC VAD** keeps only the segments where a human is speaking. When it's quiet, it just watches the sound level, so the load is near zero. It never grabs audio focus, so your media keeps playing.
 - **Transcription — you choose the engine** (settings → "Voice transcription"):
-  - **Cloud · Gemini** — reuses the Gemini key you already set for summaries. Free tier (Flash/Flash-Lite are free; the model dropdown marks which are free). (audio goes to Google)
+  - **Cloud · Gemini** — uses the "Gemini API key" from settings (shared with summaries). Free tier (Flash/Flash-Lite are free; the model dropdown marks free/paid, retired and slow models). (audio goes to Google)
   - **On-device · whisper.cpp** — runs inside the phone, nothing leaves the device. Pick accuracy by model: tiny (~75MB) / base (~142MB, recommended) / small (~466MB); the model downloads once. arm64 devices only. The model is released from RAM when you switch to cloud.
 
-  Cloud is more accurate; on-device trades some accuracy for full privacy and no key. Nearby utterances are batched into ~15s chunks before transcription — fewer requests (free-tier friendly) and better accuracy than tiny clips.
+  Cloud is more accurate; on-device trades some accuracy for full privacy and no key. Nearby utterances are batched into ~2-minute chunks before transcription — fewer requests (the free tier is ~500 requests/day/model) and better accuracy than tiny clips.
 - **Offline: keep, then transcribe** — when the chosen engine isn't ready (no key, or the on-device model isn't downloaded), speech segments are kept as voice files in an app folder, and once it's ready they are transcribed **automatically (a periodic worker) or manually ("Transcribe pending voice")**. Recording and keeping continue regardless.
 - **Bluetooth earbud mic (optional)** — route recording input to a BT headset mic.
 - **Import call recordings** — the OS blocks live call audio. Instead, point LoreLog at the folder where your dialer saves call recordings (via SAF) and it transcribes those files (devices with a built-in recorder, e.g. Samsung).
@@ -56,7 +56,7 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 ## Conversations · Summaries
 
 - **Conversation grouping** — voice segments are grouped by time gaps into "conversations," and attendees are auto-linked from overlapping calls (contacts) and meetings (calendar attendees). Ambiguous ones go to a **review queue** to tag by hand.
-- **Summaries (optional, off by default)** — summarizing on the phone is optional, because the knowledge graph is better fed a faithful export and left to summarize there (and to re-summarize as its schema evolves). Turn it on and the collection is summarized periodically for in-app reading, and summaries are included in exports. Engine is a cloud LLM (OpenAI-compatible, default Gemini 2.0 Flash), falling back to on-device **Gemini Nano** on supported devices; models come from the API's `/models` via a **dropdown**.
+- **Summaries (optional, off by default)** — summarizing on the phone is optional, because the knowledge graph is better fed a faithful export and left to summarize there (and to re-summarize as its schema evolves). Turn it on and the collection is summarized periodically for in-app reading, and summaries are included in exports. Engine is a cloud LLM (OpenAI-compatible, default Gemini 3.5 Flash-Lite), falling back to on-device **Gemini Nano** on supported devices; models come from the API's `/models` via a **dropdown**.
 
 ## Export / Delete
 
@@ -70,6 +70,7 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 
 - **Encryption** — the DB is encrypted with SQLCipher. The key is a random 32 bytes stored in `EncryptedSharedPreferences` protected by the Android Keystore (never leaves the device). API keys are stored the same way and never committed.
 - **Retention** — only the last **30 days** on the device. Originals that have been exported and are older than 30 days are auto-deleted (summaries and conversations are kept). Long-term storage is the job of the knowledge graph you export to.
+- **Voice audio** — the audio behind each transcribed segment is kept as AAC (~0.35MB/min) in `Android/data/com.lorelog/files/voice_kept/` and can be replayed from the timeline (**▶ 듣기**). Audio for segments included in a folder/HTTP export is deleted right away; audio never exported is deleted after **7 days**. Files still waiting for transcription also show up in the timeline as "전사 대기" and can be played. Capture keeps running during playback: the acoustic echo canceller (AEC) subtracts the played sound from the mic, anything still captured is labelled "재생 중", and a transcript that merely repeats the played text is dropped (mixed-in conversation is kept).
 - **Notification / display** — the persistent notification comes back if dismissed (always kept). In settings you can hide notifications (hide the idle one, minimize the recording one) and enable a floating "monitoring" badge over other apps (overlay).
 - Note: exported files, HTTP bodies, and cloud transcription/summary inputs leave the device **in plaintext**. If that's sensitive, manage the destination yourself (folder access, HTTPS endpoint, no-training terms).
 
@@ -78,7 +79,7 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 1. Download the APK (`LoreLog-<version>.apk`) from [Releases](https://github.com/jwgung/LoreLog/releases/latest) and install it.
 2. **Play Protect warning**: with this many permissions, sideloading triggers a warning. It can't be removed in code; to use the app, turn off Play Protect scanning in the Play Store (or "install without scanning"), and on Samsung turn off Auto Blocker.
 3. In the app, tap **Start** and grant the prompted permissions (it starts with just the mic granted).
-4. Paste the **keys** for the features you want into settings: voice transcription (Gemini — or pick on-device whisper and download a model instead of a key), summaries (Gemini). Each field has a "get key" link. Without a key (or a downloaded model), only that feature sits idle; everything else works.
+4. Paste one **Gemini API key** into settings (shared by transcription and summaries; saved as you type, "키 확인" validates it). For transcription you can pick on-device whisper and download a model instead. Without a key (or a downloaded model), only that feature sits idle; everything else works.
 
 **Special permissions** (you enable these yourself): usage access, accessibility (on-screen content), notification access, background location.
 
