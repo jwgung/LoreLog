@@ -55,13 +55,8 @@ object LlmConfig {
             .apply()
     }
 
-    /** URL·키만 저장(설정 화면에서 입력 즉시 호출). */
-    fun setApi(context: Context, baseUrl: String, apiKey: String) {
-        prefs(context).edit().putString(KEY_URL, baseUrl.trim()).putString(KEY_API, apiKey.trim()).apply()
-    }
-
-    /** 요약 모델만 저장. */
-    fun setModel(context: Context, model: String) {
-        prefs(context).edit().putString(KEY_MODEL, normalizeModel(model)).apply()
+    /** 키만 저장(설정 화면에서 입력 즉시 호출). URL·요약 모델은 기본값을 쓴다(화면에서 안 고른다). */
+    fun setKey(context: Context, apiKey: String) {
+        prefs(context).edit().putString(KEY_API, apiKey.trim()).apply()
     }
 }

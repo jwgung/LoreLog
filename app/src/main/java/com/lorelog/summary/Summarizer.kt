@@ -10,6 +10,7 @@ interface Summarizer {
     sealed interface SummaryResult {
         data class Ok(val summary: String) : SummaryResult
         /** 이 기기에서 요약을 쓸 수 없음(미지원·다운로드 필요·오류). 흐름은 그대로 두고 비워 둔다. */
-        data class Unavailable(val reason: String) : SummaryResult
+        /** [retryable] = 다른 모델로 다시 시도할 만한 실패(한도·종료·과부하). */
+        data class Unavailable(val reason: String, val retryable: Boolean = false) : SummaryResult
     }
 }

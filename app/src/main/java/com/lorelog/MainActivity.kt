@@ -159,8 +159,7 @@ private fun HomeScreen() {
     val collectorOn = remember {
         mutableStateMapOf<String, Boolean>().apply { CollectorPrefs.ALL.forEach { put(it.first, CollectorPrefs.enabled(context, it.first)) } }
     }
-    var llmUrl by remember { mutableStateOf(LlmConfig.baseUrl(context)) }
-    var llmModel by remember { mutableStateOf(LlmConfig.model(context)) }
+    val llmUrl = LlmConfig.baseUrl(context)
     var llmKey by remember { mutableStateOf(LlmConfig.apiKey(context) ?: "") }
     var showKey by remember { mutableStateOf(false) }
     var keyChecking by remember { mutableStateOf(false) }
@@ -309,6 +308,25 @@ private fun HomeScreen() {
 
 
         if (showSettings) {
+        Text("통화 녹음 가져오기", style = MaterialTheme.typography.labelLarge)
+        Text(
+            "라이브 통화는 OS가 막습니다. 전화앱 설정에서 '통화 자동 녹음'을 켜 두고, " +
+                "그 저장 폴더(예: 내장메모리 Recordings/Call)를 지정하면 새 녹음을 전사합니다. " +
+                "전사는 아래 '음성 전사 방식'에서 고른 엔진(Gemini/온디바이스)을 씁니다. 15분마다 새 녹음을 확인합니다.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Text(
+            if (callFolder != null) "지정됨: ${Uri.decode(callFolder)}" else "폴더 미지정",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { callFolderPicker.launch(null) }) { Text("통화 녹음 폴더 선택") }
+            OutlinedButton(onClick = {
+                LogRepository.setStatus("통화 녹음 가져오는 중…")
+                coroutineScope.launch { CallRecordingImporter.importNew(context) }
+            }) { Text("지금 가져오기") }
+        }
+
         if (!usageGranted) {
             OutlinedButton(onClick = {
                 context.startActivity(
@@ -422,6 +440,7 @@ private fun HomeScreen() {
             )
         }) { Text("다른 앱 위에 표시 허용") }
 
+        Text("내보내기 / 삭제", style = MaterialTheme.typography.labelLarge)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = {
                 coroutineScope.launch {
@@ -439,19 +458,22 @@ private fun HomeScreen() {
                             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                     )
                 }
-            }) { Text("내보내기 (JSON)") }
+            }) { Text("JSON 파일로 공유") }
             OutlinedButton(onClick = {
-                coroutineScope.launch { LogRepository.exportIncremental(context) }
-            }) { Text("폴더로 (증분)") }
+                LogRepository.setStatus("폴더에 쓰는 중…")
+                coroutineScope.launch {
+                    val n = LogRepository.exportIncremental(context)
+                    LogRepository.setStatus(if (n > 0) "폴더에 새 기록 ${n}줄 추가됨" else "폴더에 추가할 새 기록 없음")
+                }
+            }) { Text("폴더에 새 기록 추가") }
             OutlinedButton(onClick = { showDeleteDialog = true }) { Text("전체 삭제") }
         }
-
-        OutlinedButton(onClick = {
-            coroutineScope.launch {
-                val n = LogRepository.buildConversations(context)
-                LogRepository.setStatus("대화 묶기: ${n}건")
-            }
-        }) { Text("지금 대화 묶기") }
+        Text(
+            "JSON 공유 = 전체 기록을 파일 하나로 다른 앱에 보냄(복사본, 커서 안 움직임). " +
+                "폴더 추가 = 지난번 이후 새 기록만 Android/data/com.lorelog/files/exports/ 에 NDJSON 으로 이어 씀(매일 자동, 여기선 즉시). " +
+                "폴더·HTTP 로 내보낸 기록은 보관 오디오가 지워지고 30일 뒤 정리 대상이 됩니다.",
+            style = MaterialTheme.typography.bodySmall,
+        )
 
         Text("HTTP 내보내기", style = MaterialTheme.typography.labelLarge)
         OutlinedTextField(
@@ -495,18 +517,11 @@ private fun HomeScreen() {
         )
         OutlinedTextField(
             value = llmKey,
-            onValueChange = { llmKey = it; LlmConfig.setApi(context, llmUrl, it) },
+            onValueChange = { llmKey = it; LlmConfig.setKey(context, it) },
             label = { Text("API 키") },
             singleLine = true,
             visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
             trailingIcon = { TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "숨김" else "표시") } },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = llmUrl,
-            onValueChange = { llmUrl = it; LlmConfig.setApi(context, it, llmKey) },
-            label = { Text("베이스 URL (OpenAI 호환, 기본값 그대로 두면 Gemini)") },
-            singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -551,47 +566,8 @@ private fun HomeScreen() {
             )
         }
         if (summaryOn) {
-            ModelPicker(
-                label = "요약 모델",
-                baseUrl = llmUrl,
-                apiKey = llmKey,
-                value = llmModel,
-                onValue = {
-                    llmModel = it
-                    LlmConfig.setModel(context, it)
-                },
-                filter = { id ->
-                    val l = id.lowercase()
-                    val isGemini = llmUrl.contains("generativelanguage", true)
-                    if (!isGemini) {
-                        !l.contains("whisper") && !l.contains("embedding") && !l.contains("tts")
-                    } else {
-                        // 글 요약에 쓸 수 있는 텍스트 모델만. 이미지·음성·영상·임베딩·에이전트 전용은 뺀다.
-                        (l.contains("flash") || l.contains("-pro")) && listOf(
-                            "tts", "image", "live", "native-audio", "transcribe", "translate", "robotics",
-                            "computer-use", "omni", "latest", "embedding", "banana", "customtools",
-                        ).none { l.contains(it) }
-                    }
-                },
-                badge = { id ->
-                    if (!llmUrl.contains("generativelanguage", true)) {
-                        null
-                    } else {
-                        val l = id.lowercase()
-                        when {
-                            LlmConfig.isRetired(l) -> "종료됨"
-                            l.contains("3.7-flash") || l.contains("3.8-flash") -> "느림(30초+)"
-                            l.contains("flash-lite") -> "무료 티어 · 추천"
-                            l.contains("flash") -> "무료 티어"
-                            l.contains("pro") -> "유료 (무료 한도 0)"
-                            else -> null
-                        }
-                    }
-                },
-            )
             Text(
-                "기본 ${LlmConfig.DEFAULT_MODEL}. 요약은 하루 한 번이라 어느 Flash 든 한도에 여유가 있습니다. " +
-                    "Pro 는 무료 키로는 안 됩니다. 3.7/3.8 Flash 는 서버 대기열 때문에 느립니다.",
+                "모델은 자동입니다. 기본 ${LlmConfig.DEFAULT_MODEL}, 한도가 차면 다른 Flash 모델로 넘어갑니다.",
                 style = MaterialTheme.typography.bodySmall,
             )
             OutlinedButton(onClick = {
@@ -804,24 +780,16 @@ private fun HomeScreen() {
                 )
             }
         }) { Text("밀린 음성 전사 (${PendingVoice.pendingCount(context)}건 대기)") }
-        Text("통화 녹음 가져오기", style = MaterialTheme.typography.labelLarge)
+        OutlinedButton(onClick = {
+            coroutineScope.launch {
+                val n = LogRepository.buildConversations(context)
+                LogRepository.setStatus("대화 묶기: ${n}건")
+            }
+        }) { Text("대화 묶기 지금 실행") }
         Text(
-            "라이브 통화는 OS가 막습니다. 전화앱 설정에서 '통화 자동 녹음'을 켜 두고, " +
-                "그 저장 폴더(예: 내장메모리 Recordings/Call)를 지정하면 새 녹음을 전사합니다. " +
-                "전사는 위에서 고른 전사 엔진(Gemini/온디바이스)을 씁니다.",
+            "음성 조각을 5분 간격으로 대화로 묶고 겹치는 통화·일정으로 참석자를 붙입니다. 15분마다 자동으로 돌며, 못 붙인 대화는 '태그할 대화'에 올라옵니다.",
             style = MaterialTheme.typography.bodySmall,
         )
-        Text(
-            if (callFolder != null) "지정됨: ${Uri.decode(callFolder)}" else "폴더 미지정",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { callFolderPicker.launch(null) }) { Text("통화 녹음 폴더 선택") }
-            OutlinedButton(onClick = {
-                LogRepository.setStatus("통화 녹음 가져오는 중…")
-                coroutineScope.launch { CallRecordingImporter.importNew(context) }
-            }) { Text("지금 가져오기") }
-        }
 
         }
 

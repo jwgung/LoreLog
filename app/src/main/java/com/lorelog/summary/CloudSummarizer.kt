@@ -2,6 +2,7 @@ package com.lorelog.summary
 
 import android.content.Context
 import com.lorelog.net.LlmConfig
+import com.lorelog.net.TranscribeConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -18,9 +19,25 @@ class CloudSummarizer(private val context: Context) : Summarizer {
     override suspend fun summarize(text: String): Summarizer.SummaryResult = withContext(Dispatchers.IO) {
         if (text.isBlank()) return@withContext Summarizer.SummaryResult.Unavailable("요약할 기록이 없습니다")
         val key = LlmConfig.apiKey(context) ?: return@withContext Summarizer.SummaryResult.Unavailable("요약 LLM 키가 없습니다")
-        val url = LlmConfig.baseUrl(context).trimEnd('/') + "/chat/completions"
+        val base = LlmConfig.baseUrl(context)
+        val url = base.trimEnd('/') + "/chat/completions"
+        // 모델은 고르지 않는다. 전사와 같은 Flash 체인을 순서대로 시도하고, 한도(429)·종료(404)·과부하(503)면 다음으로.
+        val candidates = if (base.contains("generativelanguage", true)) {
+            (listOf(LlmConfig.model(context)) + TranscribeConfig.GEMINI_FALLBACKS).distinct()
+        } else listOf(LlmConfig.model(context))
+        var last: Summarizer.SummaryResult = Summarizer.SummaryResult.Unavailable("요약 LLM 오류")
+        for (model in candidates) {
+            val r = request(url, key, model, text)
+            if (r is Summarizer.SummaryResult.Ok) return@withContext r
+            last = r
+            if (!(r as Summarizer.SummaryResult.Unavailable).retryable) break
+        }
+        last
+    }
+
+    private fun request(url: String, key: String, model: String, text: String): Summarizer.SummaryResult {
         val request = JSONObject().apply {
-            put("model", LlmConfig.model(context))
+            put("model", model)
             put("temperature", 0)
             put("messages", JSONArray().apply {
                 put(JSONObject().put("role", "system").put("content", SYSTEM_PROMPT))
@@ -40,16 +57,16 @@ class CloudSummarizer(private val context: Context) : Summarizer {
             conn.outputStream.use { it.write(request.toString().toByteArray(Charsets.UTF_8)) }
             val code = conn.responseCode
             if (code !in 200..299) {
-                return@withContext Summarizer.SummaryResult.Unavailable("요약 LLM 오류 ($code)")
+                return Summarizer.SummaryResult.Unavailable("요약 LLM 오류 ($code, $model)", retryable = code == 429 || code == 404 || code == 503)
             }
             val body = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             val content = JSONObject(body)
                 .getJSONArray("choices").getJSONObject(0)
                 .getJSONObject("message").getString("content").trim()
-            if (content.isEmpty()) Summarizer.SummaryResult.Unavailable("요약 결과가 비었습니다")
+            return if (content.isEmpty()) Summarizer.SummaryResult.Unavailable("요약 결과가 비었습니다")
             else Summarizer.SummaryResult.Ok(content)
         } catch (e: Exception) {
-            Summarizer.SummaryResult.Unavailable(e.message ?: "요약 중 오류")
+            return Summarizer.SummaryResult.Unavailable(e.message ?: "요약 중 오류")
         } finally {
             conn?.disconnect()
         }
