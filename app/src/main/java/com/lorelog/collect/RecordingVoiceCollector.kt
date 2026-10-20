@@ -6,6 +6,8 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
 import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import com.lorelog.audio.VoicePlayer
 import android.media.MediaRecorder
 import android.os.Build
@@ -81,7 +83,15 @@ class RecordingVoiceCollector(context: Context) {
         val aec = if (AcousticEchoCanceler.isAvailable()) {
             runCatching { AcousticEchoCanceler.create(recorder.audioSessionId)?.apply { enabled = true } }.getOrNull()
         } else null
-        Log.i(TAG, "AEC ${if (aec?.enabled == true) "on" else "unavailable"}")
+        // 잡음 억제·자동 음량: 떨어진 사람 말을 키우고 배경 소음을 줄인다. 설정에서 끌 수 있다.
+        val clean = AudioPrefs.micClean(appContext)
+        val ns = if (clean && NoiseSuppressor.isAvailable()) {
+            runCatching { NoiseSuppressor.create(recorder.audioSessionId)?.apply { enabled = true } }.getOrNull()
+        } else null
+        val agc = if (clean && AutomaticGainControl.isAvailable()) {
+            runCatching { AutomaticGainControl.create(recorder.audioSessionId)?.apply { enabled = true } }.getOrNull()
+        } else null
+        Log.i(TAG, "AEC ${if (aec?.enabled == true) "on" else "unavailable"}, NS ${if (ns?.enabled == true) "on" else "off"}, AGC ${if (agc?.enabled == true) "on" else "off"}")
         val vad = VadWebRTC(
             SampleRate.SAMPLE_RATE_16K,
             FrameSize.FRAME_SIZE_320,
@@ -202,6 +212,8 @@ class RecordingVoiceCollector(context: Context) {
             LogRepository.setStatus("음성 녹음 루프 중단(${e.javaClass.simpleName}) — 기록을 껐다 켜 주세요")
         } finally {
             try { aec?.release() } catch (_: Exception) {}
+            try { ns?.release() } catch (_: Exception) {}
+            try { agc?.release() } catch (_: Exception) {}
             try { recorder.stop() } catch (_: Exception) {}
             try { recorder.release() } catch (_: Exception) {}
             try { vad.close() } catch (_: Exception) {}

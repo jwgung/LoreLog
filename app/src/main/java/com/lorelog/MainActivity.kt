@@ -167,6 +167,7 @@ private fun HomeScreen() {
     var update by remember { mutableStateOf<UpdateChecker.Result?>(null) }
     var checking by remember { mutableStateOf(false) }
     var btMic by remember { mutableStateOf(AudioPrefs.btMic(context)) }
+    var micClean by remember { mutableStateOf(AudioPrefs.micClean(context)) }
     var summaryOn by remember { mutableStateOf(SummaryPrefs.enabled(context)) }
     var callFolder by remember { mutableStateOf(CallRecordingImporter.folder(context)?.toString()) }
     val callFolderPicker = rememberLauncherForActivityResult(
@@ -632,6 +633,26 @@ private fun HomeScreen() {
                 },
             )
         }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("마이크 보정 (잡음 억제 · 자동 음량)", style = MaterialTheme.typography.bodyMedium)
+            Switch(
+                checked = micClean,
+                onCheckedChange = {
+                    micClean = it
+                    AudioPrefs.setMicClean(context, it)
+                    LoggerService.reapply(context)
+                },
+            )
+        }
+        Text(
+            "기기 내장 효과(NoiseSuppressor·AutomaticGainControl)를 녹음에 붙입니다. 배경 소음이 줄고 멀리서 하는 말이 커집니다. " +
+                "소리가 이상하게 뭉개지면 끄세요. 기기마다 지원이 다릅니다.",
+            style = MaterialTheme.typography.bodySmall,
+        )
         EngineOption(
             selected = txEngine == TranscribeConfig.Engine.GEMINI,
             title = "클라우드 · Gemini",
