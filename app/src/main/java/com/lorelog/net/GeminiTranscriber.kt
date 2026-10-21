@@ -95,8 +95,22 @@ object GeminiTranscriber {
         data class DailyQuota(val retryMs: Long) : Outcome()
         /** 이 모델만의 문제(응답 지연·과부하): 다음 모델로 넘어간다. */
         object Retry : Outcome()
+        /** HTTP 400: 요청 형식을 거부. thinking 설정 형식을 바꿔 같은 모델에 다시 보낸다. */
+        object BadRequest : Outcome()
         object Fail : Outcome()
     }
+
+    /**
+     * thinking 끄기 형식 후보(순서대로 시도). 받아쓰기엔 thinking 이 불필요하고 켜져 있으면 30~60초 걸리거나 503 이 난다.
+     * 0: thinkingBudget 0 (3.x Flash, 3.1-flash-lite) · 1: thinkingLevel minimal (3.5-flash-lite, 3.6-flash) · 2: 설정 없음.
+     * 모델별로 통한 형식은 [thinkingVariant] 에 기억한다(프로세스 수명).
+     */
+    private val THINKING_VARIANTS: List<(() -> JSONObject)?> = listOf(
+        { JSONObject().put("thinkingBudget", 0) },
+        { JSONObject().put("thinkingLevel", "minimal") },
+        null,
+    )
+    private val thinkingVariant = ConcurrentHashMap<String, Int>()
 
     suspend fun transcribe(context: Context, file: File): String? = withContext(Dispatchers.IO) {
         val key = LlmConfig.apiKey(context) ?: run {
@@ -109,7 +123,21 @@ object GeminiTranscriber {
         val b64 = Base64.encodeToString(file.readBytes(), Base64.NO_WRAP)
         for (model in candidates) {
             if (isModelPaused(model)) continue
-            when (val r = request(context, key, model, b64)) {
+            // thinking 설정은 모델마다 받는 형식이 다르고 예고 없이 바뀐다(2026-10-21: 3.5-flash-lite 가 thinkingBudget 0 을
+            // 400 으로 거부하기 시작). 400 이면 같은 모델에 다음 형식으로 바로 다시 보내고, 통한 형식을 기억한다.
+            var variant = thinkingVariant[model] ?: 0
+            var result: Outcome
+            while (true) {
+                result = request(context, key, model, b64, variant)
+                if (result is Outcome.BadRequest && variant < THINKING_VARIANTS.lastIndex) {
+                    variant++
+                    Log.w(TAG, "$model rejected thinking variant ${variant - 1}, retry with $variant")
+                    continue
+                }
+                if (result is Outcome.Ok) thinkingVariant[model] = variant
+                break
+            }
+            when (val r = result) {
                 is Outcome.Ok -> return@withContext r.text
                 is Outcome.DailyQuota -> {
                     val until = System.currentTimeMillis() + (r.retryMs.takeIf { it > 0 } ?: 60 * 60_000L)
@@ -118,6 +146,8 @@ object GeminiTranscriber {
                     continue
                 }
                 Outcome.Retry -> continue
+                // 모든 thinking 형식이 거부됨: 이 모델 자체가 요청을 못 받는 것. 다음 모델로.
+                Outcome.BadRequest -> continue
                 Outcome.Fail -> return@withContext null
             }
         }
@@ -131,7 +161,7 @@ object GeminiTranscriber {
         null
     }
 
-    private fun request(context: Context, key: String, model: String, b64: String): Outcome {
+    private fun request(context: Context, key: String, model: String, b64: String, thinking: Int): Outcome {
         // OpenAI 호환 base(.../openai)에서 네이티브 generateContent base 유도
         val base = LlmConfig.baseUrl(context).trim().trimEnd('/').removeSuffix("/openai")
         val url = "$base/models/$model:generateContent?key=$key"
@@ -141,9 +171,10 @@ object GeminiTranscriber {
                 put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", SYSTEM))))
                 // thinking 을 끈다: 받아쓰기엔 불필요하고, 켜져 있으면 3.6+ Flash 가 30~60초 걸리거나 503 이 난다
                 // (실측: 3.6-flash 503/타임아웃 → budget 0 이면 2.7초). Lite 모델도 이 설정을 받는다.
-                put("generationConfig", JSONObject()
-                    .put("temperature", 0)
-                    .put("thinkingConfig", JSONObject().put("thinkingBudget", 0)))
+                put("generationConfig", JSONObject().apply {
+                    put("temperature", 0)
+                    THINKING_VARIANTS[thinking]?.let { put("thinkingConfig", it()) }
+                })
                 put("contents", JSONArray().put(JSONObject().apply {
                     put(
                         "parts",
@@ -176,6 +207,7 @@ object GeminiTranscriber {
                     else "전사 실패 HTTP $code ($model): ${msg.take(80)}",
                 )
                 if (code == 503 || code == 504) return Outcome.Retry
+                if (code == 400) return Outcome.BadRequest
                 return Outcome.Fail
             }
             val resp = conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
