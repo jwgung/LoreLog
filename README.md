@@ -43,7 +43,7 @@ Everything runs in one foreground service, and you toggle each source in setting
 
 The core of LoreLog, and the trickiest part. Google's live recognizer keeps grabbing audio focus (interrupting your media), which is wrong for always-on capture, so voice is **recording-based**.
 
-- **Mic yielding** — Android lets one app hold the mic. When a voice-recorder or camera app comes to the front (needs usage-access permission) or another app actually starts recording, LoreLog releases the mic and reopens it when they are done. For apps not on the list, use "Yield mic 10 min" in the notification or on the main screen.
+- **Mic yielding** — Android lets one app hold the mic. When a voice-recorder or camera app comes to the front (needs usage-access permission) during a call (cellular or VoIP), or when another app actually starts recording, LoreLog releases the mic and reopens it when they are done. For apps not on the list, use "Yield mic 10 min" in the notification or on the main screen.
 - **VAD capture** — `AudioRecord` reads raw PCM and **Silero VAD** (a small neural network, ONNX) keeps only the segments where a human is speaking and ignores keyboards, dishes and air-con. Batches shorter than 3 s of speech are dropped. Inference is ~1 ms per 32 ms frame, so the idle load is near zero. It never grabs audio focus, so your media keeps playing.
 - **Transcription — you choose the engine** (settings → "Voice transcription"):
   - **Cloud · Gemini** — uses the "Gemini API key" from settings (shared with summaries). Free tier (Flash/Flash-Lite are free; the model dropdown marks free/paid, retired and slow models). (audio goes to Google)

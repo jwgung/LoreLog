@@ -68,13 +68,19 @@ class RecordingVoiceCollector(context: Context) {
      * 마이크를 다른 앱에 양보해야 하나. 안드로이드는 마이크를 한 앱만 쓰게 하므로(다른 쪽은 무음),
      * 우리가 들고 있으면 음성 녹음·카메라 동영상 앱이 "다른 앱이 마이크 사용 중"으로 실패한다.
      * 1) 수동 양보(알림·화면 버튼, 기본 10분) 2) 녹음·카메라 앱이 맨 앞에 있음(사용 정보 접근 권한 필요)
-     * 3) 다른 앱이 실제로 녹음 중(AudioManager 활성 녹음 목록). 하나라도 맞으면 마이크를 놓고 기다린다.
+     * 3) 통화 중(일반·VoIP) 4) 다른 앱이 실제로 녹음 중(AudioManager 활성 녹음 목록). 하나라도 맞으면 마이크를 놓고 기다린다.
      */
     private fun yieldReason(mySession: Int?): String? {
         val now = System.currentTimeMillis()
         if (_yieldedUntil.value > now) return "수동 양보"
         val fg = LogRepository.foregroundApp.value
         if (fg != null && fg in MIC_APPS) return "녹음·카메라 앱 사용 중"
+        // 통화 중: 전화 앱이 특권 경로로 녹음하고 우리 입력은 어차피 OS 가 무음 처리한다. 들고 있어 봐야
+        // 전화 앱의 통화 녹음과 부딪힐 수만 있으니 놓는다. MODE_IN_CALL = 일반 통화, MODE_IN_COMMUNICATION = VoIP
+        // (카카오톡 통화 등). 단 S 미만에서 블루투스 마이크를 켜면 우리가 IN_COMMUNICATION 을 쓰므로 그땐 제외.
+        val mode = try { audio.mode } catch (_: Exception) { AudioManager.MODE_NORMAL }
+        if (mode == AudioManager.MODE_IN_CALL) return "통화 중"
+        if (mode == AudioManager.MODE_IN_COMMUNICATION && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S || !btEnabled)) return "통화 중(VoIP)"
         val others = try {
             audio.activeRecordingConfigurations.filter { mySession == null || it.clientAudioSessionId != mySession }
         } catch (_: Exception) { emptyList() }
