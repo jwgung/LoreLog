@@ -89,6 +89,11 @@ object LogRepository {
                 .take(KEEP)
         }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
+    /** 지금 맨 앞에 있는 앱 패키지(AppUsageCollector 가 갱신, 저장하지 않음). 마이크 양보 판단에 쓴다. */
+    private val _foregroundApp = MutableStateFlow<String?>(null)
+    val foregroundApp: StateFlow<String?> = _foregroundApp.asStateFlow()
+    fun setForegroundApp(pkg: String?) { _foregroundApp.value = pkg }
+
     /** 아직 확정되지 않은 실시간 부분 인식 텍스트(저장하지 않음). */
     private val _partial = MutableStateFlow("")
     val partial: StateFlow<String> = _partial.asStateFlow()

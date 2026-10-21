@@ -22,6 +22,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.RandomAccessFile
@@ -59,8 +64,61 @@ class RecordingVoiceCollector(context: Context) {
         disableBtMic()
     }
 
+    /**
+     * 마이크를 다른 앱에 양보해야 하나. 안드로이드는 마이크를 한 앱만 쓰게 하므로(다른 쪽은 무음),
+     * 우리가 들고 있으면 음성 녹음·카메라 동영상 앱이 "다른 앱이 마이크 사용 중"으로 실패한다.
+     * 1) 수동 양보(알림·화면 버튼, 기본 10분) 2) 녹음·카메라 앱이 맨 앞에 있음(사용 정보 접근 권한 필요)
+     * 3) 다른 앱이 실제로 녹음 중(AudioManager 활성 녹음 목록). 하나라도 맞으면 마이크를 놓고 기다린다.
+     */
+    private fun yieldReason(mySession: Int?): String? {
+        val now = System.currentTimeMillis()
+        if (_yieldedUntil.value > now) return "수동 양보"
+        val fg = LogRepository.foregroundApp.value
+        if (fg != null && fg in MIC_APPS) return "녹음·카메라 앱 사용 중"
+        val others = try {
+            audio.activeRecordingConfigurations.filter { mySession == null || it.clientAudioSessionId != mySession }
+        } catch (_: Exception) { emptyList() }
+        if (others.isNotEmpty()) {
+            // 음성 비서 호출어 감지처럼 상시 녹음하는 시스템 구성요소가 잡히면 영원히 양보하게 된다.
+            // 다른 앱의 "녹음"이 30분 넘게 끊기지 않으면 그건 녹음이 아니라 상시 감지로 보고 무시한다.
+            if (othersSince == 0L) othersSince = now
+            if (now - othersSince < OTHERS_MAX_MS) return "다른 앱이 녹음 중"
+            if (!othersIgnoredLogged) { othersIgnoredLogged = true; Log.w(TAG, "another recorder active >30min; ignoring (always-on detector?)") }
+            return null
+        }
+        othersSince = 0L; othersIgnoredLogged = false
+        return null
+    }
+    private var othersSince = 0L
+    private var othersIgnoredLogged = false
+
+    /** 양보 조건이면 마이크를 놓고, 풀리면 다시 연다. 녹음 세션 하나가 끝날 때마다(양보·오류) 여기로 돌아온다. */
+    private suspend fun runVadLoop() {
+        var yielding = false
+        while (running && loopJob?.isActive == true) {
+            val reason = yieldReason(null)
+            if (reason != null) {
+                if (!yielding) {
+                    yielding = true
+                    Log.i(TAG, "mic yielded: $reason")
+                    LogRepository.setStatus("마이크 양보 중($reason) — 끝나면 자동 재개")
+                }
+                delay(YIELD_POLL_MS)
+                continue
+            }
+            if (yielding) {
+                yielding = false
+                Log.i(TAG, "mic resumed")
+                LogRepository.setStatus("")
+            }
+            val ok = recordSession()
+            if (!ok) return // 열기 실패·치명적 오류: 상태 줄에 이미 알렸다. 다음 start()/reapply 까지 쉰다
+        }
+    }
+
+    /** 마이크를 열어 양보 조건이 생기거나 stop() 될 때까지 VAD 루프를 돈다. 정상(양보)이면 true, 못 열었거나 죽었으면 false. */
     @Suppress("MissingPermission")
-    private fun runVadLoop() {
+    private fun recordSession(): Boolean {
         val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val recorder = try {
             AudioRecord(
@@ -71,13 +129,13 @@ class RecordingVoiceCollector(context: Context) {
         } catch (e: Exception) {
             Log.w(TAG, "AudioRecord create failed: ${e.javaClass.simpleName}: ${e.message}")
             LogRepository.setStatus("마이크를 열 수 없습니다")
-            return
+            return false
         }
         if (recorder.state != AudioRecord.STATE_INITIALIZED) {
             Log.w(TAG, "AudioRecord not initialized (state=${recorder.state})")
             LogRepository.setStatus("마이크 초기화 실패 — 다른 앱이 쓰는 중일 수 있음")
             try { recorder.release() } catch (_: Exception) {}
-            return
+            return false
         }
         // 에코 캔슬러: 이 기기가 재생 중인 소리(타임라인 "듣기")를 마이크 입력에서 뺀다. 지원 안 하면 null.
         val aec = if (AcousticEchoCanceler.isAvailable()) {
@@ -98,14 +156,14 @@ class RecordingVoiceCollector(context: Context) {
             Log.w(TAG, "VadSilero init failed: ${e.javaClass.simpleName}: ${e.message}")
             LogRepository.setStatus("음성 감지 모델 초기화 실패(${e.javaClass.simpleName}) — 기록을 껐다 켜 주세요")
             try { recorder.release() } catch (_: Exception) {}
-            return
+            return false
         }
         try {
             recorder.startRecording()
             if (recorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
                 Log.w(TAG, "startRecording did not enter RECORDING state")
                 LogRepository.setStatus("마이크 녹음 시작 실패")
-                return
+                return false
             }
             Log.i(TAG, "VAD loop started (bt=$btEnabled)")
             var frames = 0L
@@ -148,7 +206,10 @@ class RecordingVoiceCollector(context: Context) {
                 flushBatchOnly()
             }
 
+            val mySession = recorder.audioSessionId
             while (running && loopJob?.isActive == true) {
+                // 1초마다 양보 조건 확인. 맞으면 모은 것을 내보내고 마이크를 놓는다(바깥 루프가 기다렸다 다시 연다)
+                if (frames % YIELD_CHECK_FRAMES == 0L && yieldReason(mySession) != null) break
                 var read = 0
                 while (read < FRAME) {
                     val r = recorder.read(frame, read, FRAME - read)
@@ -206,11 +267,13 @@ class RecordingVoiceCollector(context: Context) {
                 }
             }
             emitBatch()
-            Log.i(TAG, "VAD loop ended normally after $frames frames")
+            Log.i(TAG, "record session ended after $frames frames")
+            return true
         } catch (e: Exception) {
             // 마이크 분실 등. 루프가 죽으면 다음 start()/reapply 까지 음성은 안 잡힌다.
             Log.w(TAG, "VAD loop died: ${e.javaClass.simpleName}: ${e.message}")
             LogRepository.setStatus("음성 녹음 루프 중단(${e.javaClass.simpleName}) — 기록을 껐다 켜 주세요")
+            return false
         } finally {
             try { aec?.release() } catch (_: Exception) {}
             try { ns?.release() } catch (_: Exception) {}
@@ -308,6 +371,31 @@ class RecordingVoiceCollector(context: Context) {
     companion object {
         private const val TAG = "RecordingVoice"
         private const val SAMPLE_RATE = 16000
+        private const val YIELD_POLL_MS = 1_000L
+        private const val OTHERS_MAX_MS = 30 * 60 * 1000L
+        private const val YIELD_CHECK_FRAMES = 31L // 32ms × 31 ≈ 1초
+        const val YIELD_DEFAULT_MS = 10 * 60 * 1000L
+
+        /** 맨 앞에 있으면 마이크를 양보할 앱(음성 녹음기·카메라). 이 앱들은 마이크를 못 잡으면 녹음을 시작하지 못한다. */
+        private val MIC_APPS = setOf(
+            "com.sec.android.app.voicenote", // 삼성 음성 녹음
+            "com.samsung.android.app.voicenote",
+            "com.google.android.apps.recorder", // 구글 레코더
+            "com.android.soundrecorder", // AOSP·샤오미
+            "com.coloros.soundrecorder", "com.oplus.soundrecorder", // 오포·원플러스
+            "com.sec.android.app.camera", // 삼성 카메라(동영상)
+            "com.google.android.GoogleCamera", "com.android.camera", "com.android.camera2",
+            "com.naver.clovanote", // 클로바노트
+        )
+
+        /** 수동 양보가 끝나는 시각(epoch ms). 0 이면 양보 아님. 알림·화면 버튼이 바꾸고 녹음 루프가 읽는다. */
+        private val _yieldedUntil = MutableStateFlow(0L)
+        val yieldedUntil: StateFlow<Long> = _yieldedUntil.asStateFlow()
+
+        /** [ms] 동안 마이크를 놓는다. 0 이하면 양보 해제. */
+        fun yieldMic(ms: Long = YIELD_DEFAULT_MS) {
+            _yieldedUntil.value = if (ms > 0) System.currentTimeMillis() + ms else 0L
+        }
         // Silero 는 16kHz 에서 512 샘플(32ms) 프레임. 아래 "프레임 수" 상수는 전부 32ms 기준.
         private const val FRAME = 512
         private const val SILENCE_CHECK_FRAMES = 156L // 32ms × 156 ≈ 5초

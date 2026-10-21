@@ -57,6 +57,7 @@ class AppUsageCollector(context: Context) {
         while (events.getNextEvent(event)) {
             if (event.eventType != UsageEvents.Event.ACTIVITY_RESUMED) continue
             val pkg = event.packageName ?: continue
+            LogRepository.setForegroundApp(pkg) // 우리 앱 포함, 마이크 양보 판단용
             if (pkg == appContext.packageName || pkg == lastPackage) continue
             lastPackage = pkg
             LogRepository.addApp(pkg, label(pkg), event.timeStamp)
@@ -73,6 +74,7 @@ class AppUsageCollector(context: Context) {
     }
 
     companion object {
-        private const val POLL_INTERVAL_MS = 6_000L
+        // 3초: 녹음·카메라 앱을 열면 그 안에 마이크를 양보해야 녹음 버튼이 바로 먹는다
+        private const val POLL_INTERVAL_MS = 3_000L
     }
 }

@@ -42,6 +42,10 @@ class LoggerService : Service() {
             stopLogging()
             return START_NOT_STICKY
         }
+        if (intent?.action == ACTION_YIELD) {
+            RecordingVoiceCollector.yieldMic(RecordingVoiceCollector.YIELD_DEFAULT_MS)
+            return START_STICKY
+        }
         if (intent?.action == ACTION_REAPPLY) {
             if (_isRunning.value) {
                 stopCollectors(); startCollectors()
@@ -161,6 +165,11 @@ class LoggerService : Service() {
             Intent(this, LoggerService::class.java).setAction(ACTION_STOP),
             PendingIntent.FLAG_IMMUTABLE,
         )
+        val yieldMic = PendingIntent.getService(
+            this, 2,
+            Intent(this, LoggerService::class.java).setAction(ACTION_YIELD),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
         val channel = if (NotifPrefs.hide(this)) LifeLogApp.CHANNEL_LOGGING_MIN else LifeLogApp.CHANNEL_LOGGING
         return NotificationCompat.Builder(this, channel)
             .setContentTitle(getString(R.string.notif_title))
@@ -169,6 +178,7 @@ class LoggerService : Service() {
             .setOngoing(true)
             .setContentIntent(openAppIntent(this))
             .addAction(0, getString(R.string.action_stop), stop)
+            .addAction(0, getString(R.string.action_yield_mic), yieldMic)
             .build()
     }
 
@@ -178,6 +188,7 @@ class LoggerService : Service() {
         private const val IDLE_NOTIF_ID = 2
         const val ACTION_STOP = "com.lorelog.action.STOP"
         const val ACTION_REAPPLY = "com.lorelog.action.REAPPLY"
+        const val ACTION_YIELD = "com.lorelog.action.YIELD_MIC"
 
         private val _isRunning = MutableStateFlow(false)
         val isRunning: StateFlow<Boolean> = _isRunning

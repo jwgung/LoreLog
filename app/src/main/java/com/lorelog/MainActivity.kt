@@ -39,6 +39,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
@@ -66,6 +67,7 @@ import com.lorelog.collect.CallRecordingImporter
 import com.lorelog.collect.PendingVoice
 import com.lorelog.collect.AudioPrefs
 import com.lorelog.audio.VoiceAudio
+import com.lorelog.collect.RecordingVoiceCollector
 import com.lorelog.audio.VoicePlayer
 import java.io.File
 import com.lorelog.collect.CollectorPrefs
@@ -294,6 +296,23 @@ private fun HomeScreen() {
             }
         }) {
             Text(if (running) "정지" else "기록 시작")
+        }
+        if (running) {
+            // 다른 앱(음성 녹음·카메라·통화 녹음)이 마이크를 써야 할 때. 녹음·카메라 앱은 열면 자동으로 양보되지만
+            // 목록에 없는 앱이나 사용 정보 접근 권한이 없을 때는 여기서 수동으로.
+            val yieldedUntil by RecordingVoiceCollector.yieldedUntil.collectAsStateWithLifecycle()
+            var now by remember { mutableStateOf(System.currentTimeMillis()) }
+            LaunchedEffect(yieldedUntil) { while (yieldedUntil > System.currentTimeMillis()) { kotlinx.coroutines.delay(1000); now = System.currentTimeMillis() } }
+            val left = yieldedUntil - now
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (left > 0) {
+                    Text("마이크 양보 중 · ${(left / 60000) + 1}분 남음", style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = { RecordingVoiceCollector.yieldMic(0) }) { Text("지금 재개") }
+                } else {
+                    OutlinedButton(onClick = { RecordingVoiceCollector.yieldMic() }) { Text("마이크 10분 양보") }
+                    Text("다른 앱으로 녹음할 때", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         }
 
         if (running && partial.isNotBlank()) {
