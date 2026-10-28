@@ -5,11 +5,12 @@ import re
 import ssl
 import sys
 from datetime import datetime
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from life.assistant.chat import chat_history, chat_reply
 from life.assistant.diaryfile import save_user
-from life.assistant.senders import list_senders, save_allow
+from life.assistant.senders import list_senders, load_allow, save_allow
 from life.assistant.todos import todo_act, todo_add_user
 from life.ingest import jobs
 from life.ingest.asr import transcribe_audio
@@ -17,6 +18,13 @@ from life.ingest.store import store
 
 DAY = r"(\d{4}-\d{2}-\d{2})"
 BODY_LIMIT = 1_000_000
+
+# The web screen is a handful of static files; the page holds no data, so they are served without the token
+# (the data calls it makes still need it). Only these names are served: no path from the request reaches the disk.
+WEB_DIR = Path(__file__).resolve().parent.parent.parent / "web"
+WEB_FILES = {"/": ("index.html", "text/html; charset=utf-8"), "/index.html": ("index.html", "text/html; charset=utf-8"),
+             "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/app.css": ("app.css", "text/css; charset=utf-8"),
+             "/favicon.svg": ("favicon.svg", "image/svg+xml")}
 
 
 class Reject(Exception):
@@ -124,6 +132,7 @@ def make_handler(root, token, cls, max_bytes):
             ("POST", r"/todos/extract", _todos_extract),
             ("POST", r"/todos/([0-9a-f]{10})", _todo_act),
             ("GET", r"/diary/senders", lambda s, m: (200, list_senders())),
+            ("GET", r"/diary/allow", lambda s, m: (200, {"allow": sorted(load_allow())})),
             ("POST", r"/diary/senders", _senders_post),
             ("GET", rf"/diary/{DAY}/chat", lambda s, m: (200, {"messages": chat_history(m.group(1))})),
             ("POST", rf"/diary/{DAY}/chat", _chat_post),
@@ -133,7 +142,24 @@ def make_handler(root, token, cls, max_bytes):
             ("POST", r"/ingest/([a-z0-9_-]{1,32})/?", _ingest),
         ]
 
+        def _static(self):
+            name, ctype = WEB_FILES[self.path]
+            try:
+                data = (WEB_DIR / name).read_bytes()
+            except OSError:
+                return self._send(404, {"error": "not found"})
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+            self.wfile.write(data)
+
         def _dispatch(self, method):
+            if method == "GET" and self.path in WEB_FILES:
+                return self._static()
             for meth, pattern, fn in self.ROUTES:
                 m = meth == method and re.fullmatch(pattern, self.path)
                 if not m:

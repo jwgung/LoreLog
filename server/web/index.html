@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>비서</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<div id="login" hidden>
+  <form id="loginForm">
+    <h1>비서</h1>
+    <p>이 서버의 수신 토큰을 한 번 입력하면 이 브라우저에 기억해 둡니다.</p>
+    <input id="tokenInput" type="password" autocomplete="off" placeholder="토큰" required>
+    <button type="submit">연결</button>
+    <p id="loginError" class="error"></p>
+  </form>
+</div>
+
+<div id="app" hidden>
+  <header>
+    <div class="title"><span id="dayLabel"></span></div>
+    <nav>
+      <button class="icon" id="btnTodos" title="할 일" aria-label="할 일"><span class="badge" id="todoBadge" hidden></span><svg viewBox="0 0 24 24"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg></button>
+      <button class="icon" id="btnDrawer" title="서랍" aria-label="서랍"><svg viewBox="0 0 24 24"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg></button>
+    </nav>
+  </header>
+
+  <main>
+    <section id="chat" class="pane">
+      <div id="thread" aria-live="polite"></div>
+      <form id="composer">
+        <div id="wrongChip" hidden><span id="wrongText"></span><button type="button" class="icon small" id="wrongClear" aria-label="취소"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
+        <div class="pill">
+          <textarea id="input" rows="1" placeholder="오늘 하루에 대해 말해 주세요"></textarea>
+          <button class="send" id="send" type="submit" aria-label="보내기"><svg viewBox="0 0 24 24"><path d="m5 12 7-7 7 7"/><path d="M12 19V5"/></svg></button>
+        </div>
+      </form>
+    </section>
+
+    <aside id="todos" class="pane">
+      <h2>할 일</h2>
+      <ul id="todoOpen"></ul>
+      <form id="todoAdd"><input id="todoText" placeholder="할 일 추가" maxlength="200"><button type="submit" class="icon" aria-label="추가"><svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg></button></form>
+      <details id="doneBox"><summary>최근 끝낸 것</summary><ul id="todoDone"></ul></details>
+      <p id="extracting" class="muted" hidden>기록에서 할 일을 찾고 있어요…</p>
+    </aside>
+  </main>
+
+  <section id="drawer" class="overlay" hidden>
+    <div class="sheet">
+      <div class="sheetHead"><h2>서랍</h2><button class="icon" id="drawerClose" aria-label="닫기"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
+      <h3>일기에 쓸 메신저</h3>
+      <p class="muted">체크한 상대의 알림만 하루 정리에 쓰입니다. 기본은 전부 제외입니다.</p>
+      <div id="senders"></div>
+      <div class="row"><button id="saveSenders">저장</button><span id="senderMsg" class="muted"></span></div>
+      <h3>이 브라우저</h3>
+      <button id="logout" class="ghost">연결 해제(토큰 지우기)</button>
+    </div>
+  </section>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -39,6 +39,21 @@ class Http(unittest.TestCase):
                                    ("POST", "/todos", {}), ("POST", "/transcribe", b"x"), ("POST", "/ingest/lorelog", b"{}")):
             self.assertEqual(self.call(method, path, body, token="wrong")[0], 401, path)
 
+    def test_web_screen_is_served_without_token_but_only_by_name(self):
+        for path, ctype in (("/", "text/html"), ("/app.js", "text/javascript"), ("/app.css", "text/css")):
+            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}") as r:
+                self.assertEqual(r.status, 200, path)
+                self.assertTrue(r.headers["Content-Type"].startswith(ctype), path)
+        for path in ("/../bin/life", "/%2e%2e/bin/life", "/web/app.js", "/app.js/", "/life/__init__.py"):
+            req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}")
+            with self.assertRaises(urllib.error.HTTPError) as cm:
+                urllib.request.urlopen(req)
+            self.assertEqual(cm.exception.code, 404, path)
+
+    def test_allow_list_is_readable_so_the_screen_keeps_rules_it_cannot_show(self):
+        self.call("POST", "/diary/senders", {"allow": ["앱: *", "카카오톡: 홍길동"]})
+        self.assertEqual(self.call("GET", "/diary/allow"), (200, {"allow": ["앱: *", "카카오톡: 홍길동"]}))
+
     def test_unknown_paths_are_404(self):
         self.assertEqual(self.call("GET", "/nope")[0], 404)
         self.assertEqual(self.call("POST", "/ingest/BadSource", b"{}")[0], 404)
