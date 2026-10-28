@@ -8,6 +8,7 @@ import com.lorelog.data.LogRepository
 import com.lorelog.data.PendingAudio
 import com.lorelog.net.GeminiTranscriber
 import com.lorelog.net.LlmConfig
+import com.lorelog.net.ServerTranscriber
 import com.lorelog.net.TranscribeConfig
 import com.lorelog.stt.WhisperEngine
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +37,7 @@ object PendingVoice {
     fun isReady(context: Context): Boolean = when (TranscribeConfig.engine(context)) {
         TranscribeConfig.Engine.GEMINI -> LlmConfig.isConfigured(context) && !GeminiTranscriber.isPaused(context)
         TranscribeConfig.Engine.WHISPER -> WhisperEngine.isReady(context)
+        TranscribeConfig.Engine.SERVER -> ServerTranscriber.isReady(context)
     }
 
     fun dir(context: Context): File {
@@ -63,6 +65,7 @@ object PendingVoice {
         when (TranscribeConfig.engine(context)) {
             TranscribeConfig.Engine.GEMINI -> GeminiTranscriber.transcribe(context, f)
             TranscribeConfig.Engine.WHISPER -> WhisperEngine.transcribe(context, f)
+            TranscribeConfig.Engine.SERVER -> ServerTranscriber.transcribe(context, f)
         }
     }
 
