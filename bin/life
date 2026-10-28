@@ -1,0 +1,360 @@
+#!/usr/bin/env python3
+"""life: add, run and check collection sources from one place. See `life -h`.
+
+The actual collection is done by mail-sync and calendar-sync. Secrets live in env (mode 600);
+what to collect lives in sources.toml (no secrets). Passwords are read without echo and never
+end up in chat or shell history. Currently one mail account and any number of calendars.
+"""
+import argparse
+import base64
+import getpass
+import imaplib
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import tomllib
+from datetime import datetime
+from pathlib import Path
+from urllib.parse import urlsplit
+
+CONF = Path.home() / ".config/vault-sync"
+ENV_FILE = CONF / "env"
+SOURCES_FILE = CONF / "sources.toml"
+STATUS_FILE = Path.home() / ".local/share/life/status.json"
+BIN = Path(__file__).resolve().parent
+SOURCES_HEADER = ("# What to collect. No passwords or tokens here (they live in env). Safe to commit.\n"
+                  "# `life add mail` and `life add calendar` rewrite this file, so comments are not preserved.\n\n")
+
+
+# ---------- reading and writing config ----------
+
+def read_env():
+    cfg = {}
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                cfg[k.strip()] = v.strip().strip('"').strip("'")
+    return cfg
+
+
+def atomic_write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(path.parent, 0o700)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def write_env(cfg):
+    atomic_write(ENV_FILE, "".join(f"{k}={v}\n" for k, v in cfg.items()))
+
+
+def read_sources():
+    return tomllib.loads(SOURCES_FILE.read_text(encoding="utf-8")) if SOURCES_FILE.exists() else {}
+
+
+def toml_value(v):
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, list):
+        return "[" + ", ".join(toml_value(x) for x in v) + "]"
+    return json.dumps(str(v), ensure_ascii=False)
+
+
+def dump_toml(data):
+    out = []
+    for table, vals in data.items():
+        out.append(f"[{table}]")
+        out += [f"{k} = {toml_value(v)}" for k, v in vals.items()]
+        out.append("")
+    return "\n".join(out)
+
+
+def write_sources(data):
+    atomic_write(SOURCES_FILE, SOURCES_HEADER + dump_toml(data))
+
+
+# ---------- IMAP folders ----------
+
+def imap_utf7_decode(s):
+    """Decode an IMAP folder name (modified UTF-7) for display. Stored values keep the server's raw name."""
+    def repl(m):
+        if m.group(1) == "":
+            return "&"
+        b = m.group(1).replace(",", "/")
+        return base64.b64decode(b + "=" * (-len(b) % 4)).decode("utf-16-be")
+    return re.sub(r"&([^-]*)-", repl, s)
+
+
+def parse_list_line(line):
+    """One IMAP LIST response line -> (raw name, set of flags), or None for unselectable folders."""
+    if isinstance(line, bytes):
+        line = line.decode("utf-8", errors="replace")
+    m = re.match(r'\(([^)]*)\)\s+("[^"]*"|NIL)\s+(.+)$', line.strip())
+    if not m:
+        return None
+    flags = {f.lower() for f in m.group(1).split()}
+    if "\\noselect" in flags:
+        return None
+    return m.group(3).strip().strip('"'), flags
+
+
+def default_folders(folders):
+    """INBOX plus the sent folder (by special-use flag if present, else by common names)."""
+    picked = [n for n, _ in folders if n.upper() == "INBOX"]
+    sent = [n for n, f in folders if "\\sent" in f] or [n for n, _ in folders if n.lower() in ("sent", "sent messages", "sent items")]
+    return picked + sent[:1]
+
+
+# ---------- prompts ----------
+
+def need_tty():
+    if not sys.stdin.isatty():
+        print("This command is interactive. Run it from a terminal.", file=sys.stderr)
+        sys.exit(2)
+
+
+def ask(prompt, default=""):
+    v = input(f"{prompt}{f' [{default}]' if default else ''}: ").strip()
+    return v or default
+
+
+def choose(items, labels, defaults, what):
+    """Pick from a numbered list. Enter keeps the [x] defaults; otherwise comma-separated numbers."""
+    for i, (it, lab) in enumerate(zip(items, labels), 1):
+        print(f"  {i:>2}. [{'x' if it in defaults else ' '}] {lab}")
+    raw = input(f"{what} - numbers, comma-separated (Enter = keep [x]): ").strip()
+    if not raw:
+        return list(defaults)
+    try:
+        return [items[int(x) - 1] for x in raw.split(",") if x.strip()]
+    except (ValueError, IndexError):
+        print("Invalid number.", file=sys.stderr)
+        sys.exit(2)
+
+
+# ---------- add ----------
+
+def add_mail():
+    need_tty()
+    env, src = read_env(), read_sources()
+    cur = src.get("mail", {})
+    host = ask("IMAP server", cur.get("host", ""))
+    port = int(ask("Port", str(cur.get("port", 993))))
+    user = ask("Account", env.get("IMAP_USER", ""))
+    pw = getpass.getpass("Password (hidden; Enter keeps the current one): ") or env.get("IMAP_PASSWORD", "")
+    if not (host and user and pw):
+        print("Server, account and password are all required.", file=sys.stderr)
+        sys.exit(2)
+    try:
+        imap = imaplib.IMAP4_SSL(host, port)
+        imap.login(user, pw)
+    except Exception as e:  # report only the error type so the password can never leak into the message
+        print(f"Connection failed: {type(e).__name__}. Nothing was saved.", file=sys.stderr)
+        sys.exit(1)
+    try:
+        typ, data = imap.list()
+    finally:
+        try:
+            imap.logout()
+        except Exception:
+            pass
+    folders = [p for p in (parse_list_line(x) for x in data or [] if x) if p]
+    if not folders:
+        print("Could not read the folder list.", file=sys.stderr)
+        sys.exit(1)
+    print(f"Connected. {len(folders)} folders:")
+    names = [n for n, _ in folders]
+    defaults = [n for n in cur.get("folders", []) if n in names] or default_folders(folders)
+    chosen = choose(names, [imap_utf7_decode(n) for n in names], defaults, "Folders to collect")
+    if not chosen:
+        print("No folder selected. Nothing was saved.", file=sys.stderr)
+        sys.exit(2)
+    env.update({"IMAP_USER": user, "IMAP_PASSWORD": pw})
+    write_env(env)
+    cur.update({"host": host, "port": port, "account": cur.get("account", "account"), "folders": chosen})
+    src["mail"] = cur
+    write_sources(src)
+    print(f"Saved: {ENV_FILE} (mode 600), {SOURCES_FILE}\nFolders: {', '.join(imap_utf7_decode(c) for c in chosen)}\nNext: life sync --dry-run")
+
+
+def add_calendar():
+    need_tty()
+    env, src = read_env(), read_sources()
+    if not (env.get("CALDAV_USER") or env.get("IMAP_USER")):
+        print("Run `life add mail` first (calendars use the same account).", file=sys.stderr)
+        sys.exit(2)
+    cur = src.get("calendar", {})
+    existing = (cur.get("urls") or [""])[0]
+    parts = urlsplit(existing)
+    server = ask("CalDAV server", f"{parts.scheme}://{parts.netloc}/" if parts.netloc else "")
+    if not server:
+        print("A CalDAV server URL is required.", file=sys.stderr)
+        sys.exit(2)
+    r = subprocess.run([sys.executable, str(BIN / "calendar-sync"), "--list", server], capture_output=True, text=True)
+    sys.stderr.write(r.stderr)
+    rows = [ln.split("\t") for ln in r.stdout.splitlines() if ln.count("\t") == 2]
+    rows = [x for x in rows if "VEVENT" in x[2]]
+    if not rows:
+        print("No calendar that supports events (VEVENT) was found.", file=sys.stderr)
+        sys.exit(1)
+    urls = [x[1] for x in rows]
+    defaults = [u for u in cur.get("urls", []) if u in urls] or urls
+    chosen = choose(urls, [f"{x[0]}  ({x[2]})" for x in rows], defaults, "Calendars to collect")
+    if not chosen:
+        print("No calendar selected. Nothing was saved.", file=sys.stderr)
+        sys.exit(2)
+    cur.update({"urls": chosen, "past_days": cur.get("past_days", 400), "future_days": cur.get("future_days", 400)})
+    src["calendar"] = cur
+    write_sources(src)
+    print(f"Saved: {SOURCES_FILE}\nNext: life sync --dry-run")
+
+
+# ---------- sync / status ----------
+
+def load_status():
+    try:
+        return json.loads(STATUS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def run_job(name, cmd, dry):
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    out = (r.stdout + r.stderr).strip()
+    print(f"== {name}\n{out}\n")
+    failed = r.returncode != 0
+    if not dry:
+        st = load_status()
+        now = datetime.now().astimezone().isoformat(timespec="seconds")
+        job = st.get(name, {})
+        job.update({"last_run": now, "ok": not failed,
+                    "detail": out.splitlines()[-1] if failed else (r.stdout.strip().splitlines() or [""])[-1]})
+        if not failed:
+            job["last_ok"] = now
+        st[name] = job
+        atomic_write(STATUS_FILE, json.dumps(st, ensure_ascii=False, indent=1))
+    return not failed
+
+
+def sync(dry):
+    extra = ["--dry-run"] if dry else []
+    src, ok, jobs = read_sources(), True, []
+    if src.get("mail", {}).get("folders"):
+        jobs.append(("mail", [sys.executable, str(BIN / "mail-sync")] + extra))
+    if src.get("calendar", {}).get("urls"):
+        jobs.append(("calendar", [sys.executable, str(BIN / "calendar-sync")] + extra))
+    if not jobs:
+        print("No sources configured. Add one with `life add mail` or `life add calendar`.", file=sys.stderr)
+        return 2
+    for name, cmd in jobs:
+        ok = run_job(name, cmd, dry) and ok
+    return 0 if ok else 1
+
+
+def status():
+    src, st = read_sources(), load_status()
+    configured = [k for k in ("mail", "calendar") if src.get(k)]
+    if not configured:
+        print("No sources configured.")
+        return 0
+    for name in configured:
+        j = st.get(name)
+        if not j:
+            print(f"{name:<9} never run")
+            continue
+        print(f"{name:<9} {'ok' if j.get('ok') else 'FAILED'}  last run {j.get('last_run', '?')}  "
+              f"last success {j.get('last_ok', 'never')}\n          {j.get('detail', '')}")
+    return 0
+
+
+# ---------- CLI ----------
+
+EPILOG = f"""\
+First-time setup:
+  life add mail            mail account and folders to collect
+  life add calendar        calendars to collect
+  life sync --dry-run      preview what would be collected, without saving
+  life sync                collect for real
+  life status              last run and result per source
+
+Files (secrets live only in env):
+  {ENV_FILE}
+      account and password (mode 600)
+  {SOURCES_FILE}
+      what to collect (no secrets)
+  {STATUS_FILE}
+      run results
+"""
+
+
+def build_parser():
+    fmt = argparse.RawDescriptionHelpFormatter
+    sub_kw = {"formatter_class": fmt}
+    p = argparse.ArgumentParser(prog="life", formatter_class=fmt, epilog=EPILOG,
+                                description="Add, run and check collection sources from one place.\n"
+                                            "The actual collection is done by mail-sync and calendar-sync; this command ties their setup and runs together.")
+    sub = p.add_subparsers(dest="cmd", metavar="<command>")
+    add = sub.add_parser("add", help="add a source (interactive)", description="Add a source interactively. Run it from a terminal.", **sub_kw)
+    kinds = add.add_subparsers(dest="kind", metavar="<kind>", required=True)
+    kinds.add_parser("mail", help="mail account (IMAP)", **sub_kw,
+                     description="Ask for server, account and password (the password is hidden), test the connection,\n"
+                                 "then let you pick folders from the server's list by number.\n"
+                                 "Nothing is saved if the connection fails. Currently one mail account only.")
+    kinds.add_parser("calendar", help="calendar (CalDAV)", **sub_kw,
+                     description="Discover calendars over CalDAV with the account from `life add mail` and let you pick by number.\n"
+                                 "Requires `life add mail` first. Only calendars that support events (VEVENT) are listed.")
+    sy = sub.add_parser("sync", help="collect from all configured sources", **sub_kw,
+                        description="Collect from every source configured in sources.toml. A timer only needs to call this one command.\n"
+                                    "Mail is capped at 300 messages per run, so a first import takes several runs.")
+    sy.add_argument("--dry-run", action="store_true", help="show what would be collected without saving (and without recording status)")
+    sub.add_parser("status", help="last run and result per source", **sub_kw,
+                   description="Show, for each configured source, the last run, the last success and a short result.")
+    p.add_argument("--selftest", action="store_true", help=argparse.SUPPRESS)
+    return p
+
+
+def selftest():
+    assert imap_utf7_decode("INBOX") == "INBOX" and imap_utf7_decode("&-") == "&"
+    enc = "&" + base64.b64encode("보관함".encode("utf-16-be")).decode().rstrip("=").replace("/", ",") + "-"
+    assert imap_utf7_decode(enc) == "보관함" and imap_utf7_decode("a" + enc + "b") == "a보관함b"
+    assert parse_list_line(b'(\\HasNoChildren \\Sent) "/" "Sent Messages"') == ("Sent Messages", {"\\hasnochildren", "\\sent"})
+    assert parse_list_line(b'(\\Noselect) "/" "[Gmail]"') is None
+    fl = [("INBOX", set()), ("Sent Messages", {"\\sent"}), ("Trash", {"\\trash"})]
+    assert default_folders(fl) == ["INBOX", "Sent Messages"]
+    data = {"mail": {"host": "h", "port": 993, "folders": ["INBOX", "한글"]}, "calendar": {"urls": ["https://x/"], "past_days": 400}}
+    assert tomllib.loads(dump_toml(data)) == data
+    print("selftest ok")
+
+
+def main():
+    p = build_parser()
+    a = p.parse_args()
+    if a.selftest:
+        return selftest()
+    if a.cmd == "add":
+        return add_mail() if a.kind == "mail" else add_calendar()
+    if a.cmd == "sync":
+        return sync(a.dry_run)
+    if a.cmd == "status":
+        return status()
+    p.print_help()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

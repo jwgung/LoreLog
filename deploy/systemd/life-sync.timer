@@ -1,0 +1,11 @@
+[Unit]
+Description=Collect life sources every hour
+
+[Timer]
+OnBootSec=7min
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

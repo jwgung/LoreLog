@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+# secrets and personal data never go in this repo
+*.env
+!*.env.example
+todos.json
+diary.json
+raw/

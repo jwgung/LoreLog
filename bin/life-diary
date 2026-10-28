@@ -1,0 +1,626 @@
+#!/usr/bin/env python3
+"""life-diary: build the assistant's draft of one day from collected records.
+
+Reads Mail/, Events/ notes and LoreLog raw records for a day, asks the local LLM for a
+short day summary plus one question, and writes <vault>/Diary/<date>.md.
+Only the AI part is regenerated on re-run; the user's corrections and reflection are kept.
+Personal data never leaves the machine: the LLM endpoint must be local (see LIFE_LLM_URL).
+"""
+import argparse
+import collections
+import hashlib
+import datetime as dt
+import json
+import os
+import re
+import sys
+import urllib.request
+from pathlib import Path
+
+VAULT = Path(os.environ.get("LIFE_VAULT", Path.home() / "Obsidian"))
+DATA = Path(os.environ.get("LIFE_DATA_DIR", Path.home() / ".local/share/life"))
+LLM_URL = os.environ.get("LIFE_LLM_URL", "http://10.100.3.232:8000/v1")
+LLM_MODEL = os.environ.get("LIFE_LLM_MODEL", "ultivis-vl")
+
+AI_BEGIN, AI_END = "<!-- ai:begin -->", "<!-- ai:end -->"
+NOISE_PKGS = ("com.android.systemui", "com.sec.android.app.launcher", "com.samsung.android.honeyboard")
+
+
+def front(path, keys):
+    head = path.read_text(encoding="utf-8", errors="replace")[:3000]
+    out = {}
+    for k in keys:
+        m = re.search(rf"^{k}:[ \t]*(.*)$", head, re.M)
+        out[k] = m.group(1).strip().strip('"') if m else ""
+    return out
+
+
+def local(ts_ms):
+    return dt.datetime.fromtimestamp(int(ts_ms) / 1000)
+
+
+ALLOW_FILE = Path(os.environ.get("LIFE_DIARY_CONFIG", Path.home() / ".config/vault-sync/diary.json"))
+
+
+def load_allow():
+    """Messenger notifications the user allowed for the diary: 'label: title' or 'label: *'. Default: none."""
+    try:
+        return set(json.loads(ALLOW_FILE.read_text(encoding="utf-8")).get("allow", []))
+    except (OSError, ValueError):
+        return set()
+
+
+def save_allow(items):
+    ALLOW_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ALLOW_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"allow": sorted(set(items))}, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.chmod(0o600)
+    tmp.replace(ALLOW_FILE)
+
+
+def is_allowed(allow, label, title):
+    return f"{label}: *" in allow or f"{label}: {title}" in allow
+
+
+def list_senders(days=14):
+    """Who sent notifications in the last days: [{label, title, count, allowed}], most active first."""
+    allow = load_allow()
+    counts = collections.Counter()
+    for i in range(days):
+        day = (dt.date.today() - dt.timedelta(days=i)).isoformat()
+        path = DATA / "raw/lorelog" / f"{day}.ndjson"
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("type") == "notification" and d.get("pkg") not in NOISE_PKGS and d.get("title"):
+                counts[(d.get("label"), d.get("title"))] += 1
+    return [{"label": l, "title": t, "count": n, "allowed": is_allowed(allow, l, t)} for (l, t), n in counts.most_common()]
+
+
+def gather_events(day):
+    rows = []
+    for p in (VAULT / "Events").glob(f"{day}*.md"):
+        f = front(p, ["title", "start", "end", "all_day"])
+        rows.append(f"{f['start'][11:16] or '종일'}~{f['end'][11:16]} {f['title']}")
+    return sorted(rows)
+
+
+def _subj_key(subject):
+    """Subject without RE:/FW: prefixes, reduced to letters and digits, for matching a reply to its request."""
+    sub = re.sub(r"^(\s*(re|fw|fwd|회신|전달)\s*:\s*)+", "", subject or "", flags=re.I)
+    return re.sub(r"[^0-9a-z가-힣]", "", sub.lower())
+
+
+def sent_index(days=21):
+    """Mail the user sent in the last days: [(subject_key, in_reply_to, epoch_seconds)]. Only the frontmatter is read."""
+    out, cutoff = [], dt.date.today() - dt.timedelta(days=days)
+    for p in (VAULT / "Mail").glob("*/*.md"):
+        m = re.match(r"(\d{4}-\d{2}-\d{2})-(\d{2})(\d{2})-", p.name)
+        if not m or dt.date.fromisoformat(m.group(1)) < cutoff:
+            continue
+        f = front(p, ["mail_source", "subject", "in_reply_to"])
+        if "Sent" not in f["mail_source"]:
+            continue
+        when = dt.datetime.fromisoformat(f"{m.group(1)}T{m.group(2)}:{m.group(3)}:00").timestamp()
+        out.append((_subj_key(f["subject"]), f["in_reply_to"].strip("<>"), when))
+    return out
+
+
+def replied(sent, subject, mail_id, received_at):
+    """True if the user sent a reply to this mail after it arrived (same thread subject, or an in-reply-to pointing at it)."""
+    key, mid = _subj_key(subject), (mail_id or "").strip("<>")
+    return any(w >= received_at and ((key and k == key) or (mid and r == mid)) for k, r, w in sent)
+
+
+BULK_RE = re.compile(r"(no-?reply|newsletter|news@|info@|support@|marketing|promo|stibee|mailchimp|광고|뉴스레터|\(광고\))", re.I)
+
+
+def gather_mail(day):
+    """Mail of the day. Marked, not removed: bulk senders, mail the user sent, mail the user already replied to.
+    'RE: RE:' chains collapse to one row."""
+    rows, seen, sent = [], set(), sent_index()
+    for p in (VAULT / "Mail").glob(f"*/{day}-*.md"):
+        f = front(p, ["time", "from", "subject", "mail_source", "mail_id"])
+        subj = re.sub(r"^(\s*(re|fw|fwd|회신|전달)\s*:\s*)+", "", f["subject"], flags=re.I).strip()
+        key = (f["from"], subj)
+        if key in seen:
+            continue
+        seen.add(key)
+        if "Sent" in f["mail_source"]:
+            mark = " [내가 보냄]"
+        elif BULK_RE.search(f["from"] + " " + f["subject"]):
+            mark = " [대량 발송]"
+        else:
+            hh, mm = (f["time"] or "00:00").split(":")[:2]
+            received = dt.datetime.fromisoformat(f"{day}T{int(hh):02d}:{int(mm):02d}:00").timestamp()
+            mark = " [이미 회신함]" if replied(sent, f["subject"], f["mail_id"], received) else ""
+        rows.append(f"{f['time']} {f['from']} — {subj}{mark}")
+    return sorted(rows)
+
+
+def load_conversations():
+    """Latest state of every LoreLog conversation (an updated status arrives as a new line)."""
+    convs = {}
+    for path in sorted((DATA / "raw/lorelog").glob("*.ndjson")):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("type") == "conversation":
+                convs[d["id"]] = d
+    return convs
+
+
+def confirmed_voice_label(convs, ts_ms):
+    """Participants of the conversation this voice belongs to if the user confirmed it as theirs, else None.
+    ambient / pending / skipped conversations and voice outside any conversation are never used."""
+    for c in convs.values():
+        if c.get("status") in ("tagged", "auto") and int(c["start_ms"]) <= ts_ms <= int(c["end_ms"]):
+            return c.get("participants") or "?"
+    return None
+
+
+def gather_lorelog(day):
+    path = DATA / "raw/lorelog" / f"{day}.ndjson"
+    out = {"voice": [], "comm": [], "notif": collections.Counter(), "msgs": collections.defaultdict(list), "apps": collections.Counter(), "places": []}
+    if not path.exists():
+        return out
+    places = []
+    convs = load_conversations()
+    allow = load_allow()
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        t = d.get("type")
+        if t == "voice" and d.get("text"):
+            who = confirmed_voice_label(convs, int(d["ts"]))
+            if who is not None:
+                out["voice"].append(f"{local(d['ts']):%H:%M} (with {who}) {d['text'][:200]}")
+        elif t == "comm":
+            out["comm"].append(f"{local(d['ts']):%H:%M} {d.get('kind')}/{d.get('direction')} {d.get('party_name') or d.get('party')} {d.get('content', '')}")
+        elif t == "notification" and d.get("pkg") not in NOISE_PKGS and is_allowed(allow, d.get("label"), d.get("title")):
+            key = f"{d.get('label')}: {d.get('title')}"
+            out["notif"][key] += 1
+            if d.get("text"):
+                out["msgs"][key].append(f"{local(d['ts']):%H:%M} {d['text'][:80]}")
+        elif t == "app" and d.get("pkg") not in NOISE_PKGS:
+            out["apps"][d.get("label")] += 1
+        elif t == "location":
+            places.append((local(d["ts"]), round(float(d["lat"]), 3), round(float(d["lon"]), 3)))
+    # collapse consecutive points in the same ~100 m cell into stays
+    stay = None
+    for ts, la, lo in sorted(places):
+        if stay and stay[2:] == (la, lo):
+            stay[1] = ts
+        else:
+            stay = [ts, ts, la, lo]
+            out["places"].append(stay)
+    if out["places"]:
+        cells = {(la, lo) for _, _, la, lo in out["places"]}
+        out["places"] = [f"위치 기록 {out['places'][0][0]:%H:%M}~{out['places'][-1][1]:%H:%M}, 서로 다른 장소 {len(cells)}곳 (이름 없음)"]
+    return out
+
+
+def build_context(day, summary=False):
+    lore = gather_lorelog(day)
+    parts = [
+        ("일정", gather_events(day)),
+        ("받거나 보낸 메일(제목만)", gather_mail(day)[:60]),
+        ("통화/문자", lore["comm"]),
+        ("대화(사용자가 본인 대화로 확인한 음성 전사, 오류 있음)", lore["voice"][:30]),
+        ("메신저 알림(사용자가 허용한 상대만, 건수: 최근 내용)", [f"{k} x{v}: " + " / ".join(lore["msgs"][k][-4:]) for k, v in lore["notif"].most_common(15)]),
+        ("앱 사용(기록 횟수)", [f"{k} x{v}" for k, v in lore["apps"].most_common(12)]),
+        ("위치", lore["places"][:20]),
+    ]
+    if summary:  # 장소 이동 횟수·앱 사용 횟수는 정리를 "다양한 앱을 활용하셨어요" 같은 빈말로 채웠다. 재료에서는 두지 않는다.
+        parts = [(n, r) for n, r in parts if n not in ("앱 사용(기록 횟수)", "위치")]
+    return "\n".join(f"## {name}\n" + ("\n".join(f"- {r}" for r in rows) if rows else "- (없음)") for name, rows in parts)
+
+
+SYSTEM = """너는 사용자의 개인 비서다. 오늘 수집된 기록을 보고 하루를 정리해서 사용자에게 말하듯 전한다.
+규칙:
+- 기록에 없는 것은 쓰지 않는다. 추측은 "~로 보여요", "~한 것 같아요"로 표시하고 단정하지 않는다.
+- 직함, 감정, 관계는 기록에 적힌 그대로만 쓴다. 기록에 없는 직함을 붙이지 않는다.
+- 다른 사람이 보낸 메시지나 한 말은 사용자가 한 말로 쓰지 않는다. "~님이 ~라고 하셨어요"처럼 주체를 구분한다.
+- 대화 전사는 사용자가 본인 대화로 확인한 것이지만 오류가 있다. 상대의 사적인 내용(가족, 건강 등)은 자세히 옮기지 않는다.
+- 하루의 흐름이 보이게 쓴다. 오전, 오후, 저녁 순서로 이어지는 5~7개의 짧은 문장(각각 한 줄)이다. 같은 종류의 일(메일 여러 통 등)은 한 문장으로 묶고, 가장 의미 있는 일(통화, 일정, 결정이 필요한 요청)을 먼저 구체적으로 쓴다.
+- "[내가 보냄]"이 붙은 메일은 사용자가 보낸 것이다("~에게 메일을 보내셨어요"). 받은 메일과 구분한다. "[대량 발송]"이 붙은 메일, 광고, 시스템 알림은 쓰지 않는다. 앱 사용 횟수나 장소 이동 횟수는 쓰지 않는다.
+- 쓰지 않는 빈말: "다양한 앱을 활용하셨어요", "여러 곳을 이동하셨어요", "업무 관련 대화를 나누셨어요"처럼 무엇인지 알 수 없는 문장. 구체적인 주제를 모르면 그 문장을 빼거나 "동료분들과 연락이 오갔어요"처럼 사실만 쓴다.
+- 메신저 알림은 제목보다 내용을 근거로 한다. 점심·잡담은 업무로 쓰지 않고 한 줄 이내로 쓰거나 뺀다.
+- 시각은 기록에 적힌 시각을 그대로 옮긴다. 24시간제를 오전/오후로 바꿀 때 틀리지 않게 한다(19:15 = 저녁 7시 15분, 08:34 = 오전 8시 34분).\n- 정리는 존댓말로 비서가 말하듯 쓰고 "~했어요", "~셨어요", "~보여요"로 끝낸다. 글머리 기호를 붙이지 않는다.
+- 질문은 하나만. 오늘 가장 의미 있는 일(통화, 일정 변경, 결정이 필요한 요청) 하나를 골라 "그때 어떠셨어요?"를 묻는 식으로, 사용자의 마음이나 선택 이유를 부드러운 존댓말 한 문장으로 묻는다. 다른 사람의 말을 사용자의 말로 단정하는 질문은 하지 않는다.
+JSON만 출력: {"summary": "문장1\\n문장2\\n...", "question": "..."}"""
+
+
+FILLER = re.compile(r"(다양한 앱|앱과 메신저를 활용|곳의 장소|장소를 이동|여러 곳을 이동|업무 관련 대화를 나누|메시지를 주고받으셨어요$)")
+
+
+_CLOCK = re.compile(r"(오전|오후|저녁|밤|아침|점심|정오|새벽)?\s*(\d{1,2})\s*시\s*(?:(\d{1,2})\s*분)?")
+
+
+def _minutes(line, fallback):
+    """Minutes since midnight of the first clock time in the sentence; 점심/정오 without a number -> 12:00. Unknown -> fallback."""
+    m = _CLOCK.search(line)
+    if not m:
+        return 12 * 60 if re.search(r"점심|정오", line) else fallback
+    part, h, mi = m.group(1), int(m.group(2)), int(m.group(3) or 0)
+    if part in ("오후", "저녁", "밤") and h < 12:
+        h += 12
+    return h * 60 + mi
+
+
+def drop_filler(summary):
+    """Remove filler sentences and put the rest in time order (the model often mixes the order)."""
+    lines = [l for l in summary.splitlines() if l.strip() and not FILLER.search(l)]
+    keyed, last = [], 0
+    for i, l in enumerate(lines):
+        last = _minutes(l, last)
+        keyed.append((last, i, l))
+    return "\n".join(l for _, _, l in sorted(keyed))
+
+
+def ask_llm(context, day):
+    body = {
+        "model": LLM_MODEL,
+        "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": f"날짜: {day}\n\n{context}"}],
+        "temperature": 0.3,
+        "max_tokens": 1500,
+        "chat_template_kwargs": {"enable_thinking": False},
+        "response_format": {"type": "json_object"},
+    }
+    req = urllib.request.Request(LLM_URL.rstrip("/") + "/chat/completions", json.dumps(body).encode(), {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=180) as r:
+        text = json.load(r)["choices"][0]["message"]["content"]
+    m = re.search(r"\{.*\}", text, re.S)
+    data = json.loads(m.group(0))
+    data["summary"] = drop_filler(data.get("summary", "")) or data.get("summary", "")
+    return data
+
+
+USER_PART = """
+## 정정
+<!-- 틀린 줄이 있으면 "틀린 것 → 맞는 것" 한 줄씩 -->
+
+## 회고
+<!-- 오늘 어땠는지 자유롭게 -->
+"""
+
+
+CHAT_SYSTEM = """너는 사용자의 개인 비서다. 사용자가 방금 한 말에 짧게 답한다.
+규칙:
+- 존댓말로 한두 문장만 말한다. 길게 설명하거나 목록으로 쓰지 않는다.
+- 사용자가 자기 상황이나 기분을 말하면 먼저 그 말을 짧게 받아 준다("정신없는 하루셨네요"처럼 들은 그대로). 진단하거나 조언하지 않는다. 오늘 기록과 이어지는 것이 분명할 때만 한 가지를 덧붙인다.
+- 기록에 대해 물었을 때만 기록으로 답한다. 모르거나 기록에 없으면 그때 "기록에는 없어요"라고 말한다. 사용자의 말에 기록이 없다고 되받지 않는다.
+- 사용자가 한 말은 그대로 존중한다. 기록과 다르면 사용자의 말이 맞다. 기록과 어긋나도 따지지 않는다.
+- 감정이나 이유를 단정하거나 진단하지 않는다. 위로나 조언은 사용자가 원할 때만 짧게 한다.
+- 사용자가 틀린 문장을 고쳐 주면 "알겠어요"로 받고, 고친 내용을 한 줄로 다시 확인한다.
+- 질문은 꼭 필요할 때만 하나만 한다. 같은 질문을 반복하지 않는다.
+- 다른 사람의 사생활을 새로 꺼내거나 추측하지 않는다."""
+
+
+def chat_log(day):
+    path = DATA / "raw/diary" / f"{day}.ndjson"
+    out = []
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("type") == "chat":
+                out.append(d)
+    return out
+
+
+def append_chat(day, role, text):
+    raw = DATA / "raw/diary"
+    raw.mkdir(parents=True, exist_ok=True)
+    f = raw / f"{day}.ndjson"
+    rec = {"type": "chat", "ts": int(dt.datetime.now().timestamp() * 1000), "date": day, "role": role, "text": text,
+           "_src": "diary", "_class": "personal"}
+    with open(f, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n")
+    f.chmod(0o600)
+
+
+def chat_history(day):
+    """Today's exchange for the app to show again: [{role, text, wrong?}]. A correction is stored with a wrapper line; unwrap it."""
+    out = []
+    for t in chat_log(day):
+        text, wrong = t["text"], None
+        m = re.match(r'^\(정리의 이 문장이 틀렸다고 알려 주셨어요: "(.*?)"\)\n(.*)$', text, re.S)
+        if t["role"] == "user" and m:
+            wrong, text = m.group(1), m.group(2)
+        out.append({"role": t["role"], "text": text, **({"wrong": wrong} if wrong else {})})
+    return out
+
+
+def chat_reply(day, message, wrong=None):
+    """Save what the user said (a correction or a word for the diary), then answer it with the local LLM."""
+    draft = read_day(day)
+    if wrong:
+        save_user(day, {"append": True, "corrections": [{"wrong": wrong, "right": message}]})
+    else:
+        save_user(day, {"append": True, "reflection": message})
+    head = CHAT_SYSTEM + "\n\n[오늘 기록]\n" + build_context(day)
+    if draft.get("exists"):
+        head += "\n\n[비서가 오늘 정리해서 전한 말]\n" + "\n".join(draft["summary"])
+    msgs = [{"role": "system", "content": head}]
+    if draft.get("exists") and draft.get("question"):
+        msgs.append({"role": "assistant", "content": draft["question"]})
+    for t in chat_log(day)[-12:]:
+        msgs.append({"role": t["role"], "content": t["text"]})
+    user = message if not wrong else f'(정리의 이 문장이 틀렸다고 알려 주셨어요: "{wrong}")\n{message}'
+    msgs.append({"role": "user", "content": user})
+    body = {"model": LLM_MODEL, "messages": msgs, "temperature": 0.5, "max_tokens": 300,
+            "chat_template_kwargs": {"enable_thinking": False}}
+    req = urllib.request.Request(LLM_URL.rstrip("/") + "/chat/completions", json.dumps(body).encode(), {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        reply = json.load(r)["choices"][0]["message"]["content"].strip()
+    append_chat(day, "user", user)
+    append_chat(day, "assistant", reply)
+    return reply
+
+
+TODO_FILE = DATA / "todos.json"
+TODO_SYSTEM = """너는 사용자의 개인 비서다. 기록에서 **사용자가 해야 할 일**을 뽑는다.
+규칙:
+- 기록에 분명히 드러난 것만 뽑는다: 사용자에게 온 요청·문의·마감·약속. 짐작해서 만들지 않는다.
+- "[이미 회신함]", "[내가 보냄]", "[대량 발송]"이 붙은 메일은 뽑지 않는다. 광고, 뉴스레터, 단순 알림, 이미 끝난 일도 뽑지 않는다.
+- title은 20자 안팎의 짧은 한 줄로, "무엇을 하기"로 끝낸다. 사람은 "OO 님"으로 쓰고 직함·회사명은 뺀다.
+  좋은 예: "한도윤 님 도입 문의에 답장하기", "컨설팅 추진일정 확인하고 회신하기", "워크숍 발표자료 보내기", "견적 검토 의견 전달하기".
+  나쁜 예(중복): "OO 문의 회신에 답하기", "요청에 응하기", "관련 메일 확인하기".
+- source는 메일, 통화, 메신저, 일정, 음성 중 하나.
+- source가 메일이면 mail_subject에 기록의 메일 제목을 RE:/FW: 없이 그대로 적는다. 아니면 빈 문자열.
+- due는 기록에 기한이 적혀 있을 때만 그 표현을 쓰고(예: "금요일까지"), 없으면 빈 문자열.
+- 많아야 5개. 없으면 빈 목록.
+JSON만 출력: {"todos": [{"title": "...", "source": "메일", "mail_subject": "", "due": ""}]}"""
+
+
+def _norm(t):
+    return re.sub(r"[^0-9a-z가-힣]", "", t.lower())
+
+
+def load_todos():
+    try:
+        return json.loads(TODO_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"items": [], "last_extract": 0}
+
+
+def save_todos(d):
+    TODO_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = TODO_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.chmod(0o600)
+    tmp.replace(TODO_FILE)
+
+
+def todo_view():
+    d = load_todos()
+    if todo_autoclose(d):
+        save_todos(d)
+    items = d["items"]
+    return {
+        "open": [i for i in items if i["status"] == "open"],
+        "done": [i for i in items if i["status"] == "done"][-10:][::-1],
+    }
+
+
+def _add_todo(d, title, source, due, day, mail_subject=""):
+    n = _norm(title)
+    if not n or any(_norm(i["title"]) == n for i in d["items"]):  # a dismissed one never comes back
+        return False
+    d["items"].append({"id": hashlib.sha1(n.encode()).hexdigest()[:10], "title": title.strip(), "source": source, "due": due,
+                       "status": "open", "day": day, "thread": _subj_key(mail_subject) if source == "메일" else "",
+                       "created": int(dt.datetime.now().timestamp() * 1000)})
+    return True
+
+
+def todo_autoclose(d):
+    """Mark open mail to-dos done when the user has since replied in the same thread (recorded as auto-closed)."""
+    sent, closed = sent_index(), 0
+    for i in d["items"]:
+        if i["status"] == "open" and i.get("thread") and any(k == i["thread"] and w * 1000 >= i["created"] for k, _, w in sent):
+            i["status"], i["auto"] = "done", True
+            closed += 1
+    return closed
+
+
+def todo_extract(day, force=False):
+    """Ask the local LLM for to-dos in the day's records (and yesterday's). Throttled to once per 30 minutes."""
+    d = load_todos()
+    now = dt.datetime.now().timestamp()
+    if not force and now - d.get("last_extract", 0) < 1800:
+        return 0
+    prev = (dt.date.fromisoformat(day) - dt.timedelta(days=1)).isoformat()
+    ctx = f"[어제 {prev}]\n{build_context(prev)}\n\n[오늘 {day}]\n{build_context(day)}"
+    body = {"model": LLM_MODEL, "messages": [{"role": "system", "content": TODO_SYSTEM}, {"role": "user", "content": ctx}],
+            "temperature": 0.2, "max_tokens": 700, "chat_template_kwargs": {"enable_thinking": False},
+            "response_format": {"type": "json_object"}}
+    req = urllib.request.Request(LLM_URL.rstrip("/") + "/chat/completions", json.dumps(body).encode(), {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=180) as r:
+        text = json.load(r)["choices"][0]["message"]["content"]
+    found = json.loads(re.search(r"\{.*\}", text, re.S).group(0)).get("todos", [])
+    added = sum(_add_todo(d, t.get("title", ""), t.get("source", ""), t.get("due", ""), day, t.get("mail_subject", "")) for t in found[:5] if isinstance(t, dict))
+    todo_autoclose(d)
+    d["last_extract"] = now
+    save_todos(d)
+    return added
+
+
+def todo_act(tid, action):
+    d = load_todos()
+    for i in d["items"]:
+        if i["id"] == tid:
+            i["status"] = {"done": "done", "dismiss": "dismissed", "reopen": "open"}[action]
+            save_todos(d)
+            return True
+    return False
+
+
+def todo_add_user(text, day):
+    d = load_todos()
+    ok = _add_todo(d, text, "내가 말한 것", "", day)
+    save_todos(d)
+    return ok
+
+
+def section(text, name):
+    """Body of '## <name>' up to the next '## ' heading or the end, without the placeholder comment."""
+    m = re.search(rf"^## {re.escape(name)}[ \t]*\n(.*?)(?=^## |\Z)", text, re.M | re.S)
+    return re.sub(r"<!--.*?-->", "", m.group(1), flags=re.S).strip() if m else ""
+
+
+def set_section(text, name, body):
+    pat = re.compile(rf"(^## {re.escape(name)}[ \t]*\n).*?(?=^## |\Z)", re.M | re.S)
+    new = body.strip() + "\n\n" if body.strip() else ""
+    if pat.search(text):
+        return pat.sub(lambda m: m.group(1) + new, text, count=1)
+    return text.rstrip("\n") + f"\n\n## {name}\n{new}"
+
+
+def read_day(day):
+    out = VAULT / "Diary" / f"{day}.md"
+    text = out.read_text(encoding="utf-8") if out.exists() else ""
+    m = re.search(re.escape(AI_BEGIN) + "(.*?)" + re.escape(AI_END), text, re.S)
+    if not m:
+        return {"date": day, "exists": False}
+    ai = m.group(1)
+    g = re.search(r"^ai_generated:[ \t]*(.+)$", text, re.M)
+    stale = True
+    if g:
+        generated = dt.datetime.fromisoformat(g.group(1).strip()).timestamp()
+        inputs = [DATA / "raw/lorelog" / f"{day}.ndjson", ALLOW_FILE]
+        stale = any(p.exists() and p.stat().st_mtime > generated for p in inputs)
+    summary = [l[2:].strip() if l.startswith("- ") else l.strip() for l in section(ai, "오늘의 정리 (ai)").splitlines() if l.strip()]
+    return {
+        "date": day, "exists": True, "stale": stale, "summary": summary,
+        "question": section(ai, "오늘의 질문 (ai)"),
+        "corrections": section(text, "정정"), "reflection": section(text, "회고"),
+    }
+
+
+def save_user(day, payload):
+    """Write the user's corrections and reflection into the day's note and append a raw copy."""
+    out = VAULT / "Diary" / f"{day}.md"
+    text = out.read_text(encoding="utf-8") if out.exists() else f"---\ntype: diary\ndate: {day}\nclass: personal\n---\n# {day}\n"
+    lines = [f"- {c['wrong'].strip()} → {c['right'].strip()}" for c in payload.get("corrections", []) if c.get("wrong") and c.get("right")]
+    reflection = payload.get("reflection", "")
+    if payload.get("append"):  # keep what was said earlier today; add the new words after it
+        old_fix, old_ref = section(text, "정정"), section(text, "회고")
+        lines = ([old_fix] if old_fix else []) + lines
+        reflection = "\n\n".join(x for x in (old_ref, reflection) if x)
+    text = set_section(text, "정정", "\n".join(lines))
+    text = set_section(text, "회고", reflection)
+    out.parent.mkdir(mode=0o700, exist_ok=True)
+    out.write_text(text, encoding="utf-8")
+    out.chmod(0o600)
+    raw = DATA / "raw/diary"
+    raw.mkdir(parents=True, exist_ok=True)
+    rec = {"type": "reflection", "ts": int(dt.datetime.now().timestamp() * 1000), "date": day,
+           "corrections": payload.get("corrections", []), "reflection": payload.get("reflection", ""),
+           "_src": "diary", "_class": "personal"}
+    f = raw / f"{day}.ndjson"
+    with open(f, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n")
+    f.chmod(0o600)
+
+
+def render(day, ai, existing):
+    stamp = dt.datetime.now().astimezone().isoformat(timespec="seconds")
+    block = f"{AI_BEGIN}\n## 오늘의 정리 (ai)\n{chr(10).join('- ' + l.strip().lstrip('- ').strip() for l in ai['summary'].strip().splitlines() if l.strip())}\n\n## 오늘의 질문 (ai)\n{ai['question'].strip()}\n{AI_END}"
+    if existing and AI_BEGIN in existing:
+        text = re.sub(re.escape(AI_BEGIN) + ".*?" + re.escape(AI_END), lambda _: block, existing, flags=re.S)
+        if re.search(r"^ai_generated:.*$", text, re.M):
+            return re.sub(r"^ai_generated:.*$", f"ai_generated: {stamp}", text, count=1, flags=re.M)
+        return text.replace("\nclass: personal\n", f"\nclass: personal\nai_generated: {stamp}\n", 1)
+    return f"---\ntype: diary\ndate: {day}\nclass: personal\nai_generated: {stamp}\n---\n# {day}\n\n{block}\n{USER_PART}"
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="life-diary", description=__doc__.split("\n\n")[0])
+    ap.add_argument("date", nargs="?", default=dt.date.today().isoformat(), help="YYYY-MM-DD (default: today)")
+    ap.add_argument("--context", action="store_true", help="print the context sent to the LLM and exit")
+    ap.add_argument("--json", action="store_true", help="print the stored draft, corrections and reflection of the day as JSON")
+    ap.add_argument("--save", action="store_true", help="read {corrections:[{wrong,right}], reflection} from stdin and store it")
+    ap.add_argument("--senders", action="store_true", help="print notification senders of the last 14 days with their allowed flag (JSON)")
+    ap.add_argument("--set-allow", action="store_true", help="read {allow:['label: title' | 'label: *']} from stdin and store it")
+    ap.add_argument("--chatlog", action="store_true", help="print the day's chat exchange as JSON")
+    ap.add_argument("--chat", action="store_true", help="read {message, wrong?} from stdin; save it and print the assistant's reply as JSON")
+    ap.add_argument("--todos", action="store_true", help="print open and recently done to-dos as JSON")
+    ap.add_argument("--todos-extract", action="store_true", help="extract new to-dos from the day's records (throttled)")
+    ap.add_argument("--todo-act", action="store_true", help='read {id, action: done|dismiss|reopen} from stdin')
+    ap.add_argument("--todo-add", action="store_true", help="read {text} from stdin and add it as the user's own to-do")
+    ap.add_argument("--dry-run", action="store_true", help="print the generated draft instead of writing it")
+    args = ap.parse_args()
+
+    if args.todos:
+        print(json.dumps(todo_view(), ensure_ascii=False))
+        return 0
+    if args.todos_extract:
+        try:
+            print(json.dumps({"added": todo_extract(args.date)}))
+        except Exception as e:  # noqa: BLE001
+            print(f"todo extract failed: {e}", file=sys.stderr)
+            return 1
+        return 0
+    if args.todo_act:
+        p = json.load(sys.stdin)
+        return 0 if todo_act(p["id"], p["action"]) else 1
+    if args.todo_add:
+        todo_add_user(json.load(sys.stdin)["text"], args.date)
+        return 0
+    if args.chatlog:
+        print(json.dumps({"messages": chat_history(args.date)}, ensure_ascii=False))
+        return 0
+    if args.chat:
+        payload = json.load(sys.stdin)
+        try:
+            print(json.dumps({"reply": chat_reply(args.date, payload["message"], payload.get("wrong"))}, ensure_ascii=False))
+        except Exception as e:  # noqa: BLE001
+            print(f"chat failed: {e}", file=sys.stderr)
+            return 1
+        return 0
+    if args.senders:
+        print(json.dumps(list_senders(), ensure_ascii=False))
+        return 0
+    if args.set_allow:
+        save_allow(json.load(sys.stdin).get("allow", []))
+        return 0
+    if args.json:
+        print(json.dumps(read_day(args.date), ensure_ascii=False))
+        return 0
+    if args.save:
+        save_user(args.date, json.load(sys.stdin))
+        return 0
+    context = build_context(args.date, summary=True)
+    if args.context:
+        print(context)
+        return 0
+    try:
+        ai = ask_llm(context, args.date)
+    except Exception as e:  # noqa: BLE001 - report any LLM/network failure the same way
+        print(f"LLM request failed: {e}", file=sys.stderr)
+        return 1
+    out = VAULT / "Diary" / f"{args.date}.md"
+    text = render(args.date, ai, out.read_text(encoding="utf-8") if out.exists() else "")
+    if args.dry_run:
+        print(text)
+        return 0
+    out.parent.mkdir(mode=0o700, exist_ok=True)
+    out.write_text(text, encoding="utf-8")
+    out.chmod(0o600)
+    print(f"wrote {out}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

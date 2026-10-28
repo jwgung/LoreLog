@@ -1,0 +1,6 @@
+[Unit]
+Description=Collect all configured life sources (mail, calendar) into the vault
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/.local/bin/life sync

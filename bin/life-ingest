@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+"""life-ingest: collection endpoint that any client (phone, PC, ...) can send NDJSON to. Raw data is stored on this server.
+
+  POST /ingest/<source>      body: NDJSON (one JSON object per line), header: Authorization: Bearer <token>
+  GET  /diary/<date>         the day's draft (summary + question); generated on demand -> 202 while generating
+  POST /diary/<date>         body: JSON {corrections:[{wrong,right}], reflection}; stored via life-diary
+  GET  /diary/senders        notification senders of the last 14 days with the user's allowed flag
+  POST /diary/senders        body: {allow: ["<app>: <sender>" | "<app>: *"]}; which messengers may feed the diary
+  GET  /diary/<date>/chat    the day's chat exchange (to show it again)
+  POST /diary/<date>/chat    body: {message, wrong?}; stores it in the diary and returns the assistant's reply (local LLM)
+  POST /transcribe           body: audio (wav); returns {text} from the local speech model (LIFE_ASR_URL); nothing is stored
+  GET  /todos                open and recently done to-dos (+ extracting flag)
+  POST /todos                body: {text}; add the user's own to-do
+  POST /todos/<id>           body: {action: done|dismiss|reopen}
+  POST /todos/extract        extract new to-dos from the records in the background (throttled)
+  GET  /healthz              only reports that it is alive (no auth, reveals nothing else)
+
+- Raw data is only ever appended to <data dir>/raw/<source>/<YYYY-MM-DD>.ndjson; nothing is edited or deleted.
+  The date comes from the record's ts (epoch milliseconds, LoreLog format) or an ISO time, else from the receive
+  time (server local time).
+- A line that arrives again (a resend) is stored only once.
+- Records are kept as they are; only _src, _recv and _class are added. _class defaults to personal.
+- Independent of how clients connect (Tailscale, same network, tunnel): where to listen is the INGEST_BIND setting.
+
+Settings: ~/.config/vault-sync/ingest.env  (KEY=VALUE, mode 600)
+  INGEST_TOKEN=...            required. The value clients send as the Bearer token (at least 16 characters)
+  INGEST_BIND=127.0.0.1       address to listen on; for Tailscale use this machine's tailnet address
+  INGEST_PORT=8765
+  LIFE_DATA_DIR=...           default: the OS standard location (Linux ~/.local/share/life, Windows %LOCALAPPDATA%\\life,
+                              macOS ~/Library/Application Support/life)
+  INGEST_CLASS=personal       default class (work | personal)
+  INGEST_MAX_MB=20            maximum size of one request
+  INGEST_CERT / INGEST_KEY    HTTPS if both are set
+
+Usage: life-ingest [--selftest] [-h]
+"""
+import hashlib
+import hmac
+import json
+import os
+import re
+import ssl
+import subprocess
+import sys
+import threading
+import time
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+ENV_FILE = Path.home() / ".config/vault-sync/ingest.env"
+SOURCE_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
+_lock = threading.Lock()
+_hash_cache = {}  # file path -> set of hashes of the lines already stored
+
+
+def load_env():
+    cfg = {}
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                cfg[k.strip()] = v.strip().strip('"').strip("'")
+    return cfg
+
+
+def data_root(cfg):
+    if cfg.get("LIFE_DATA_DIR"):
+        return Path(cfg["LIFE_DATA_DIR"]).expanduser()
+    if sys.platform.startswith("win"):
+        return Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local"))) / "life"
+    if sys.platform == "darwin":
+        return Path.home() / "Library/Application Support/life"
+    return Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) / "life"
+
+
+def record_day(rec, now):
+    for k in ("ts", "timestamp", "time", "t"):
+        v = rec.get(k) if isinstance(rec, dict) else None
+        if isinstance(v, (int, float)) and v > 0:
+            return datetime.fromtimestamp(v / 1000 if v > 1e11 else v)
+        if isinstance(v, str):
+            try:
+                return datetime.fromisoformat(v.replace("Z", "+00:00")).astimezone().replace(tzinfo=None)
+            except ValueError:
+                pass
+    return now
+
+
+def ensure_dir(p):
+    p.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(p, 0o700)
+    except OSError:
+        pass  # on Windows etc. folder permissions are left to the OS (ACL)
+
+
+def store(root, source, body, cls):
+    """Append the NDJSON body to the raw files -> (stored, duplicates, rejected)"""
+    now = datetime.now()
+    recv = now.astimezone().isoformat(timespec="seconds")
+    ok = dup = bad = 0
+    by_file = {}
+    for raw in body.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            rec = json.loads(raw)
+        except ValueError:
+            bad += 1
+            continue
+        if not isinstance(rec, dict):
+            bad += 1
+            continue
+        digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()
+        day = record_day(rec, now).strftime("%Y-%m-%d")
+        rec.update({"_src": source, "_recv": recv, "_class": cls})
+        by_file.setdefault(day, []).append((digest, json.dumps(rec, ensure_ascii=False, separators=(",", ":"))))
+    with _lock:
+        for day, items in by_file.items():
+            d = root / "raw" / source
+            ensure_dir(root)
+            ensure_dir(root / "raw")
+            ensure_dir(d)
+            f = d / f"{day}.ndjson"
+            seen = _hash_cache.get(f)
+            if seen is None:
+                seen = set()
+                if f.exists():
+                    for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+                        try:
+                            o = json.loads(line)
+                        except ValueError:
+                            continue
+                        o.pop("_recv", None); o.pop("_src", None); o.pop("_class", None)
+                        seen.add(hashlib.sha1(json.dumps(o, ensure_ascii=False).encode("utf-8")).hexdigest())
+                _hash_cache[f] = seen
+            fresh = []
+            for digest, line in items:
+                if digest in seen:
+                    dup += 1
+                else:
+                    seen.add(digest); fresh.append(line); ok += 1
+            if fresh:
+                new_file = not f.exists()
+                with open(f, "a", encoding="utf-8") as fh:
+                    fh.write("\n".join(fresh) + "\n")
+                if new_file:
+                    try:
+                        os.chmod(f, 0o600)
+                    except OSError:
+                        pass
+    return ok, dup, bad
+
+
+ASR_URL = os.environ.get("LIFE_ASR_URL", "http://10.100.3.232:8000/v1/audio/transcriptions")
+ASR_MODEL = os.environ.get("LIFE_ASR_MODEL", "vibevoice-asr")
+_TAG_RE = re.compile(r"\[[A-Za-z][A-Za-z ]{1,30}\]")  # sound tags such as [Environmental Sounds]
+
+
+def transcribe_audio(audio):
+    """Send audio to the local speech model and return clean text. Nothing is written to disk."""
+    import urllib.request
+    boundary = "----lifeasr" + hashlib.sha1(audio[:64]).hexdigest()[:16]
+    parts = []
+    for name, value in (("model", ASR_MODEL), ("language", "ko")):
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
+    parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="a.wav"\r\nContent-Type: audio/wav\r\n\r\n'.encode())
+    body = b"".join(parts) + audio + f"\r\n--{boundary}--\r\n".encode()
+    req = urllib.request.Request(ASR_URL, body, {"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    with urllib.request.urlopen(req, timeout=300) as r:
+        text = json.load(r).get("text", "")
+    return re.sub(r"\s{2,}", " ", _TAG_RE.sub("", text)).strip()
+
+
+DIARY_BIN = Path(__file__).resolve().parent / "life-diary"
+DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_todo_busy = {"on": False}
+_gen = {}  # date -> "running" | error message of the last failed run
+
+
+def diary_run(args, stdin=None, timeout=30):
+    return subprocess.run([sys.executable, str(DIARY_BIN), *args], input=stdin, capture_output=True, text=True, timeout=timeout)
+
+
+def todo_extract_bg():
+    try:
+        diary_run(["--todos-extract", datetime.now().strftime("%Y-%m-%d")], timeout=300)
+    finally:
+        _todo_busy["on"] = False
+
+
+def diary_generate(day):
+    try:
+        r = diary_run([day], timeout=300)
+        _gen[day] = None if r.returncode == 0 else (r.stderr.strip() or "generation failed")
+    except Exception as e:  # noqa: BLE001
+        _gen[day] = str(e)
+    if _gen[day] is None:
+        del _gen[day]
+
+
+def make_handler(root, token, cls, max_bytes):
+    class H(BaseHTTPRequestHandler):
+        server_version = "life-ingest"
+
+        def _send(self, code, obj):
+            data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, fmt, *args):  # never log the body or headers (the token)
+            pass
+
+        def _authorized(self):
+            given = self.headers.get("Authorization", "")
+            return given.startswith("Bearer ") and hmac.compare_digest(given[7:].strip().encode(), token.encode())
+
+        def do_GET(self):
+            if self.path == "/healthz":
+                return self._send(200, {"ok": True})
+            if self.path == "/todos":
+                if not self._authorized():
+                    return self._send(401, {"error": "unauthorized"})
+                r = diary_run(["--todos"])
+                if r.returncode != 0:
+                    return self._send(500, {"error": r.stderr.strip()})
+                v = json.loads(r.stdout or "{}")
+                v["extracting"] = _todo_busy["on"]
+                return self._send(200, v)
+            if self.path == "/diary/senders":
+                if not self._authorized():
+                    return self._send(401, {"error": "unauthorized"})
+                r = diary_run(["--senders"])
+                return self._send(200, json.loads(r.stdout or "[]")) if r.returncode == 0 else self._send(500, {"error": r.stderr.strip()})
+            cl = re.match(r"^/diary/(\d{4}-\d{2}-\d{2})/chat$", self.path)
+            if cl:
+                if not self._authorized():
+                    return self._send(401, {"error": "unauthorized"})
+                r = diary_run(["--chatlog", cl.group(1)])
+                return self._send(200, json.loads(r.stdout)) if r.returncode == 0 else self._send(500, {"error": r.stderr.strip()[:200]})
+            m = re.match(r"^/diary/(\d{4}-\d{2}-\d{2})(\?refresh=1)?$", self.path)
+            if not m:
+                return self._send(404, {"error": "not found"})
+            if not self._authorized():
+                return self._send(401, {"error": "unauthorized"})
+            day, refresh = m.group(1), bool(m.group(2))
+            with _lock:
+                state = _gen.get(day)
+                if state == "running":
+                    return self._send(202, {"status": "generating"})
+                if state:  # report the last failure once, then allow a retry
+                    del _gen[day]
+                    return self._send(502, {"error": state})
+                draft = json.loads(diary_run(["--json", day]).stdout or "{}")
+                if draft.get("exists") and not draft.get("stale") and not refresh:
+                    return self._send(200, draft)
+                _gen[day] = "running"
+            threading.Thread(target=diary_generate, args=(day,), daemon=True).start()
+            self._send(202, {"status": "generating"})
+
+        def _diary_post(self, day):
+            try:
+                n = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(min(n, 1_000_000)).decode("utf-8"))
+            except ValueError:
+                return self._send(400, {"error": "bad body"})
+            r = diary_run(["--save", day], stdin=json.dumps(payload))
+            if r.returncode != 0:
+                return self._send(500, {"error": r.stderr.strip()})
+            self._send(200, {"saved": True})
+
+        def do_POST(self):
+            if self.path == "/diary/senders":
+                if not self._authorized():
+                    return self._send(401, {"error": "unauthorized"})
+                try:
+                    n = int(self.headers.get("Content-Length", "0"))
+                    payload = json.loads(self.rfile.read(min(n, 1_000_000)).decode("utf-8"))
+                except ValueError:
+                    return self._send(400, {"error": "bad body"})
+                r = diary_run(["--set-allow"], stdin=json.dumps(payload))
+                return self._send(200, {"saved": True}) if r.returncode == 0 else self._send(500, {"error": r.stderr.strip()})
+            if self.path == "/transcribe":
+                if not self._authorized():
+                    return self._send(401, {"error": "unauthorized"})
+                try:
+                    n = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    return self._send(400, {"error": "bad length"})
+                if n <= 0 or n > max_bytes:
+                    return self._send(413, {"error": "too large or empty", "max_bytes": max_bytes})
+                audio = self.rfile.read(n)
+                try:
+                    return self._send(200, {"text": transcribe_audio(audio)})
+                except Exception as e:  # noqa: BLE001
+                    return self._send(502, {"error": f"asr failed: {type(e).__name__}"})
+            if re.match(r"^/todos(/[0-9a-f]{10}|/extract)?$", self.path):
+                if not self._authorized():
+                    return self._send(401, {"error": "unauthorized"})
+                if self.path == "/todos/extract":
+                    with _lock:
+                        if not _todo_busy["on"]:
+                            _todo_busy["on"] = True
+                            threading.Thread(target=todo_extract_bg, daemon=True).start()
+                    return self._send(202, {"status": "extracting"})
+                try:
+                    n = int(self.headers.get("Content-Length", "0"))
+                    payload = json.loads(self.rfile.read(min(n, 100_000)).decode("utf-8"))
+                except ValueError:
+                    return self._send(400, {"error": "bad body"})
+                if self.path == "/todos":
+                    text = str(payload.get("text", "")).strip()[:200]
+                    if not text:
+                        return self._send(400, {"error": "empty"})
+                    r = diary_run(["--todo-add", datetime.now().strftime("%Y-%m-%d")], stdin=json.dumps({"text": text}))
+                else:
+                    if payload.get("action") not in ("done", "dismiss", "reopen"):
+                        return self._send(400, {"error": "bad action"})
+                    r = diary_run(["--todo-act"], stdin=json.dumps({"id": self.path.rsplit("/", 1)[1], "action": payload["action"]}))
+                return self._send(200, {"ok": True}) if r.returncode == 0 else self._send(404, {"error": "not found"})
+            c = re.match(r"^/diary/(\d{4}-\d{2}-\d{2})/chat$", self.path)
+            if c:
+                if not self._authorized():
+                    return self._send(401, {"error": "unauthorized"})
+                try:
+                    n = int(self.headers.get("Content-Length", "0"))
+                    payload = json.loads(self.rfile.read(min(n, 1_000_000)).decode("utf-8"))
+                    assert isinstance(payload.get("message"), str) and payload["message"].strip()
+                except (ValueError, AssertionError):
+                    return self._send(400, {"error": "bad body"})
+                r = diary_run(["--chat", c.group(1)], stdin=json.dumps(payload), timeout=150)
+                return self._send(200, json.loads(r.stdout)) if r.returncode == 0 else self._send(502, {"error": r.stderr.strip()[:300]})
+            d = re.match(r"^/diary/(\d{4}-\d{2}-\d{2})$", self.path)
+            if d:
+                if not self._authorized():
+                    return self._send(401, {"error": "unauthorized"})
+                return self._diary_post(d.group(1))
+            m = re.match(r"^/ingest/([a-z0-9_-]{1,32})/?$", self.path)
+            if not m:
+                return self._send(404, {"error": "not found"})
+            given = self.headers.get("Authorization", "")
+            if not given.startswith("Bearer ") or not hmac.compare_digest(given[7:].strip().encode(), token.encode()):
+                return self._send(401, {"error": "unauthorized"})
+            try:
+                n = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                return self._send(400, {"error": "bad length"})
+            if n <= 0 or n > max_bytes:
+                return self._send(413, {"error": "too large or empty", "max_bytes": max_bytes})
+            body = self.rfile.read(n).decode("utf-8", errors="replace")
+            ok, dup, bad = store(root, m.group(1), body, cls)
+            sys.stderr.write(f"{datetime.now():%H:%M:%S} {m.group(1)} stored {ok} duplicates {dup} rejected {bad}\n")
+            sys.stderr.flush()
+            self._send(200, {"accepted": ok, "duplicates": dup, "rejected": bad})
+
+    return H
+
+
+def serve(bind, port, root, token, cls, max_bytes, cert=None, key=None):
+    srv = ThreadingHTTPServer((bind, port), make_handler(root, token, cls, max_bytes))
+    if cert and key:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(cert, key)
+        srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+    return srv
+
+
+def selftest():
+    import tempfile
+    import urllib.error
+    import urllib.request
+    tmp = Path(tempfile.mkdtemp(prefix="life-ingest-test-"))
+    srv = serve("127.0.0.1", 0, tmp, "secret-token", "personal", 1024 * 1024)
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def post(path, body, token="secret-token"):
+        req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=body.encode(), method="POST",
+                                     headers={"Authorization": f"Bearer {token}", "Content-Type": "application/x-ndjson"})
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    ts = int(datetime(2026, 10, 26, 13, 5).timestamp() * 1000)
+    body = "\n".join([json.dumps({"type": "voice", "ts": ts, "text": "회의 시작"}, ensure_ascii=False),
+                      json.dumps({"type": "app", "ts": ts + 1000, "pkg": "com.x"}), "이건 JSON 이 아님", "[1,2]"]) + "\n"
+    assert post("/ingest/lorelog", body) == (200, {"accepted": 2, "duplicates": 0, "rejected": 2})
+    assert post("/ingest/lorelog", body) == (200, {"accepted": 0, "duplicates": 2, "rejected": 2}), "a resend must be filtered out as duplicates"
+    assert post("/ingest/lorelog", body, token="wrong")[0] == 401
+    assert post("/ingest/BadSource", body)[0] == 404
+    f = tmp / "raw" / "lorelog" / "2026-10-26.ndjson"
+    lines = f.read_text(encoding="utf-8").splitlines()
+    rec = json.loads(lines[0])
+    assert len(lines) == 2 and rec["text"] == "회의 시작" and rec["_src"] == "lorelog" and rec["_class"] == "personal"
+    if os.name == "posix":
+        assert oct(f.stat().st_mode & 0o777) == "0o600" and oct((tmp / "raw").stat().st_mode & 0o777) == "0o700"
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/healthz") as r:
+        assert json.loads(r.read()) == {"ok": True}
+    srv.shutdown()
+    print("selftest ok:", lines[0][:110])
+
+
+def main():
+    if {"-h", "--help"} & set(sys.argv[1:]):
+        print(__doc__.strip())
+        return
+    if "--selftest" in sys.argv:
+        return selftest()
+    cfg = load_env()
+    token = cfg.get("INGEST_TOKEN", "")
+    if len(token) < 16:
+        print(f"{ENV_FILE} needs INGEST_TOKEN (at least 16 characters).", file=sys.stderr)
+        sys.exit(2)
+    root = data_root(cfg)
+    bind = cfg.get("INGEST_BIND", "127.0.0.1")
+    port = int(cfg.get("INGEST_PORT", "8765"))
+    srv = serve(bind, port, root, token, cfg.get("INGEST_CLASS", "personal"), int(float(cfg.get("INGEST_MAX_MB", "20")) * 1024 * 1024),
+                cfg.get("INGEST_CERT"), cfg.get("INGEST_KEY"))
+    print(f"life-ingest started: {bind}:{port}  data: {root}  {'HTTPS' if cfg.get('INGEST_CERT') else 'HTTP'}", file=sys.stderr)
+    sys.stderr.flush()
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()
