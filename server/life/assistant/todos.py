@@ -4,6 +4,7 @@ import datetime as dt
 import hashlib
 import json
 import re
+import threading
 
 from life.assistant.config import TODO_FILE
 from life.assistant.context import _subj_key, build_context, sent_index
@@ -22,6 +23,9 @@ TODO_SYSTEM = """너는 사용자의 개인 비서다. 기록에서 **사용자�
 - due는 기록에 기한이 적혀 있을 때만 그 표현을 쓰고(예: "금요일까지"), 없으면 빈 문자열.
 - 많아야 5개. 없으면 빈 목록.
 JSON만 출력: {"todos": [{"title": "...", "source": "메일", "mail_subject": "", "due": ""}]}"""
+
+
+_LOCK = threading.Lock()  # life-ingest serves requests on threads; load-modify-save must not interleave
 
 
 def _norm(t):
@@ -44,9 +48,10 @@ def save_todos(d):
 
 
 def todo_view():
-    d = load_todos()
-    if todo_autoclose(d):
-        save_todos(d)
+    with _LOCK:
+        d = load_todos()
+        if todo_autoclose(d):
+            save_todos(d)
     items = d["items"]
     return {
         "open": [i for i in items if i["status"] == "open"],
@@ -87,25 +92,29 @@ def todo_extract(day, force=False):
         temperature=0.2, max_tokens=700, json_mode=True, timeout=180,
     )
     found = llm.parse_json(text).get("todos", [])
-    added = sum(_add_todo(d, t.get("title", ""), t.get("source", ""), t.get("due", ""), day, t.get("mail_subject", "")) for t in found[:5] if isinstance(t, dict))
-    todo_autoclose(d)
-    d["last_extract"] = now
-    save_todos(d)
+    with _LOCK:  # the model call above takes minutes: merge into the file as it is now, not as it was then
+        d = load_todos()
+        added = sum(_add_todo(d, t.get("title", ""), t.get("source", ""), t.get("due", ""), day, t.get("mail_subject", "")) for t in found[:5] if isinstance(t, dict))
+        todo_autoclose(d)
+        d["last_extract"] = now
+        save_todos(d)
     return added
 
 
 def todo_act(tid, action):
-    d = load_todos()
-    for i in d["items"]:
-        if i["id"] == tid:
-            i["status"] = {"done": "done", "dismiss": "dismissed", "reopen": "open"}[action]
-            save_todos(d)
-            return True
+    with _LOCK:
+        d = load_todos()
+        for i in d["items"]:
+            if i["id"] == tid:
+                i["status"] = {"done": "done", "dismiss": "dismissed", "reopen": "open"}[action]
+                save_todos(d)
+                return True
     return False
 
 
 def todo_add_user(text, day):
-    d = load_todos()
-    ok = _add_todo(d, text, "내가 말한 것", "", day)
-    save_todos(d)
+    with _LOCK:
+        d = load_todos()
+        ok = _add_todo(d, text, "내가 말한 것", "", day)
+        save_todos(d)
     return ok

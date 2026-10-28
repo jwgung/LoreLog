@@ -8,8 +8,8 @@
 
 ## 구성
 - `bin/life` 수집 소스 설정·실행(`life add`, `life sync`, `life status`)
-- `bin/life-ingest` 폰·PC가 보내는 기록 수신, 일기·할 일·전사 HTTP
-- `bin/life-diary` 하루 정리, 대화, 할 일, 메신저 허용
+- `bin/life-ingest` 폰·PC가 보내는 기록 수신, 일기·할 일·전사 HTTP (코드는 `life/ingest/`: `settings`, `store`, `asr`, `jobs`, `http`, `cli`)
+- `bin/life-diary` 하루 정리 (코드는 `life/assistant/`. `life-ingest`는 이 모듈을 프로세스 없이 직접 부른다), 대화, 할 일, 메신저 허용
 - `bin/mail-sync`, `bin/calendar-sync` 메일·일정 수집
 - `deploy/` systemd 유닛과 환경 파일 예시
 
