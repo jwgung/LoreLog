@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.withStyle
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -91,7 +92,7 @@ private sealed class Msg {
  * 틀린 문장을 눌러 고친다. 보내면 저장되고 저장 버튼은 없다. 가만히 두면 정리는 맞는 것으로 본다.
  */
 @Composable
-internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit) {
+internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val running by LoggerService.isRunning.collectAsStateWithLifecycle()
@@ -189,6 +190,7 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit) {
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                NavButton(NavIcon.TODO, "할 일", onTodos)
                 NavButton(NavIcon.SETTINGS, "수집·연동 설정", onCollect)
                 NavButton(NavIcon.DRAWER, "서랍", onDrawer)
             }
@@ -196,7 +198,7 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit) {
 
         Column(
             modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(scroll).padding(horizontal = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.Bottom),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(dayLabel, color = Sub, fontSize = 12.sp, modifier = Modifier.align(Alignment.CenterHorizontally).padding(vertical = 6.dp))
 
@@ -224,10 +226,10 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit) {
                         Box(
                             modifier = Modifier.widthIn(max = bubbleMax()).clip(RoundedCornerShape(18.dp)).background(Bubble).padding(14.dp),
                         ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                                 d.summary.forEachIndexed { i, line ->
                                     Text(
-                                        line, color = Text0, fontSize = 15.sp, lineHeight = 26.sp, fontFamily = FontFamily.Serif,
+                                        styledSentence(line), color = Text0, fontSize = 15.sp, lineHeight = 26.sp, fontFamily = FontFamily.Serif,
                                         modifier = Modifier.clip(RoundedCornerShape(6.dp))
                                             .background(if (selected == i) Picked else Color.Transparent)
                                             .clickable { selected = if (selected == i) null else i; fixing = null }
@@ -324,7 +326,7 @@ private fun bubbleMax(ratio: Float = 0.86f): androidx.compose.ui.unit.Dp =
 @Composable
 internal fun PermRow(title: String, onClick: () -> Unit) = DrawerRow(title, "켜기", onClick)
 
-internal enum class NavIcon { DRAWER, CHAT, SETTINGS, BACK }
+internal enum class NavIcon { DRAWER, CHAT, SETTINGS, BACK, TODO }
 
 /** 화면 이동용 아이콘 버튼(44dp 원). 표준 Material 아이콘을 쓰고 접근성 설명을 붙인다. */
 @Composable
@@ -334,12 +336,24 @@ internal fun NavButton(icon: NavIcon, label: String, onClick: () -> Unit) {
         NavIcon.CHAT -> Lucide.Chat
         NavIcon.SETTINGS -> Lucide.Settings
         NavIcon.BACK -> Lucide.Back
+        NavIcon.TODO -> Lucide.Todo
     }
     Box(
         modifier = Modifier.size(44.dp).clip(CircleShape).border(1.dp, Line, CircleShape).clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) { Icon(vector, contentDescription = label, tint = Color(0xFFB4BBC8), modifier = Modifier.size(22.dp)) }
 }
+
+private val TimeLead = Regex("^((?:오전|오후|저녁|아침|새벽|밤|정오)(?:부터)?\\s*(?:\\d{1,2}시)?(?:\\s*\\d{1,2}분)?(?:경)?)")
+
+/** 정리 문장 앞의 시각 표현("오후 5시 36분경")을 흐리게 해서 무슨 일이었는지가 먼저 읽히게 한다. */
+private fun styledSentence(line: String): androidx.compose.ui.text.AnnotatedString =
+    androidx.compose.ui.text.buildAnnotatedString {
+        val m = TimeLead.find(line)
+        if (m == null) { append(line); return@buildAnnotatedString }
+        withStyle(androidx.compose.ui.text.SpanStyle(color = Sub, fontSize = 13.sp)) { append(m.value) }
+        append(line.substring(m.value.length))
+    }
 
 /** 윤곽선 알약 버튼. 화면 위쪽 이동 버튼에 쓴다. */
 @Composable
@@ -352,7 +366,7 @@ internal fun Pill(text: String, onClick: () -> Unit) {
 
 /** 44dp 원형 아이콘 버튼. 채움(보내기)과 윤곽선(마이크) 두 가지. */
 @Composable
-private fun IconCircle(label: String, enabled: Boolean, filled: Boolean, onClick: () -> Unit, icon: @Composable () -> Unit) {
+internal fun IconCircle(label: String, enabled: Boolean, filled: Boolean, onClick: () -> Unit, icon: @Composable () -> Unit) {
     Box(
         modifier = Modifier.size(44.dp).clip(CircleShape)
             .background(if (filled) (if (enabled) Accent else Color(0xFF232833)) else Color.Transparent)

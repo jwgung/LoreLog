@@ -87,7 +87,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-internal enum class AppScreen { CHAT, DRAWER, COLLECT, REMINDER, SENDERS, EXPORT }
+internal enum class AppScreen { CHAT, DRAWER, COLLECT, REMINDER, SENDERS, EXPORT, TODOS }
 
 /** 알림에서 대화 화면을 열라는 요청. 화면이 읽고 나면 false 로 되돌린다. */
 internal object DiaryNav {
@@ -114,10 +114,11 @@ class MainActivity : ComponentActivity() {
                         if (requested) { screen = AppScreen.CHAT; DiaryNav.requested.value = false }
                     }
                     androidx.activity.compose.BackHandler(enabled = screen != AppScreen.CHAT) {
-                        screen = if (screen == AppScreen.DRAWER) AppScreen.CHAT else AppScreen.DRAWER
+                        screen = if (screen == AppScreen.DRAWER || screen == AppScreen.TODOS) AppScreen.CHAT else AppScreen.DRAWER
                     }
                     when (screen) {
-                        AppScreen.CHAT -> ChatScreen(onDrawer = { screen = AppScreen.DRAWER }, onCollect = { screen = AppScreen.COLLECT })
+                        AppScreen.CHAT -> ChatScreen(onDrawer = { screen = AppScreen.DRAWER }, onCollect = { screen = AppScreen.COLLECT }, onTodos = { screen = AppScreen.TODOS })
+                        AppScreen.TODOS -> TodosScreen(onBack = { screen = AppScreen.CHAT })
                         AppScreen.DRAWER -> DrawerScreen(onBack = { screen = AppScreen.CHAT }, onOpen = { screen = it })
                         AppScreen.REMINDER -> DrawerPage("하루 정리 알림", onBack = { screen = AppScreen.DRAWER }) { DiaryReminderSettings() }
                         AppScreen.SENDERS -> DrawerPage("일기에 쓰는 메신저", onBack = { screen = AppScreen.DRAWER }) { DiarySenderSettings() }
@@ -313,7 +314,7 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
             }
         }
 
-        Button(onClick = {
+        Button(modifier = Modifier.fillMaxWidth(), onClick = {
             if (running) {
                 LoggerService.stop(context)
             } else {

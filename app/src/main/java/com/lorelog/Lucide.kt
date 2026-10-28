@@ -72,4 +72,24 @@ internal object Lucide {
             "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2Z")
     }
 
+
+    val Todo: ImageVector by lazy {
+        icon("Todo",
+            "m3 17 2 2 4-4",
+            "m3 7 2 2 4-4",
+            "M13 6h8",
+            "M13 12h8",
+            "M13 18h8")
+    }
+
+    val Close: ImageVector by lazy {
+        icon("Close",
+            "M18 6 6 18",
+            "m6 6 12 12")
+    }
+
+    val Check: ImageVector by lazy {
+        icon("Check",
+            "M20 6 9 17l-5-5")
+    }
 }

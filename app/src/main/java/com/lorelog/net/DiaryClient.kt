@@ -111,6 +111,45 @@ object DiaryClient {
         }
     }
 
+    data class Todo(val id: String, val title: String, val source: String, val due: String, val auto: Boolean = false)
+    data class Todos(val open: List<Todo>, val done: List<Todo>, val extracting: Boolean)
+
+    private fun parseTodos(arr: JSONArray) = (0 until arr.length()).map {
+        val o = arr.getJSONObject(it)
+        Todo(o.getString("id"), o.getString("title"), o.optString("source"), o.optString("due"), o.optBoolean("auto"))
+    }
+
+    /** 서버의 할 일 목록(열린 것, 최근 끝낸 것). 실패하면 null. */
+    suspend fun fetchTodos(context: Context): Todos? = withContext(Dispatchers.IO) {
+        var conn: HttpURLConnection? = null
+        try {
+            conn = open(context, "/todos", "GET") ?: return@withContext null
+            if (conn.responseCode != 200) return@withContext null
+            val o = JSONObject(conn.inputStream.bufferedReader().readText())
+            Todos(parseTodos(o.getJSONArray("open")), parseTodos(o.getJSONArray("done")), o.optBoolean("extracting"))
+        } catch (e: Exception) { null } finally { conn?.disconnect() }
+    }
+
+    private suspend fun post(context: Context, path: String, body: JSONObject?): Boolean = withContext(Dispatchers.IO) {
+        var conn: HttpURLConnection? = null
+        try {
+            conn = open(context, path, "POST") ?: return@withContext false
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.outputStream.use { it.write((body ?: JSONObject()).toString().toByteArray(Charsets.UTF_8)) }
+            conn.responseCode in 200..299
+        } catch (e: Exception) { false } finally { conn?.disconnect() }
+    }
+
+    /** 서버가 기록에서 새 할 일을 뽑게 한다(30분에 한 번만 실제로 돈다). */
+    suspend fun refreshTodos(context: Context): Boolean = post(context, "/todos/extract", null)
+
+    /** action: "done" | "dismiss" | "reopen" */
+    suspend fun actTodo(context: Context, id: String, action: String): Boolean =
+        post(context, "/todos/$id", JSONObject().put("action", action))
+
+    suspend fun addTodo(context: Context, text: String): Boolean = post(context, "/todos", JSONObject().put("text", text))
+
     /** 정정(틀린 것 → 맞는 것 쌍)과 회고를 저장한다. */
     suspend fun save(context: Context, day: String, corrections: List<Pair<String, String>>, reflection: String, append: Boolean = true): Boolean =
         withContext(Dispatchers.IO) {
