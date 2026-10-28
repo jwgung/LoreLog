@@ -19,4 +19,10 @@ object DiaryPrefs {
     fun minute(context: Context): Int = p(context).getInt(KEY_MINUTE, 0)
     fun setTime(context: Context, hour: Int, minute: Int) =
         p(context).edit().putInt(KEY_HOUR, hour).putInt(KEY_MINUTE, minute).apply()
+
+    /**
+     * 일기의 "오늘". 새벽 4시 전에는 전날로 본다(밤늦게 쓰다 자정이 지나도 어제 하루를 마무리할 수 있게).
+     */
+    fun diaryDay(nowMs: Long = System.currentTimeMillis()): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date(nowMs - 4 * 3_600_000L))
 }

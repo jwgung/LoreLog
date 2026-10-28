@@ -85,7 +85,7 @@ internal fun TodosScreen(onBack: () -> Unit) {
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text("할 일", color = TText, fontSize = 18.sp)
-            NavButton(NavIcon.CHAT, "대화로", onBack)
+            NavButton(NavIcon.CHAT, "대화로", onClick = onBack)
         }
         Column(
             modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp),

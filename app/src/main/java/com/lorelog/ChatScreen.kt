@@ -10,6 +10,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
@@ -96,8 +97,19 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val running by LoggerService.isRunning.collectAsStateWithLifecycle()
-    val day = remember { SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date()) }
-    val dayLabel = remember { SimpleDateFormat("M월 d일 EEEE", Locale.KOREAN).format(Date()) }
+    var day by remember { mutableStateOf(DiaryPrefs.diaryDay()) }
+    val dayLabel = remember(day) {
+        SimpleDateFormat("M월 d일 EEEE", Locale.KOREAN).format(SimpleDateFormat("yyyy-MM-dd", Locale.US).parse(day) ?: Date())
+    }
+    // 앱을 켜 둔 채 날이 바뀌면(새벽 4시) 다음에 돌아올 때 새 날로 바꾼다.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+            if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) day = DiaryPrefs.diaryDay()
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
     var pendingCards by remember { mutableStateOf(-1) }
     var started by remember { mutableStateOf(false) }
     var reload by remember { mutableStateOf(0) }
@@ -106,6 +118,24 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
     var selected by remember { mutableStateOf<Int?>(null) }
     var fixing by remember { mutableStateOf<String?>(null) }
     var input by remember { mutableStateOf("") }
+    var todoCount by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) { todoCount = DiaryClient.fetchTodos(context)?.open?.size ?: 0 }
+    // 앱을 다시 열어도 오늘 나눈 대화가 이어서 보이게 서버에서 불러온다.
+    LaunchedEffect(day) {
+        extra.clear(); selected = null; fixing = null
+        var pendingFix: Msg.Fixed? = null
+        val restored = mutableListOf<Msg>()
+        for (l in DiaryClient.fetchChat(context, day)) {
+            if (l.role == "user") {
+                restored.add(Msg.Mine(l.text))
+                pendingFix = l.wrong?.let { Msg.Fixed(it, l.text) }
+            } else {
+                restored.add(Msg.Assistant(l.text))
+                pendingFix?.let { restored.add(it); pendingFix = null }
+            }
+        }
+        if (restored.isNotEmpty() && extra.isEmpty()) extra.addAll(restored)
+    }
     val scroll = rememberScrollState()
     val dictation by Dictation.state.collectAsStateWithLifecycle()
     var notice by remember { mutableStateOf("") }
@@ -137,7 +167,7 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
 
     // 확인할 대화가 없으면 바로 정리를 가져온다. 있으면 사용자가 카드를 처리한 뒤 "정리 보기"를 누른다.
     LaunchedEffect(pendingCards) { if (pendingCards == 0) started = true }
-    LaunchedEffect(started, reload) {
+    LaunchedEffect(started, reload, day) {
         if (!started) return@LaunchedEffect
         draft = DiaryClient.Draft.Generating
         // 최신 기록과 대화 상태를 서버로 먼저 보낸다. 그래야 정리에 오늘 것이 들어간다.
@@ -190,9 +220,9 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                NavButton(NavIcon.TODO, "할 일", onTodos)
-                NavButton(NavIcon.SETTINGS, "수집·연동 설정", onCollect)
-                NavButton(NavIcon.DRAWER, "서랍", onDrawer)
+                NavButton(NavIcon.TODO, "할 일", badge = todoCount, onClick = onTodos)
+                NavButton(NavIcon.SETTINGS, "수집·연동 설정", onClick = onCollect)
+                NavButton(NavIcon.DRAWER, "서랍", onClick = onDrawer)
             }
         }
 
@@ -330,7 +360,7 @@ internal enum class NavIcon { DRAWER, CHAT, SETTINGS, BACK, TODO }
 
 /** 화면 이동용 아이콘 버튼(44dp 원). 표준 Material 아이콘을 쓰고 접근성 설명을 붙인다. */
 @Composable
-internal fun NavButton(icon: NavIcon, label: String, onClick: () -> Unit) {
+internal fun NavButton(icon: NavIcon, label: String, badge: Int = 0, onClick: () -> Unit) {
     val vector = when (icon) {
         NavIcon.DRAWER -> Lucide.Archive
         NavIcon.CHAT -> Lucide.Chat
@@ -338,10 +368,19 @@ internal fun NavButton(icon: NavIcon, label: String, onClick: () -> Unit) {
         NavIcon.BACK -> Lucide.Back
         NavIcon.TODO -> Lucide.Todo
     }
-    Box(
-        modifier = Modifier.size(44.dp).clip(CircleShape).border(1.dp, Line, CircleShape).clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) { Icon(vector, contentDescription = label, tint = Color(0xFFB4BBC8), modifier = Modifier.size(22.dp)) }
+    Box(modifier = Modifier.size(44.dp)) {
+        Box(
+            modifier = Modifier.size(44.dp).clip(CircleShape).border(1.dp, Line, CircleShape).clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) { Icon(vector, contentDescription = label, tint = Color(0xFFB4BBC8), modifier = Modifier.size(22.dp)) }
+        if (badge > 0) {
+            // 원 안에 두면 잘리므로 원 위에 따로 얹는다.
+            Box(
+                modifier = Modifier.align(Alignment.TopEnd).offset(x = 4.dp, y = (-4).dp).size(20.dp).clip(CircleShape).background(Accent),
+                contentAlignment = Alignment.Center,
+            ) { Text(if (badge > 9) "9+" else "$badge", color = Ink, fontSize = 11.sp) }
+        }
+    }
 }
 
 private val TimeLead = Regex("^((?:오전|오후|저녁|아침|새벽|밤|정오)(?:부터)?\\s*(?:\\d{1,2}시)?(?:\\s*\\d{1,2}분)?(?:경)?)")
@@ -414,7 +453,7 @@ internal fun DrawerScreen(onBack: () -> Unit, onOpen: (AppScreen) -> Unit) {
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text("서랍", color = Text0, fontSize = 18.sp)
-            NavButton(NavIcon.CHAT, "대화", onBack)
+            NavButton(NavIcon.CHAT, "대화", onClick = onBack)
         }
         Text(
             "저에 대해 아는 것은 여기에만 있고, 이 폰과 내 서버 밖으로 나가지 않아요. 나만 열 수 있어요.",
@@ -443,7 +482,7 @@ internal fun DrawerPage(title: String, onBack: () -> Unit, content: @Composable 
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Text(title, color = Text0, fontSize = 18.sp)
-            NavButton(NavIcon.BACK, "서랍으로", onBack)
+            NavButton(NavIcon.BACK, "서랍으로", onClick = onBack)
         }
         content()
         androidx.compose.foundation.layout.Spacer(Modifier.size(32.dp))

@@ -257,7 +257,7 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(pageTitle, style = MaterialTheme.typography.headlineSmall)
-            if (page == null) NavButton(NavIcon.DRAWER, "서랍", onBack) else NavButton(NavIcon.BACK, "수집·연동 설정으로", { page = null })
+            if (page == null) NavButton(NavIcon.DRAWER, "서랍", onClick = onBack) else NavButton(NavIcon.BACK, "수집·연동 설정으로", onClick = { page = null })
         }
         if (page == null) {
         Text(

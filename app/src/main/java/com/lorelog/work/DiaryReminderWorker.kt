@@ -65,7 +65,7 @@ class DiaryReminderWorker(context: Context, params: WorkerParameters) : Coroutin
         private suspend fun prepareDraft(context: Context): Boolean {
             LogRepository.pushToHttp(context)
             LogRepository.pushConversations(context)
-            val day = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+            val day = DiaryPrefs.diaryDay()
             repeat(60) {
                 when (DiaryClient.fetchDraft(context, day)) {
                     is DiaryClient.Draft.Ready -> return true

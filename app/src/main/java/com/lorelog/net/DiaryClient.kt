@@ -111,6 +111,22 @@ object DiaryClient {
         }
     }
 
+    data class ChatLine(val role: String, val text: String, val wrong: String?)
+
+    /** 오늘 서버에 남은 대화(사용자 말, 비서 답, 정정). 앱을 다시 열어도 이어서 보이게 한다. 실패하면 빈 목록. */
+    suspend fun fetchChat(context: Context, day: String): List<ChatLine> = withContext(Dispatchers.IO) {
+        var conn: HttpURLConnection? = null
+        try {
+            conn = open(context, "/diary/$day/chat", "GET") ?: return@withContext emptyList()
+            if (conn.responseCode != 200) return@withContext emptyList()
+            val arr = JSONObject(conn.inputStream.bufferedReader().readText()).getJSONArray("messages")
+            (0 until arr.length()).map {
+                val o = arr.getJSONObject(it)
+                ChatLine(o.getString("role"), o.getString("text"), if (o.has("wrong")) o.getString("wrong") else null)
+            }
+        } catch (e: Exception) { emptyList() } finally { conn?.disconnect() }
+    }
+
     data class Todo(val id: String, val title: String, val source: String, val due: String, val auto: Boolean = false)
     data class Todos(val open: List<Todo>, val done: List<Todo>, val extracting: Boolean)
 
