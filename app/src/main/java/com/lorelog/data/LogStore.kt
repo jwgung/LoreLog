@@ -339,6 +339,12 @@ class LogStore(context: Context, password: ByteArray) {
         db.update(TABLE_CONV, values, "id = ?", arrayOf(id.toString()))
     }
 
+    /** 내 대화가 아니라 주변에서 들린 소리. 참석자는 비우고 검토 큐에서 빠진다(status=ambient). */
+    fun ambientConversation(id: Long) {
+        val values = ContentValues().apply { put("status", "ambient") }
+        db.update(TABLE_CONV, values, "id = ?", arrayOf(id.toString()))
+    }
+
     fun insertSummary(timestampMs: Long, periodStartMs: Long, periodEndMs: Long, text: String): Long {
         val values = ContentValues().apply {
             put("ts", timestampMs)

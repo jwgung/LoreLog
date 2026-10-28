@@ -278,6 +278,25 @@ object LogRepository {
         result.lines.size
     }
 
+    /**
+     * 최근 [days]일 대화의 현재 상태(참석자·status)를 통째로 다시 보낸다. 증분 전송은 새 행만 보내므로
+     * 나중에 태그/주변 소리로 바뀐 상태는 이렇게 따로 알려야 서버가 알 수 있다. 서버는 같은 id의 마지막 줄을 쓴다.
+     */
+    suspend fun pushConversations(context: Context, days: Int = 3): Boolean = withContext(Dispatchers.IO) {
+        val url = EndpointConfig.url(context) ?: return@withContext false
+        val since = System.currentTimeMillis() - days * 86_400_000L
+        val lines = store.recentConversation(KEEP).filter { it.startMs >= since }.map { c ->
+            org.json.JSONObject().apply {
+                put("type", "conversation"); put("id", c.id)
+                put("start_ms", c.startMs); put("end_ms", c.endMs)
+                put("participants", c.participants); put("source", c.source)
+                put("status", c.status); put("context", c.context)
+            }.toString()
+        }
+        if (lines.isEmpty()) return@withContext true
+        HttpSink.post(url, EndpointConfig.token(context), lines.joinToString("\n", postfix = "\n"))
+    }
+
     /** 모든 기록을 지운다(되돌릴 수 없음). 보관 오디오도 함께. */
     fun deleteAll(context: Context) {
         scope.launch {
@@ -373,6 +392,14 @@ object LogRepository {
     fun skipConversation(id: Long) {
         scope.launch {
             store.skipConversation(id)
+            _conversations.value = store.recentConversation(KEEP)
+        }
+    }
+
+    /** 검토 큐에서 "내 대화 아님". 주변 소리로 표시한다(status=ambient). */
+    fun ambientConversation(id: Long) {
+        scope.launch {
+            store.ambientConversation(id)
             _conversations.value = store.recentConversation(KEEP)
         }
     }
