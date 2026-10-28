@@ -11,8 +11,15 @@
 - `bin/life-ingest` 폰·PC가 보내는 기록 수신, 일기·할 일·전사 HTTP (코드는 `life/ingest/`: `settings`, `store`, `asr`, `jobs`, `http`, `cli`)
 - `bin/life-diary` 하루 정리 (코드는 `life/assistant/`. `life-ingest`는 이 모듈을 프로세스 없이 직접 부른다), 대화, 할 일, 메신저 허용
 - `bin/mail-sync`, `bin/calendar-sync` 메일·일정 수집
-- `web/` 데스크톱·폰 브라우저용 화면(대화, 할 일, 서랍). `life-ingest`가 `/`에서 그대로 내준다. 토큰은 처음 한 번 입력하면 그 브라우저에 기억한다.
+- `web/` 데스크톱·폰 브라우저용 화면(대화, 할 일, 서랍, 말하기). `life-ingest`가 `/`에서 그대로 내준다. 토큰은 처음 한 번 입력하면 그 브라우저에 기억한다.
 - `deploy/` systemd 유닛과 환경 파일 예시
 
 ## 설치
 `deploy/install.sh`가 `bin/*`을 `~/.local/bin/`에 심볼릭 링크로 연결한다.
+
+## 웹 화면 주소
+`life-ingest`는 tailnet 주소에 HTTP로만 뜬다. 브라우저의 마이크와 홈 화면 설치는 HTTPS에서만 되므로 tailscale serve로 앞에 HTTPS를 붙인다(한 번만, sudo 필요).
+
+    sudo tailscale serve --bg --https=48765 http://<tailnet 주소>:8765
+
+주소는 `https://<머신>.<tailnet>.ts.net:48765/`. 폰 앱은 기존 HTTP 주소를 그대로 쓸 수 있다. 되돌리기: `sudo tailscale serve --https=48765 off`.

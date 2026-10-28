@@ -162,6 +162,73 @@ $("input").addEventListener("keydown", (ev) => {
 function autosize() { const i = $("input"); i.style.height = "auto"; i.style.height = Math.min(i.scrollHeight, 160) + "px"; }
 $("input").addEventListener("input", autosize);
 
+// ---------- dictation: record, convert to 16 kHz mono wav, let the server transcribe ----------
+const ICON_MIC = $("mic").innerHTML;
+const ICON_STOP = '<svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+const MAX_RECORD_MS = 8 * 60 * 1000;   // 8 minutes of 16 kHz mono 16-bit is about 15 MB; the server accepts 20 MB
+let rec = null;
+
+function encodeWav(samples, rate) {
+  const buf = new ArrayBuffer(44 + samples.length * 2);
+  const v = new DataView(buf);
+  const str = (o, t) => [...t].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, "RIFF"); v.setUint32(4, 36 + samples.length * 2, true); str(8, "WAVEfmt ");
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, samples.length * 2, true);
+  samples.forEach((x, i) => v.setInt16(44 + i * 2, Math.max(-1, Math.min(1, x)) * 0x7fff, true));
+  return new Blob([buf], { type: "audio/wav" });
+}
+async function toWav(blob) {
+  const ctx = new AudioContext();
+  const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+  ctx.close();
+  const off = new OfflineAudioContext(1, Math.ceil(decoded.duration * 16000), 16000);
+  const src = off.createBufferSource();
+  src.buffer = decoded;
+  src.connect(off.destination);
+  src.start();
+  return encodeWav((await off.startRendering()).getChannelData(0), 16000);
+}
+function micState(state) {   // idle | rec | work
+  const m = $("mic");
+  m.classList.toggle("rec", state === "rec");
+  m.disabled = state === "work";
+  m.innerHTML = state === "rec" ? ICON_STOP : ICON_MIC;
+  m.title = m.ariaLabel = state === "rec" ? "끝내기" : "말하기";
+  if (state === "work") $("input").placeholder = "받아 적는 중…";
+  else if (!wrong) $("input").placeholder = "오늘 하루에 대해 말해 주세요";
+}
+async function startRecording() {
+  if (!navigator.mediaDevices?.getUserMedia) { $("input").placeholder = "이 주소(https)에서만 말할 수 있어요"; return; }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch { $("input").placeholder = "마이크 권한이 필요해요"; return; }
+  const chunks = [];
+  const mr = new MediaRecorder(stream);
+  mr.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  mr.onstop = async () => {
+    stream.getTracks().forEach((t) => t.stop());
+    clearTimeout(rec?.timer);
+    rec = null;
+    micState("work");
+    let note = "";   // shown in the input after the mic returns to idle (idle resets the placeholder)
+    try {
+      const wav = await toWav(new Blob(chunks, { type: mr.mimeType }));
+      const res = await fetch("/transcribe", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: wav });
+      if (res.status === 401) return showLogin("연결이 끊겼어요. 토큰을 다시 입력해 주세요.");
+      const { text = "" } = await res.json().catch(() => ({}));
+      if (text) { const i = $("input"); i.value = (i.value ? i.value + " " : "") + text; autosize(); i.focus(); }
+      else note = "잘 들리지 않았어요. 다시 말해 주세요";
+    } catch { note = "받아 적지 못했어요"; }
+    finally { micState("idle"); if (note) $("input").placeholder = note; }
+  };
+  mr.start();
+  rec = { mr, timer: setTimeout(() => mr.state === "recording" && mr.stop(), MAX_RECORD_MS) };
+  micState("rec");
+}
+$("mic").addEventListener("click", () => (rec ? rec.mr.stop() : startRecording()));
+
 // ---------- to-dos ----------
 const ICON_CHECK = '<svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></svg>';
 const ICON_X = '<svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';

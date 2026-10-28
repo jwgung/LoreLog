@@ -56,6 +56,12 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 .pill textarea:focus-visible { outline: none; }
 .pill:focus-within { border-color: var(--accent); }
 .send { width: 40px; height: 40px; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-text); display: grid; place-items: center; flex: none; }
+.mic { width: 40px; height: 40px; border-radius: 50%; border: 0; background: transparent; color: var(--muted); display: grid; place-items: center; flex: none; }
+.mic:hover { background: var(--bg); }
+.mic.rec { background: var(--warn); color: #fff; animation: pulse 1.2s ease-in-out infinite; }
+.mic:disabled { opacity: .4; cursor: default; }
+@keyframes pulse { 50% { box-shadow: 0 0 0 6px rgba(194, 65, 12, .25); } }
+@media (prefers-reduced-motion: reduce) { .mic.rec { animation: none; } }
 .send:disabled { opacity: .4; cursor: default; }
 
 #todos { display: none; background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 14px 16px; overflow-y: auto; }
