@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+"""Import IMAP mail (inbox and sent folders) into the vault as Mail/ notes. Read-only mirror.
+
+- Never modifies the server: folders are opened read-only and bodies are read with BODY.PEEK,
+  so read flags do not change.
+- Incremental: processed UIDs are recorded per folder (start over if UIDVALIDITY changes). A mail that
+  already has a note is skipped, matched by mail_id (Message-ID) or by a date/time/sender/subject fingerprint.
+- Notes use the same frontmatter as the existing Mail/ notes created by Mailstone, so hub-sync reads them unchanged.
+- Raw .eml files and attachments are not stored (attachments are listed by name only).
+
+Settings live in ~/.config/vault-sync/ :
+  env           secrets only (KEY=VALUE, mode 600): IMAP_USER, IMAP_PASSWORD
+  sources.toml  what to collect, under [mail]: host, port, account, folders, since
+                (env may also carry IMAP_HOST, IMAP_PORT, MAIL_ACCOUNT, MAIL_FOLDERS, MAIL_SINCE; sources.toml wins)
+Prefer `life add mail` and `life sync` over editing these by hand.
+
+Exit status: 0 on success, 1 if the connection failed or a folder could not be read.
+
+Usage: mail-sync [--dry-run] [--limit N] [--folder NAME] [--selftest] [-h]
+"""
+import email
+import hashlib
+import email.policy
+import email.utils
+import imaplib
+import json
+import os
+import re
+import sys
+import tempfile
+import tomllib
+from datetime import datetime
+from html.parser import HTMLParser
+from pathlib import Path
+
+VAULT = Path(os.environ.get("OBSIDIAN_VAULT", "/home/capalace/Obsidian"))
+ENV_FILE = Path.home() / ".config/vault-sync/env"
+SOURCES_FILE = Path.home() / ".config/vault-sync/sources.toml"
+STATE_FILE = Path.home() / ".local/share/vault-sync/mail-state.json"
+IDENTITY_FILE = Path.home() / ".local/share/hub-sync/identity.json"
+DEFAULT_LIMIT = 300
+
+
+def load_env():
+    cfg = {}
+    if ENV_FILE.exists():
+        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                cfg[k.strip()] = v.strip().strip('"').strip("'")
+    if SOURCES_FILE.exists():  # sources.toml (non-secret settings: what to collect) overrides env
+        m = tomllib.loads(SOURCES_FILE.read_text(encoding="utf-8")).get("mail", {})
+        for toml_key, env_key in (("host", "IMAP_HOST"), ("port", "IMAP_PORT"), ("account", "MAIL_ACCOUNT"), ("since", "MAIL_SINCE")):
+            if toml_key in m:
+                cfg[env_key] = str(m[toml_key])
+        if "folders" in m:
+            cfg["MAIL_FOLDERS"] = ",".join(m["folders"])
+    return cfg
+
+
+class _Text(HTMLParser):
+    BLOCK = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "table", "blockquote"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.out, self.skip = [], 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("script", "style", "head"):
+            self.skip += 1
+        elif tag in self.BLOCK:
+            self.out.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style", "head"):
+            self.skip = max(0, self.skip - 1)
+        elif tag in self.BLOCK:
+            self.out.append("\n")
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.out.append(data)
+
+
+def html_to_text(html):
+    p = _Text()
+    p.feed(html)
+    text = re.sub(r"[ \t ]+", " ", "".join(p.out))
+    return re.sub(r"\n\s*\n\s*\n+", "\n\n", text).strip()
+
+
+def yq(s):
+    s = re.sub(r"\s+", " ", str(s or "")).strip()
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def fmt_addrs(value):
+    out = []
+    for name, addr in email.utils.getaddresses([value or ""]):
+        if not addr:
+            continue
+        out.append(f"{name.strip()} <{addr}>" if name.strip() else f"<{addr}>")
+    return out
+
+
+def norm_id(v):
+    return (v or "").strip().strip("<>").strip()
+
+
+def fingerprint(day, hm, addr, subject):
+    """Fingerprint to recognise a mail whose note was stored under a different ID scheme (e.g. Mailstone's internal ID)."""
+    subj = re.sub(r"[\s\"\\]+", "", subject or "").lower()
+    return f"{day}|{hm}|{(addr or '').strip().lower()}|{subj}"
+
+
+def msg_fingerprint(msg):
+    try:
+        dt = email.utils.parsedate_to_datetime(str(msg.get("Date"))).astimezone()
+    except Exception:
+        return ""
+    return fingerprint(f"{dt:%Y-%m-%d}", f"{dt:%H:%M}", email.utils.parseaddr(str(msg.get("From") or ""))[1],
+                       str(msg.get("Subject") or "").strip())
+
+
+def slug(subject):
+    s = re.sub(r"[^a-z0-9]+", "-", (subject or "").lower()).strip("-")[:60].strip("-")
+    return s or "mail"
+
+
+def body_of(msg):
+    part = msg.get_body(preferencelist=("plain", "html"))
+    if part is None:
+        return ""
+    try:
+        content = part.get_content()
+    except Exception:
+        return ""
+    return content.strip() if part.get_content_type() == "text/plain" else html_to_text(content)
+
+
+def render(msg, source, own, synced):
+    """One mail -> (relative path, note text, mail_id)."""
+    mid = norm_id(msg.get("Message-ID"))
+    if not mid:  # no Message-ID: derive one from the fingerprint (an empty ID would be mistaken for "already known")
+        mid = "nomid-" + hashlib.sha1(msg_fingerprint(msg).encode("utf-8")).hexdigest()[:16]
+    subject = str(msg.get("Subject") or "").strip()
+    try:
+        dt = email.utils.parsedate_to_datetime(str(msg.get("Date"))).astimezone()
+    except Exception:
+        dt = datetime.now().astimezone()
+    frm = fmt_addrs(str(msg.get("From") or ""))
+    sender = email.utils.parseaddr(str(msg.get("From") or ""))[1].lower()
+    refs = [norm_id(x) for x in str(msg.get("References") or "").split() if norm_id(x)]
+    atts = [a.get_filename() or "(unnamed)" for a in msg.iter_attachments()]
+    fm = [
+        "---", "type: mail", f"mail_id: {mid}", f"mail_source: {source}", "mail_state: live",
+        f"mail_synced: {synced}", f"title: {yq(subject)}", f"date: {dt:%Y-%m-%d}", f"time: {dt:%H:%M}",
+        f"from: {', '.join(frm)}", f"to: [{', '.join(fmt_addrs(str(msg.get('To') or '')))}]",
+        f"cc: [{', '.join(fmt_addrs(str(msg.get('Cc') or '')))}]", f"subject: {yq(subject)}",
+        f"in_reply_to: {norm_id(msg.get('In-Reply-To'))}", f"references: [{', '.join(refs)}]",
+        f"attachments: [{', '.join(yq(a) for a in atts)}]",
+        f"richtung: {'ausgehend' if sender and sender in own else 'eingehend'}", "---",
+    ]
+    note = "\n".join(fm) + f"\n\n## Notes\n\n%% mail-sync:begin %%\n## Message\n\n{body_of(msg)}\n"
+    rel = f"Mail/{dt:%Y}/{dt:%Y-%m-%d}-{dt:%H%M}-{slug(subject)}.md"
+    return rel, note, mid
+
+
+def known_notes():
+    """Mails that already have a note -> (set of mail_ids, set of fingerprints)"""
+    ids, fps = set(), set()
+    for p in (VAULT / "Mail").glob("*/*.md"):
+        head = p.read_text(encoding="utf-8", errors="replace")[:1500]
+        m = re.search(r"^mail_id:\s*(.+)$", head, re.M)
+        if m:
+            ids.add(m.group(1).strip())
+        d, t, s = (re.search(rf"^{k}:[ \t]*(.*)$", head, re.M) for k in ("date", "time", "subject"))
+        f = re.search(r"^from:[ \t]*(.*)$", head, re.M)
+        if d and t and s and f:
+            a = re.search(r"<([^>]+)>", f.group(1)) or re.search(r"(\S+@\S+)", f.group(1))
+            fps.add(fingerprint(d.group(1).strip(), t.group(1).strip(), a.group(1) if a else "", s.group(1).strip()))
+    return ids, fps
+
+
+def write_note(rel, note):
+    f = VAULT / rel
+    n = 2
+    while f.exists():
+        f = VAULT / rel.replace(".md", f"-{n}.md")
+        n += 1
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(note, encoding="utf-8")
+    return f
+
+
+def selftest():
+    raw = (b"From: =?utf-8?b?7J207ZiE66+8?= <hmlee@isaac-eng.com>\r\nTo: A B <a@x.com>, c@y.com\r\nCc: =?utf-8?b?6raB7KCV7JuQ?= <jwgung@isaac-eng.com>\r\n"
+           b"Subject: =?utf-8?b?UmU6IOyKpOuniO2KuO2MqeuKkOumrCBSRlE=?=\r\nDate: Tue, 27 Oct 2026 14:37:00 +0900\r\nMessage-ID: <abc123@x.com>\r\n"
+           b"In-Reply-To: <prev@x.com>\r\nReferences: <r1@x.com> <prev@x.com>\r\nMIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n"
+           b"<html><head><style>p{}</style></head><body><p>\xec\x95\x88\xeb\x85\x95\xed\x95\x98\xec\x84\xb8\xec\x9a\x94</p><div>\xea\xb0\x90\xec\x82\xac&nbsp;\xed\x95\xa9\xeb\x8b\x88\xeb\x8b\xa4</div></body></html>")
+    msg = email.message_from_bytes(raw, policy=email.policy.default)
+    rel, note, mid = render(msg, "account/Sent Messages", {"jwgung@isaac-eng.com"}, "2026-10-27T18:00:00+09:00")
+    print(rel); print(note)
+    assert mid == "abc123@x.com" and "richtung: eingehend" in note and "안녕하세요" in note and "style" not in note
+    rel2, note2, _ = render(msg, "x", {"hmlee@isaac-eng.com"}, "t")
+    assert "richtung: ausgehend" in note2
+    print("selftest ok")
+
+
+def acquire_lock(name):
+    """Non-blocking exclusive lock, so a timer run and a manual run can never overlap (both would write the same notes).
+    Returns a handle to keep alive for the whole run, True where file locks are unavailable (Windows), or None if busy."""
+    try:
+        import fcntl
+    except ImportError:
+        return True
+    path = Path.home() / ".local/share/vault-sync" / f"{name}.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fh = open(path, "w")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        return None
+    return fh
+
+
+def main():
+    args = sys.argv[1:]
+    if {"-h", "--help"} & set(args):
+        print(__doc__.strip())
+        return
+    if "--selftest" in args:
+        return selftest()
+    dry = "--dry-run" in args
+    lock = True if dry else acquire_lock("mail-sync")  # a dry run writes nothing, so it needs no lock
+    if lock is None:
+        print("Another mail-sync run is in progress; skipping this one.")
+        return 0
+    limit = int(args[args.index("--limit") + 1]) if "--limit" in args else DEFAULT_LIMIT
+    only = args[args.index("--folder") + 1] if "--folder" in args else None
+    cfg = load_env()
+    need = [k for k in ("IMAP_HOST", "IMAP_USER", "IMAP_PASSWORD") if not cfg.get(k)]
+    if need:
+        print(f"Missing {', '.join(need)} (env: {ENV_FILE}, sources.toml: {SOURCES_FILE}). Run `life add mail`.", file=sys.stderr)
+        sys.exit(2)
+    folders = [only] if only else [f.strip() for f in cfg.get("MAIL_FOLDERS", "INBOX,Sent Messages").split(",") if f.strip()]
+    account = cfg.get("MAIL_ACCOUNT", "account")
+    since = cfg.get("MAIL_SINCE", "")
+    own = set()
+    if IDENTITY_FILE.exists():
+        own = {e.lower() for e in json.loads(IDENTITY_FILE.read_text(encoding="utf-8")).get("emails", [])}
+    state = json.loads(STATE_FILE.read_text(encoding="utf-8")) if STATE_FILE.exists() else {}
+    known, known_fp = known_notes()
+    synced = datetime.now().astimezone().isoformat(timespec="seconds")
+
+    try:
+        imap = imaplib.IMAP4_SSL(cfg["IMAP_HOST"], int(cfg.get("IMAP_PORT", "993")))
+        imap.login(cfg["IMAP_USER"], cfg["IMAP_PASSWORD"])
+    except Exception as e:  # report only the error type so the password cannot leak into the message
+        print(f"IMAP connection failed: {type(e).__name__}", file=sys.stderr)
+        sys.exit(1)
+    total_new, failed = 0, False
+    try:
+        for folder in folders:
+            typ, data = imap.select(f'"{folder}"', readonly=True)
+            if typ != "OK":
+                print(f"[{folder}] cannot open folder", file=sys.stderr)
+                failed = True
+                continue
+            raw_uidv = imap.response("UIDVALIDITY")[1][0]  # response() consumes the value, so call it only once
+            uidv = raw_uidv.decode() if raw_uidv else ""
+            st = state.get(folder, {})
+            if st.get("uidvalidity") != uidv:
+                st = {"uidvalidity": uidv, "seen": []}
+            seen = set(st["seen"])
+            crit = ["ALL"] if not since else ["SINCE", datetime.strptime(since, "%Y-%m-%d").strftime("%d-%b-%Y")]
+            typ, d = imap.uid("search", None, *crit)
+            all_uids = [int(x) for x in d[0].split()]
+            todo = [u for u in all_uids if u not in seen]
+            # 1) read only the headers first, so mails that already have a note are not downloaded
+            fresh, skipped = [], 0
+            for i in range(0, len(todo), 200):
+                batch = todo[i:i + 200]
+                # ask for UID explicitly: otherwise a server may send it after the literal, where we do not look
+                typ, resp = imap.uid("fetch", ",".join(map(str, batch)), "(UID BODY.PEEK[HEADER.FIELDS (MESSAGE-ID DATE FROM SUBJECT)])")
+                got = {}
+                for item in resp:
+                    if isinstance(item, tuple):
+                        m = re.search(rb"UID (\d+)", item[0])
+                        if m:
+                            h = email.message_from_bytes(item[1], policy=email.policy.default)
+                            got[int(m.group(1))] = (norm_id(h.get("Message-ID")), msg_fingerprint(h))
+                for u in batch:
+                    mid, fp = got.get(u, ("", ""))
+                    if (mid and mid in known) or (fp and fp in known_fp):
+                        seen.add(u); skipped += 1
+                    else:
+                        fresh.append(u)
+            take = fresh[:limit]
+            print(f"[{folder}] server {len(all_uids)} · already known/processed {len(all_uids) - len(fresh)} · new {len(fresh)} (this run {len(take)})")
+            wrote = 0
+            for u in take:
+                typ, resp = imap.uid("fetch", str(u), "(BODY.PEEK[])")
+                raw = next((it[1] for it in resp if isinstance(it, tuple)), None)
+                if raw is None:
+                    continue
+                msg = email.message_from_bytes(raw, policy=email.policy.default)
+                rel, note, mid = render(msg, f"{account}/{folder}", own, synced)
+                seen.add(u)
+                fp = msg_fingerprint(msg)
+                if mid in known or (fp and fp in known_fp):
+                    continue
+                if not dry:
+                    write_note(rel, note)
+                known.add(mid); known_fp.add(fp); wrote += 1
+            total_new += wrote
+            if not dry:
+                st["seen"] = sorted(seen)
+                state[folder] = st
+    finally:
+        try:
+            imap.logout()
+        except Exception:
+            pass
+    if not dry:
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        STATE_FILE.write_text(json.dumps(state), encoding="utf-8")
+    print(f"{'[dry-run] ' if dry else ''}{total_new} new notes")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

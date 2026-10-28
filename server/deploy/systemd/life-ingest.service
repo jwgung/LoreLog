@@ -1,0 +1,14 @@
+[Unit]
+Description=life-ingest: receive NDJSON from phones and PCs (LoreLog) over the tailnet
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 %h/.local/bin/life-ingest
+# the tailnet address may not exist yet right after boot: keep retrying instead of giving up
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=default.target
