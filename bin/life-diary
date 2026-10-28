@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""life-diary launcher. The code lives in server/life/assistant (see its cli module)."""
+"""life-diary launcher. The code lives in life/assistant (see its cli module)."""
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "server"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from life.assistant.cli import main  # noqa: E402
 
 sys.exit(main())
