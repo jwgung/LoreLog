@@ -224,6 +224,11 @@ impl IntakeEngine {
                 self.mark_rejected(&k);
                 continue;
             }
+            // an empty file has nothing to keep; skip it without a wasted upload+413, and do not churn on it
+            if meta.len() == 0 {
+                self.mark_rejected(&k);
+                continue;
+            }
             let data = match std::fs::read(&path) {
                 Ok(d) => d,
                 Err(_) => continue, // unreadable right now (locked by another program): try next pass

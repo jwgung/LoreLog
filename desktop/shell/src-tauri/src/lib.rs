@@ -76,20 +76,17 @@ fn save_settings(url: String, token: Option<String>) -> Result<(), String> {
     config::save(&cfg)
 }
 
-/// https anywhere; http only to localhost/127.x/::1/*.ts.net (tailnet). Nothing else: the token must not leave in clear.
+/// The address must be a tailnet host (the server lives on the tailnet). https to a *.ts.net host, or http only to
+/// loopback/*.ts.net. Nothing else — a mistyped public host must not receive the Bearer token.
 fn acceptable_url(url: &str) -> bool {
-    if url.is_empty() {
-        return false;
-    }
-    if let Some(host) = url.strip_prefix("https://") {
-        return !host.is_empty();
+    let host_of = |rest: &str| rest.split(['/', ':']).next().unwrap_or("").to_string();
+    if let Some(rest) = url.strip_prefix("https://") {
+        let host = host_of(rest);
+        return host.ends_with(".ts.net");
     }
     if let Some(rest) = url.strip_prefix("http://") {
-        let host = rest.split(['/', ':']).next().unwrap_or("");
-        return host == "localhost"
-            || host == "::1"
-            || host.starts_with("127.")
-            || host.ends_with(".ts.net");
+        let host = host_of(rest);
+        return host == "localhost" || host == "::1" || host.starts_with("127.") || host.ends_with(".ts.net");
     }
     false
 }
@@ -222,4 +219,24 @@ pub fn run() {
                 stop_for_exit.store(true, Ordering::SeqCst);
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::acceptable_url;
+
+    #[test]
+    fn only_tailnet_or_loopback_addresses_are_accepted() {
+        // the server lives on the tailnet; a public host must never receive the token
+        assert!(acceptable_url("https://gungbuntu.tail8d1ab7.ts.net:48765"));
+        assert!(acceptable_url("http://localhost:8765"));
+        assert!(acceptable_url("http://127.0.0.1:8765"));
+        assert!(acceptable_url("http://host.tail8d1ab7.ts.net:8765"));
+
+        assert!(!acceptable_url("https://evil.example.com"), "a public https host is refused");
+        assert!(!acceptable_url("http://evil.example.com"), "http off-tailnet is refused");
+        assert!(!acceptable_url("https://ts.net.evil.com"), "a lookalike host is refused");
+        assert!(!acceptable_url(""), "empty is refused");
+        assert!(!acceptable_url("ftp://x.ts.net"), "a non-http scheme is refused");
+    }
 }

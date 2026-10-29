@@ -235,6 +235,22 @@ fn the_journal_file_lands_where_asked() {
 }
 
 #[test]
+fn an_empty_file_is_skipped_not_uploaded() {
+    let fx = Fixture::new();
+    fx.write("empty.txt", b"");
+    fx.write("z_real.txt", b"has content");
+    let srv = FakeServer::default();
+    let mut eng = fx.engine();
+    let t = now();
+    eng.scan(&[fx.watch()], t);
+    eng.scan(&[fx.watch()], t + 20.0);
+    eng.step(&srv, t + 20.0);
+    let names: Vec<String> = srv.puts.borrow().iter().map(|p| p.1.clone()).collect();
+    assert_eq!(names, vec!["z_real.txt"], "an empty file is never uploaded, the real one still is");
+    assert!(fx.watch().join("empty.txt").exists(), "and the empty original is left in place");
+}
+
+#[test]
 fn a_file_over_the_cap_is_skipped_without_reading_or_blocking() {
     let fx = Fixture::new();
     fx.write("huge.bin", &vec![b'X'; 2048]);
