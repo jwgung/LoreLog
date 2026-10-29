@@ -149,6 +149,31 @@ def gather_lorelog(day):
     return out
 
 
+def gather_pc(day, top=12):
+    """What the user worked in on the PC (life-agent): the longest stays, same app and title merged across short breaks."""
+    path = DATA / "raw/pc" / f"{day}.ndjson"
+    if not path.exists():
+        return []
+    segs = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if d.get("type") == "window" and d.get("app") and d.get("ts") and d.get("end"):
+            segs.append(d)
+    merged = []
+    for d in sorted(segs, key=lambda x: x["ts"]):
+        m = merged[-1] if merged else None
+        if m and m["app"] == d["app"] and m["title"] == d["title"] and d["ts"] - m["end"] <= 5 * 60 * 1000:
+            m["end"], m["secs"] = d["end"], m["secs"] + d["dur_s"]
+        else:
+            merged.append({"app": d["app"], "title": d["title"], "ts": d["ts"], "end": d["end"], "secs": d["dur_s"]})
+    longest = sorted((m for m in merged if m["secs"] >= 300), key=lambda m: -m["secs"])[:top]
+    return [f"{local(m['ts']):%H:%M}~{local(m['end']):%H:%M} {m['app']} \"{m['title'][:80]}\" ({m['secs'] // 60}분)"
+            for m in sorted(longest, key=lambda m: m["ts"])]
+
+
 def build_context(day, summary=False):
     lore = gather_lorelog(day)
     parts = [
@@ -156,6 +181,7 @@ def build_context(day, summary=False):
         ("받거나 보낸 메일(제목만)", gather_mail(day)[:60]),
         ("통화/문자", lore["comm"]),
         ("대화(사용자가 본인 대화로 확인한 음성 전사, 오류 있음)", lore["voice"][:30]),
+        ("PC에서 5분 넘게 머문 창(앱, 창 제목, 시간)", gather_pc(day)),
         ("메신저 알림(사용자가 허용한 상대만, 건수: 최근 내용)", [f"{k} x{v}: " + " / ".join(lore["msgs"][k][-4:]) for k, v in lore["notif"].most_common(15)]),
         ("앱 사용(기록 횟수)", [f"{k} x{v}" for k, v in lore["apps"].most_common(12)]),
         ("위치", lore["places"][:20]),

@@ -71,3 +71,20 @@ class Lorelog(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PcActivity(unittest.TestCase):
+    def test_short_visits_drop_out_and_breaks_under_five_minutes_merge(self):
+        import datetime as dt
+        base = int(dt.datetime(2026, 2, 3, 9, 0).timestamp() * 1000)
+        m = 60 * 1000
+        rows = [
+            {"type": "window", "ts": base, "end": base + 4 * m, "dur_s": 240, "app": "excel.exe", "title": "견적서"},
+            {"type": "window", "ts": base + 6 * m, "end": base + 10 * m, "dur_s": 240, "app": "excel.exe", "title": "견적서"},   # 2 min away: same stay
+            {"type": "window", "ts": base + 11 * m, "end": base + 13 * m, "dur_s": 120, "app": "chrome.exe", "title": "검색"},   # under 5 min
+            {"type": "idle", "ts": base + 13 * m, "end": base + 40 * m, "dur_s": 1620, "reason": "idle"},
+        ]
+        (DATA / "raw" / "pc").mkdir(parents=True, exist_ok=True)
+        (DATA / "raw" / "pc" / "2026-02-03.ndjson").write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
+        self.assertEqual(context.gather_pc("2026-02-03"), ['09:00~09:10 excel.exe "견적서" (8분)'])
+        self.assertEqual(context.gather_pc("2026-02-04"), [])
