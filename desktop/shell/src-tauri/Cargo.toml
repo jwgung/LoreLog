@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
-description = "LoreLog desktop: chat (the server's web) plus the PC collector and watched folders"
+description = "LoreLog desktop: the assistant screen (bundled), the PC collector, and watched folders"
 
 [lib]
 name = "life_desktop_lib"
@@ -23,3 +23,4 @@ life-agent = { path = "../../agent" }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
+url = "2"

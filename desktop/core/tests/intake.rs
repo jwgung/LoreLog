@@ -251,6 +251,26 @@ fn an_empty_file_is_skipped_not_uploaded() {
 }
 
 #[test]
+fn an_empty_file_is_uploaded_once_it_is_filled() {
+    let fx = Fixture::new();
+    let p = fx.write("draft.txt", b"");
+    let srv = FakeServer::default();
+    let mut eng = fx.engine();
+    let t = now();
+    eng.scan(&[fx.watch()], t);
+    eng.scan(&[fx.watch()], t + 20.0);
+    eng.step(&srv, t + 20.0);
+    assert!(srv.puts.borrow().is_empty(), "nothing uploaded while empty");
+    // the file gets content: its size changes, which clears the skip and restarts the settle clock
+    std::fs::write(&p, b"now it has something").unwrap();
+    eng.scan(&[fx.watch()], t + 40.0);
+    eng.scan(&[fx.watch()], t + 60.0);
+    eng.step(&srv, t + 60.0);
+    assert_eq!(srv.puts.borrow().len(), 1, "once filled, the file is picked up and uploaded");
+    assert_eq!(srv.puts.borrow()[0].1, "draft.txt");
+}
+
+#[test]
 fn a_file_over_the_cap_is_skipped_without_reading_or_blocking() {
     let fx = Fixture::new();
     fx.write("huge.bin", &vec![b'X'; 2048]);
