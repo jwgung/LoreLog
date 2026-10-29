@@ -5,6 +5,27 @@ use std::path::PathBuf;
 
 pub const HIDDEN_TITLE: &str = "(제목 숨김)";
 
+/// Is this a server address the token may be sent to? The server lives on the tailnet: https to a `*.ts.net` host,
+/// or http only to loopback (`localhost`/`127.0.0.1`/`::1`) or `*.ts.net`. Nothing else — a mistyped public host must
+/// not receive the Bearer token. Parsed with `url` so userinfo (`user@host`), ports and IPv6 brackets are read the
+/// way the real HTTP client reads them (a hand split on `:` would let `http://127.0.0.1@evil.com` through).
+pub fn is_acceptable_url(u: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(u) else {
+        return false;
+    };
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let host = host.strip_suffix('.').unwrap_or(host); // an absolute FQDN (host.ts.net.) is the same host
+    let is_tailnet = host == "ts.net" || host.ends_with(".ts.net");
+    let is_loopback = matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]");
+    match parsed.scheme() {
+        "https" => is_tailnet,
+        "http" => is_loopback || is_tailnet,
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -208,5 +229,30 @@ mod tests {
             assert_eq!(cfg.max_upload_mb, 20);
             assert!(!cfg.hide_title_apps.is_empty(), "title hiding is on by default");
         });
+    }
+
+    #[test]
+    fn only_tailnet_or_loopback_addresses_are_acceptable() {
+        // the server lives on the tailnet; a public host must never receive the token
+        assert!(is_acceptable_url("https://gungbuntu.tail8d1ab7.ts.net:48765"));
+        assert!(is_acceptable_url("http://localhost:8765"));
+        assert!(is_acceptable_url("http://127.0.0.1:8765"));
+        assert!(is_acceptable_url("http://[::1]:8765"));
+        assert!(is_acceptable_url("http://host.tail8d1ab7.ts.net:8765"));
+
+        assert!(!is_acceptable_url("https://evil.example.com"), "a public https host is refused");
+        assert!(!is_acceptable_url("http://evil.example.com"), "http off-tailnet is refused");
+        assert!(!is_acceptable_url("https://ts.net.evil.com"), "a suffix lookalike is refused");
+        assert!(!is_acceptable_url(""), "empty is refused");
+        assert!(!is_acceptable_url("ftp://x.ts.net"), "a non-http scheme is refused");
+        assert!(!is_acceptable_url("http://8.8.8.8:8765"), "a public IP is refused");
+
+        // userinfo must not fool the host check: the real client connects to evil.com, not the loopback/tailnet
+        assert!(!is_acceptable_url("http://127.0.0.1@evil.com/x"), "userinfo bypass with loopback is refused");
+        assert!(!is_acceptable_url("https://legit.ts.net@evil.com/"), "userinfo bypass with tailnet is refused");
+        assert!(!is_acceptable_url("http://localhost@evil.com"), "userinfo bypass with localhost is refused");
+
+        // an absolute FQDN (trailing dot) is the same host, accepted for tailnet
+        assert!(is_acceptable_url("https://host.ts.net."), "a trailing-dot tailnet FQDN is accepted");
     }
 }

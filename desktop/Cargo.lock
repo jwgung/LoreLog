@@ -1974,7 +1974,6 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-single-instance",
- "url",
 ]
 
 [[package]]
@@ -1988,6 +1987,7 @@ dependencies = [
  "tempfile",
  "toml 0.8.23",
  "ureq",
+ "url",
 ]
 
 [[package]]

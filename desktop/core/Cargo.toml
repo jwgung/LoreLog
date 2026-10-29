@@ -12,6 +12,7 @@ serde_json = "1.0.154"
 sha2 = "0.10.9"
 toml = "0.8.19"
 ureq = "3.5.0"
+url = "2"
 
 [dev-dependencies]
 tempfile = "3.27.0"

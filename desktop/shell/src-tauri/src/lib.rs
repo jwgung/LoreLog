@@ -58,12 +58,12 @@ fn server_config() -> Result<ServerConfig, String> {
 }
 
 /// Save the server address and (if given) the token. An empty token leaves the stored one untouched. The address
-/// must be https, or http only to a loopback/tailnet host (the token would otherwise travel in clear).
+/// must be a tailnet/loopback host (see `config::is_acceptable_url`) so the token is never sent to a public host.
 #[tauri::command]
 fn save_settings(url: String, token: Option<String>) -> Result<(), String> {
     let url = url.trim().trim_end_matches('/').to_string();
-    if !acceptable_url(&url) {
-        return Err("주소는 https여야 합니다 (http는 로컬/테일넷만)".into());
+    if !config::is_acceptable_url(&url) {
+        return Err("주소는 tailnet(*.ts.net) 이어야 합니다 (http는 로컬/테일넷만)".into());
     }
     let mut cfg = config::load()?;
     cfg.url = url;
@@ -74,33 +74,6 @@ fn save_settings(url: String, token: Option<String>) -> Result<(), String> {
         }
     }
     config::save(&cfg)
-}
-
-/// The address must be a tailnet host (the server lives on the tailnet). https to a `*.ts.net` host, or http only to
-/// loopback (`localhost`/`127.0.0.1`/`::1`) or `*.ts.net`. Nothing else — a mistyped public host must not receive the
-/// Bearer token. Parsed with `url` so userinfo (`user@host`), ports and IPv6 brackets are handled the way the real
-/// HTTP client parses them (a bare `host.split(':')` would let `http://127.0.0.1@evil.com` through).
-fn acceptable_url(url: &str) -> bool {
-    let Ok(parsed) = url::Url::parse(url) else {
-        return false;
-    };
-    let Some(host) = parsed.host_str() else {
-        return false;
-    };
-    match parsed.scheme() {
-        "https" => is_tailnet(host),
-        "http" => is_loopback(host) || is_tailnet(host),
-        _ => false,
-    }
-}
-
-fn is_tailnet(host: &str) -> bool {
-    host == "ts.net" || host.ends_with(".ts.net")
-}
-
-fn is_loopback(host: &str) -> bool {
-    // url's host_str keeps the IPv6 brackets, so ::1 arrives as "[::1]"
-    host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
 }
 
 /// Add a folder to watch (the real absolute path is stored so the intake journal keys stay stable).
@@ -231,31 +204,4 @@ pub fn run() {
                 stop_for_exit.store(true, Ordering::SeqCst);
             }
         });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::acceptable_url;
-
-    #[test]
-    fn only_tailnet_or_loopback_addresses_are_accepted() {
-        // the server lives on the tailnet; a public host must never receive the token
-        assert!(acceptable_url("https://gungbuntu.tail8d1ab7.ts.net:48765"));
-        assert!(acceptable_url("http://localhost:8765"));
-        assert!(acceptable_url("http://127.0.0.1:8765"));
-        assert!(acceptable_url("http://[::1]:8765"));
-        assert!(acceptable_url("http://host.tail8d1ab7.ts.net:8765"));
-
-        assert!(!acceptable_url("https://evil.example.com"), "a public https host is refused");
-        assert!(!acceptable_url("http://evil.example.com"), "http off-tailnet is refused");
-        assert!(!acceptable_url("https://ts.net.evil.com"), "a suffix lookalike is refused");
-        assert!(!acceptable_url(""), "empty is refused");
-        assert!(!acceptable_url("ftp://x.ts.net"), "a non-http scheme is refused");
-        assert!(!acceptable_url("http://8.8.8.8:8765"), "a public IP is refused");
-
-        // userinfo must not fool the host check: the real client connects to evil.com, not the loopback/tailnet
-        assert!(!acceptable_url("http://127.0.0.1@evil.com/x"), "userinfo bypass with loopback is refused");
-        assert!(!acceptable_url("https://legit.ts.net@evil.com/"), "userinfo bypass with tailnet is refused");
-        assert!(!acceptable_url("http://localhost@evil.com"), "userinfo bypass with localhost is refused");
-    }
 }

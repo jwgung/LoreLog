@@ -111,6 +111,25 @@ fn rig(url: &str, token: &str) -> Rig {
     }
 }
 
+#[test]
+fn send_spool_refuses_to_send_the_token_to_a_public_host() {
+    use life_agent_core::sender::send_spool;
+    let dir = tempfile::tempdir().unwrap();
+    let spool = Spool::new(dir.path());
+    // put a line in the spool so there is something to send
+    std::fs::write(spool.path(), "{\"type\":\"window\",\"app\":\"x\"}\n").unwrap();
+    let cfg = Config {
+        url: "https://evil.example.com".into(),
+        token: TOKEN.into(),
+        ..Config::default()
+    };
+    let (sent, err) = send_spool(&cfg, &spool);
+    assert_eq!(sent, 0, "nothing is sent to a non-tailnet host");
+    assert!(err.contains("tailnet"), "the refusal names the reason: {err}");
+    // the spool is left intact for a later, correctly-configured send
+    assert_eq!(spool.read().len(), 1);
+}
+
 impl Rig {
     fn tick(&mut self, secs: f64, n: usize) {
         for _ in 0..n {

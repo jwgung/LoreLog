@@ -20,6 +20,9 @@ pub struct ServerUploader {
     agent: ureq::Agent,
     base: String,
     token: String,
+    /// Whether `base` is an address the token may be sent to (tailnet/loopback). Checked here, at send time, so the
+    /// token never leaves for a public host even if the config was written some other way.
+    allowed: bool,
 }
 
 impl ServerUploader {
@@ -28,6 +31,7 @@ impl ServerUploader {
             agent: agent(),
             base: cfg.url.trim_end_matches('/').to_string(),
             token: cfg.token.clone(),
+            allowed: crate::config::is_acceptable_url(&cfg.url),
         }
     }
 
@@ -57,6 +61,11 @@ impl ServerUploader {
 
     /// The common shape of a file request: set the bearer token and the file headers, send the body, map the result.
     fn file_request(&self, extra: &[(&str, &str)], sha: &str, name: &str, mime: &str, when_ms: i64, body: &[u8]) -> Result<bool, UploadError> {
+        if !self.allowed {
+            return Err(UploadError::Rejected(
+                "the server address is not a tailnet/loopback host; refusing to send the token".into(),
+            ));
+        }
         let url = format!("{}/ingest/file", self.base);
         let mut req = self
             .agent
@@ -88,6 +97,9 @@ impl ServerUploader {
 
 impl Uploader for ServerUploader {
     fn has(&self, sha: &str) -> Result<bool, String> {
+        if !self.allowed {
+            return Err("the server address is not a tailnet/loopback host".into());
+        }
         let url = format!("{}/ingest/file/{sha}", self.base);
         let res = self
             .agent
@@ -123,6 +135,11 @@ impl Uploader for ServerUploader {
 pub fn send_spool(cfg: &Config, spool: &Spool) -> (usize, String) {
     if cfg.url.is_empty() || cfg.token.is_empty() {
         return (0, "url and token are not set in the config file".into());
+    }
+    // re-check at send time so the token only ever leaves for an allowed (tailnet/loopback) host, no matter how the
+    // config got its url
+    if !crate::config::is_acceptable_url(&cfg.url) {
+        return (0, "the server address is not a tailnet/loopback host; refusing to send the token".into());
     }
     let agent = agent();
     let url = format!("{}/ingest/{}", cfg.url.trim_end_matches('/'), cfg.source);
