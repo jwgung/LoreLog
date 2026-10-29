@@ -1,5 +1,7 @@
 //! One sampler per OS. Windows only for now; Linux and macOS come later (see docs in desktop/README.md).
+#[cfg(not(windows))]
 use life_agent_core::agent::Sampler;
+#[cfg(not(windows))]
 use life_agent_core::segments::Sample;
 
 #[cfg(windows)]
