@@ -73,6 +73,10 @@ class Keep(unittest.TestCase):
         self.assertEqual(keep(self.root, mail("d1", []), "acct/Sent"), (0, 0))
         self.assertFalse((self.root / "raw").exists())
 
+    def test_received_mail_is_marked_received(self):
+        keep(self.root, mail("g1", [("in.pdf", "application/pdf", PDF)]), "acct/INBOX", "received")
+        self.assertEqual([r["direction"] for r in lines(self.root)], ["received"])
+
     def test_sent_folder_names(self):
         self.assertTrue(all(is_sent_folder(n) for n in ("Sent Messages", "Sent", "보낸편지함", "INBOX.Sent Items")))
         self.assertFalse(any(is_sent_folder(n) for n in ("INBOX", "Drafts", "Trash")))

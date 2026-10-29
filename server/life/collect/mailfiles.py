@@ -1,13 +1,13 @@
-"""Keep the files the user sent by mail: the originals, as they were sent.
+"""Keep the files that went through the user's mail, sent and received: the originals, as they were.
 
 A deliverable is what a person makes to share and to leave evidence. Mail notes only list attachment names, so the
-file itself is not kept anywhere. This stores each attachment of a mail in a sent folder:
+file itself is not kept anywhere. This stores each attachment of a mail:
 
   <data>/raw/files/<sha256[:2]>/<sha256>        the bytes, untouched (the name of the file is its content hash)
   <data>/raw/mailfile/<YYYY-MM-DD>.ndjson       one line per attachment: where and when it was seen (raw store format)
 
-Nothing is converted, summarised or tagged, and who it went to is not copied: that is in the mail note and can be
-worked out later. The same file seen again (a resend, a forward) is one blob and a line per sighting. The content
+Nothing is converted, summarised or tagged, and who it went to or came from is not copied: that is in the mail note
+and can be worked out later. Each line says only whether the mail was sent or received. The same file seen again (a resend, a forward) is one blob and a line per sighting. The content
 hash is what lets another channel (a window title, a messenger, a print job) recognise the same deliverable later.
 """
 import email
@@ -65,8 +65,8 @@ def put_blob(root, data):
     return sha, True
 
 
-def keep(root, msg, source, cls="personal"):
-    """Store the attachments of one sent mail. -> (files stored, bytes newly written)"""
+def keep(root, msg, source, direction="sent", cls="personal"):
+    """Store the attachments of one mail (direction: "sent" or "received"). -> (files stored, bytes newly written)"""
     files = attachments(msg)
     if not files:
         return 0, 0
@@ -80,6 +80,6 @@ def keep(root, msg, source, cls="personal"):
         sha, new = put_blob(root, data)
         written += len(data) if new else 0
         lines.append(json.dumps({"type": "file", "ts": int(when.timestamp() * 1000), "sha256": sha, "name": name, "mime": mime,
-                                 "size": len(data), "mail_id": mail_id, "mail_source": source, "direction": "sent"}, ensure_ascii=False))
+                                 "size": len(data), "mail_id": mail_id, "mail_source": source, "direction": direction}, ensure_ascii=False))
     store(root, "mailfile", "\n".join(lines) + "\n", cls)
     return len(files), written

@@ -1,10 +1,11 @@
-"""Command line of mail-files: keep the attachments of the mails in the sent folders (read-only on the server).
+"""Command line of mail-files: keep the attachments of the mails in the configured mail folders (read-only on the server).
 
 Usage: mail-files [--dry-run] [--limit N] [--folder NAME] [-h]
 
-Folders are opened read-only and mails are read with BODY.PEEK, so nothing on the server changes. Only folders whose
-name looks like a sent folder (sent / 보낸 / 발신) are used. Processed UIDs are remembered per folder, so a run only
-reads mails it has not seen. --dry-run reads sizes and headers only and stores nothing.
+Folders are opened read-only and mails are read with BODY.PEEK, so nothing on the server changes. Every configured
+mail folder is used; a folder whose name looks like a sent folder (sent / 보낸 / 발신) marks its files as sent, the
+others as received. Processed UIDs are remembered per folder, so a run only reads mails it has not seen. --limit is per
+folder. --dry-run reads sizes and headers only and stores nothing.
 """
 import email
 import email.policy
@@ -59,7 +60,7 @@ def run_folder(imap, folder, account, root, state, limit, dry):
         if raw is None:
             continue
         msg = email.message_from_bytes(raw, policy=email.policy.default)
-        n, w = keep(root, msg, f"{account}/{folder}")
+        n, w = keep(root, msg, f"{account}/{folder}", "sent" if is_sent_folder(folder) else "received")
         mails, files, written = mails + 1, files + n, written + w
     st["seen"] = sorted(seen)
     state[folder] = st
@@ -80,9 +81,8 @@ def main(argv=None):
         print(f"Missing {', '.join(need)} ({mailconf.ENV_FILE}, {mailconf.SOURCES_FILE}).", file=sys.stderr)
         return 2
     folders = [only] if only else [f.strip() for f in cfg.get("MAIL_FOLDERS", "INBOX,Sent Messages").split(",") if f.strip()]
-    folders = [f for f in folders if is_sent_folder(f)]
     if not folders:
-        print("No sent folder among the configured mail folders.", file=sys.stderr)
+        print("No mail folders configured.", file=sys.stderr)
         return 2
     root = data_root(load_env())
     sp = state_path(root)

@@ -256,6 +256,7 @@ def sync(dry):
     src, ok, jobs = read_sources(), True, []
     if src.get("mail", {}).get("folders"):
         jobs.append(("mail", [sys.executable, str(BIN / "mail-sync")] + extra))
+        jobs.append(("files", [sys.executable, str(BIN / "mail-files"), "--limit", "200"] + extra))  # attachments, as they came
     if src.get("calendar", {}).get("urls"):
         jobs.append(("calendar", [sys.executable, str(BIN / "calendar-sync")] + extra))
     if not jobs:
@@ -268,7 +269,7 @@ def sync(dry):
 
 def status():
     src, st = read_sources(), load_status()
-    configured = [k for k in ("mail", "calendar") if src.get(k)]
+    configured = [k for k in ("mail", "files", "calendar") if (src.get("mail") if k == "files" else src.get(k))]
     if not configured:
         print("No sources configured.")
         return 0
