@@ -6,7 +6,6 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-auto-launch = "0.6.0"
 ctrlc = "3.5.2"
 life_agent_core = { version = "0.1.0", path = "../core" }
 

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>설정 — LoreLog</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body { font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 20px;
+           background: Canvas; color: CanvasText; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    p.sub { margin: 0 0 20px; opacity: 0.7; font-size: 13px; }
+    label { display: block; margin: 14px 0 4px; font-weight: 600; font-size: 13px; }
+    input[type=text], input[type=password] { width: 100%; padding: 9px 10px; border: 1px solid GrayText;
+           border-radius: 8px; background: Field; color: FieldText; }
+    button { margin-top: 16px; padding: 9px 14px; border: 0; border-radius: 8px; background: AccentColor;
+             color: AccentColorText; font-weight: 600; cursor: pointer; }
+    button.secondary { background: transparent; color: AccentColor; border: 1px solid AccentColor; }
+    .row { display: flex; gap: 8px; align-items: center; }
+    .row input { flex: 1; }
+    ul { list-style: none; padding: 0; margin: 8px 0 0; }
+    li { display: flex; justify-content: space-between; align-items: center; padding: 6px 0;
+         border-bottom: 1px solid color-mix(in srgb, GrayText 30%, transparent); font-size: 13px; }
+    li button { margin: 0; padding: 3px 8px; font-size: 12px; background: transparent; color: GrayText;
+                border: 1px solid GrayText; }
+    hr { border: 0; border-top: 1px solid color-mix(in srgb, GrayText 30%, transparent); margin: 22px 0; }
+    .msg { margin-top: 10px; font-size: 13px; min-height: 18px; }
+    .ok { color: green; } .err { color: crimson; }
+    .note { font-size: 12px; opacity: 0.7; margin-top: 4px; word-break: break-all; }
+    a.back { font-size: 13px; color: AccentColor; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <a class="back" href="index.html">← 대화로</a>
+  <h1 style="margin-top:10px;">설정</h1>
+  <p class="sub">서버 주소와 토큰, 감시 폴더. PC 활동과 고른 폴더의 파일은 백그라운드로 서버에 보관됩니다.</p>
+
+  <label for="url">서버 주소</label>
+  <input id="url" type="text" placeholder="https://&lt;기기&gt;.&lt;tailnet&gt;.ts.net:48765" />
+
+  <label for="token">토큰 (서버의 INGEST_TOKEN)</label>
+  <input id="token" type="password" placeholder="저장되어 있으면 비워 두면 유지됩니다" />
+
+  <div class="row">
+    <button id="save">저장하고 대화 열기</button>
+  </div>
+  <div id="msg" class="msg"></div>
+
+  <hr />
+
+  <h1 style="font-size:16px;">감시 폴더</h1>
+  <p class="sub">여기 더한 폴더의 맨 위 파일이 서버에 원본 그대로 보관됩니다. 폴더는 직접 고릅니다 — 아무것도 더하지 않으면 보관하지 않습니다.</p>
+  <div class="row">
+    <input id="watchdir" type="text" placeholder="예: C:\Users\나\Downloads" />
+    <button id="addwatch" style="margin-top:0;">더하기</button>
+  </div>
+  <ul id="watchlist"></ul>
+
+  <p id="cfgpath" class="note"></p>
+
+  <script type="module" src="settings.js"></script>
+</body>
+</html>

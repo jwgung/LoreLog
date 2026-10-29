@@ -13,14 +13,11 @@ hash is what lets another channel (a window title, a messenger, a print job) rec
 import email
 import email.policy
 import email.utils
-import hashlib
 import json
-import os
 import re
 from datetime import datetime
-from pathlib import Path
 
-from life.ingest.store import ensure_dir, store
+from life.ingest.store import put_blob, store
 
 SENT_NAME_RE = re.compile(r"sent|보낸|발신", re.I)
 
@@ -42,27 +39,6 @@ def attachments(msg):
             data = data.encode(part.get_content_charset() or "utf-8", errors="replace")
         out.append((part.get_filename() or "(unnamed)", part.get_content_type(), bytes(data)))
     return out
-
-
-def blob_path(root, sha):
-    return root / "raw" / "files" / sha[:2] / sha
-
-
-def put_blob(root, data):
-    """Write the bytes once, under their hash. -> (sha256, newly written)"""
-    sha = hashlib.sha256(data).hexdigest()
-    path = blob_path(root, sha)
-    if path.exists() and path.stat().st_size == len(data):
-        return sha, False
-    ensure_dir(root)
-    ensure_dir(root / "raw")
-    ensure_dir(root / "raw" / "files")
-    ensure_dir(path.parent)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_bytes(data)
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
-    return sha, True
 
 
 def keep(root, msg, source, direction="sent", cls="personal"):

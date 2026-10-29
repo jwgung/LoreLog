@@ -5,8 +5,42 @@ use life_agent_core::segments::Segmenter;
 use life_agent_core::{agent::hostname, config, spool::Spool};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: life-agent <run|once|flush|status|config|install|uninstall>";
-const AUTOSTART_NAME: &str = "LifeAgent";
+const USAGE: &str = "usage: life-agent <run|once|flush|status|config|watch>\n       life-agent watch <list|add DIR|remove DIR>";
+
+fn watch(args: &[String]) -> Result<(), String> {
+    let mut cfg = config::load()?;
+    match args.first().map(String::as_str) {
+        Some("list") | None => {
+            if cfg.watch_dirs.is_empty() {
+                println!("no watched folders (add one with: life-agent watch add <folder>)");
+            } else {
+                for d in &cfg.watch_dirs {
+                    println!("{d}");
+                }
+            }
+        }
+        Some("add") => {
+            let dir = args.get(1).ok_or("usage: life-agent watch add <folder>")?;
+            let before = cfg.watch_dirs.len();
+            let dirs = config::add_watch_dir(&mut cfg, dir)?;
+            if dirs.len() == before {
+                println!("already watched");
+            } else {
+                println!("watching: {}", dirs.last().unwrap());
+            }
+        }
+        Some("remove") => {
+            let dir = args.get(1).ok_or("usage: life-agent watch remove <folder>")?;
+            let (_dirs, removed) = config::remove_watch_dir(&mut cfg, dir)?;
+            if !removed {
+                return Err(format!("not watched: {dir}"));
+            }
+            println!("stopped watching: {dir}");
+        }
+        Some(other) => return Err(format!("unknown watch command: {other}")),
+    }
+    Ok(())
+}
 
 fn once() -> Result<(), String> {
     let cfg = config::load()?;
@@ -50,55 +84,38 @@ fn status() -> Result<(), String> {
     let spool = Spool::new(&config::home());
     let set = |v: &str| if v.is_empty() { "NOT set" } else { "set" };
     println!(
-        "config:  {}  (url {}, token {})",
+        "config:  {}  (url {})",
         config::config_path().display(),
         set(&cfg.url),
-        set(&cfg.token)
     );
+    println!("token:   {}  ({})", config::token_path().display(), set(&cfg.token));
     println!(
         "spool:   {} records waiting  ({})",
         spool.read().len(),
         spool.path().display()
     );
     println!("log:     {}", config::home().join("agent.log").display());
-    Ok(())
-}
-
-fn autostart(on: bool) -> Result<(), String> {
-    // the background binary sits next to this one
-    let me = std::env::current_exe().map_err(|e| e.to_string())?;
-    let daemon = me.with_file_name(if cfg!(windows) {
-        "life-agentd.exe"
+    if cfg.watch_dirs.is_empty() {
+        println!("watch:   no watched folders");
     } else {
-        "life-agentd"
-    });
-    if on && !daemon.exists() {
-        return Err(format!("{} not found next to life-agent", daemon.display()));
-    }
-    let al = auto_launch::AutoLaunchBuilder::new()
-        .set_app_name(AUTOSTART_NAME)
-        .set_app_path(&daemon.to_string_lossy())
-        .build()
-        .map_err(|e| e.to_string())?;
-    if on {
-        al.enable().map_err(|e| e.to_string())?;
-        println!("The agent will start when you sign in.");
-    } else {
-        al.disable().map_err(|e| e.to_string())?;
-        println!("Autostart removed.");
+        println!("watch:   {} folder(s): {}", cfg.watch_dirs.len(), cfg.watch_dirs.join(", "));
     }
     Ok(())
 }
 
 fn main() -> ExitCode {
-    let result = match std::env::args().nth(1).as_deref() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let result = match args.first().map(String::as_str) {
         Some("run") => run::run(),
         Some("once") => once(),
         Some("flush") => flush(),
         Some("status") => status(),
-        Some("config") => config::write_template().map(|p| println!("{}", p.display())),
-        Some("install") => autostart(true),
-        Some("uninstall") => autostart(false),
+        Some("config") => config::write_template().map(|p| {
+            println!("settings: {}", p.display());
+            println!("token:    {}  (put the server's INGEST_TOKEN here, one line)", config::token_path().display());
+            println!("edit the settings file to set url, then write the token file.");
+        }),
+        Some("watch") => watch(&args[1..]),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);

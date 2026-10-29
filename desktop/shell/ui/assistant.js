@@ -1,12 +1,12 @@
 "use strict";
+// The assistant screen, bundled in the desktop app (Tauri webview). It draws the same chat/todos/drawer the phone
+// app has, but it is NOT served to browsers — it lives in the app and talks to the server's API over the network.
+// The server address and token come from the app's config (via Tauri commands), not a login form in the page.
 const $ = (id) => document.getElementById(id);
-const TOKEN_KEY = "life.token";
-const store = {
-  get() { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; } },
-  set(v) { try { localStorage.setItem(TOKEN_KEY, v); } catch { /* private window: the token lasts for this page only */ } },
-  clear() { try { localStorage.removeItem(TOKEN_KEY); } catch { /* nothing stored */ } },
-};
-let token = store.get();
+const invoke = window.__TAURI__?.core?.invoke;
+
+let API_BASE = "";     // the server's base URL; API calls are made absolute with it
+let token = "";
 let wrong = null;      // the summary sentence the user is correcting
 let busy = false;
 
@@ -18,8 +18,10 @@ function diaryDay() {
 }
 
 class Unauthorized extends Error {}
+class NotConfigured extends Error {}
 async function api(path, body) {
-  const res = await fetch(path, {
+  if (!API_BASE || !token) throw new NotConfigured();
+  const res = await fetch(API_BASE + path, {
     method: body === undefined ? "GET" : "POST",
     headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -37,26 +39,25 @@ function el(tag, cls, text) {
   return e;
 }
 
-// ---------- login ----------
-function showLogin(msg = "") {
+// ---------- first-run setup (server address + token) ----------
+function showSetup(msg = "") {
   $("app").hidden = true;
-  $("login").hidden = false;
-  $("loginError").textContent = msg;
-  $("tokenInput").focus();
+  $("setup").hidden = false;
+  $("setupError").textContent = msg;
+  $("urlInput").focus();
 }
-$("loginForm").addEventListener("submit", async (ev) => {
+$("setupForm").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  token = $("tokenInput").value.trim();
+  const url = $("urlInput").value.trim();
+  const tok = $("tokenInput").value.trim();
   try {
-    await api("/todos");
-    store.set(token);
+    await invoke("save_settings", { url, token: tok || null });
     $("tokenInput").value = "";
-    start();
+    await boot();
   } catch (e) {
-    showLogin(e instanceof Unauthorized ? "토큰이 맞지 않아요." : "서버에 연결하지 못했어요.");
+    $("setupError").textContent = String(e);
   }
 });
-$("logout").addEventListener("click", () => { store.clear(); token = ""; $("drawer").hidden = true; showLogin(); });
 
 // ---------- chat ----------
 function bubble(role, text, fixed) {
@@ -139,7 +140,7 @@ async function send(text) {
     wait.classList.remove("pending");
     wait.textContent = r.status === 200 ? r.data.reply : "답을 받지 못했어요. 말씀하신 내용은 저장됐어요.";
   } catch (e) {
-    if (e instanceof Unauthorized) return showLogin("연결이 끊겼어요. 토큰을 다시 입력해 주세요.");
+    if (e instanceof Unauthorized) return showSetup("토큰이 맞지 않거나 바뀌었어요. 다시 넣어 주세요.");
     wait.classList.remove("pending");
     wait.textContent = "서버에 연결하지 못했어요.";
   } finally {
@@ -200,7 +201,7 @@ function micState(state) {   // idle | rec | work
   else if (!wrong) $("input").placeholder = "오늘 하루에 대해 말해 주세요";
 }
 async function startRecording() {
-  if (!navigator.mediaDevices?.getUserMedia) { $("input").placeholder = "이 주소(https)에서만 말할 수 있어요"; return; }
+  if (!navigator.mediaDevices?.getUserMedia) { $("input").placeholder = "마이크를 쓸 수 없어요"; return; }
   let stream;
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
   catch { $("input").placeholder = "마이크 권한이 필요해요"; return; }
@@ -215,8 +216,8 @@ async function startRecording() {
     let note = "";   // shown in the input after the mic returns to idle (idle resets the placeholder)
     try {
       const wav = await toWav(new Blob(chunks, { type: mr.mimeType }));
-      const res = await fetch("/transcribe", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: wav });
-      if (res.status === 401) return showLogin("연결이 끊겼어요. 토큰을 다시 입력해 주세요.");
+      const res = await fetch(API_BASE + "/transcribe", { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: wav });
+      if (res.status === 401) return showSetup("연결이 끊겼어요. 토큰을 다시 넣어 주세요.");
       const { text = "" } = await res.json().catch(() => ({}));
       if (text) { const i = $("input"); i.value = (i.value ? i.value + " " : "") + text; autosize(); i.focus(); }
       else note = "잘 들리지 않았어요. 다시 말해 주세요";
@@ -328,18 +329,34 @@ $("saveSenders").addEventListener("click", async () => {
 $("btnDrawer").addEventListener("click", () => openDrawer().catch(onError));
 $("drawerClose").addEventListener("click", () => ($("drawer").hidden = true));
 $("drawer").addEventListener("click", (ev) => { if (ev.target === $("drawer")) $("drawer").hidden = true; });
+$("toSettings").addEventListener("click", () => { location.href = "settings.html"; });
 document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") $("drawer").hidden = true; });
 
 // ---------- start ----------
 function onError(e) {
-  if (e instanceof Unauthorized) showLogin("토큰이 맞지 않거나 바뀌었어요.");
+  if (e instanceof Unauthorized) showSetup("토큰이 맞지 않거나 바뀌었어요.");
+  else if (e instanceof NotConfigured) showSetup();
   else console.error(e);
 }
 async function start() {
-  $("login").hidden = true;
+  $("setup").hidden = true;
   $("app").hidden = false;
   try {
     await Promise.all([loadChat(), loadTodos(true)]);
   } catch (e) { onError(e); }
 }
-if (token) start(); else showLogin();
+
+// Read the server address and token from the app's config (set in settings). If not configured, show setup.
+async function boot() {
+  if (!invoke) { showSetup("이 화면은 데스크톱 앱 안에서만 동작합니다."); return; }
+  try {
+    const s = await invoke("server_config");   // { base, token }
+    API_BASE = (s.base || "").replace(/\/+$/, "");
+    token = s.token || "";
+    if (API_BASE && token) start(); else showSetup();
+  } catch (e) {
+    showSetup(String(e));
+  }
+}
+
+boot();

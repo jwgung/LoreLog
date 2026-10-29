@@ -11,3 +11,9 @@
 *.jks
 *.keystore
 *.apk
+
+# build artifacts and scratch
+/dist
+/tmp
+/desktop/target
+/desktop/shell/src-tauri/gen/schemas

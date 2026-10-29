@@ -3,6 +3,9 @@
 life-ingest: collection endpoint that any client (phone, PC, ...) can send NDJSON to. Raw data is stored on this server.
 
   POST /ingest/<source>      body: NDJSON (one JSON object per line), header: Authorization: Bearer <token>
+  POST /ingest/file          body: file bytes; headers X-File-Sha256, X-File-Name (percent-encoded), X-File-Mime, X-File-Ts (ms).
+                             Keeps the bytes under their content hash (shared with mail-files) and records a sighting in raw/pcfile.
+  GET  /ingest/file/<sha256> {present: bool} — whether that blob is already kept (the agent asks before uploading)
   GET  /diary/<date>         the day's draft (summary + question); generated on demand -> 202 while generating
   POST /diary/<date>         body: JSON {corrections:[{wrong,right}], reflection}; stored via life-diary
   GET  /diary/senders        notification senders of the last 14 days with the user's allowed flag

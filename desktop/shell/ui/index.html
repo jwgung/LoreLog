@@ -5,17 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>비서</title>
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="/app.css">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="app.css">
 </head>
 <body>
-<div id="login" hidden>
-  <form id="loginForm">
+<div id="setup" hidden>
+  <form id="setupForm">
     <h1>비서</h1>
-    <p>이 서버의 수신 토큰을 한 번 입력하면 이 브라우저에 기억해 둡니다.</p>
+    <p>서버 주소와 수신 토큰을 한 번 넣으면 이 앱에 기억해 둡니다.</p>
+    <input id="urlInput" type="text" autocomplete="off" placeholder="https://<기기>.<tailnet>.ts.net:48765" required>
     <input id="tokenInput" type="password" autocomplete="off" placeholder="토큰" required>
     <button type="submit">연결</button>
-    <p id="loginError" class="error"></p>
+    <p id="setupError" class="error"></p>
   </form>
 </div>
 
@@ -57,11 +58,11 @@
       <p class="muted">체크한 상대의 알림만 하루 정리에 쓰입니다. 기본은 전부 제외입니다.</p>
       <div id="senders"></div>
       <div class="row"><button id="saveSenders">저장</button><span id="senderMsg" class="muted"></span></div>
-      <h3>이 브라우저</h3>
-      <button id="logout" class="ghost">연결 해제(토큰 지우기)</button>
+      <h3>설정</h3>
+      <button id="toSettings" class="ghost">서버·감시 폴더 설정</button>
     </div>
   </section>
 </div>
-<script src="/app.js"></script>
+<script src="assistant.js"></script>
 </body>
 </html>

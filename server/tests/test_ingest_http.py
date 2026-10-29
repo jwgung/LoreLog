@@ -39,12 +39,9 @@ class Http(unittest.TestCase):
                                    ("POST", "/todos", {}), ("POST", "/transcribe", b"x"), ("POST", "/ingest/lorelog", b"{}")):
             self.assertEqual(self.call(method, path, body, token="wrong")[0], 401, path)
 
-    def test_web_screen_is_served_without_token_but_only_by_name(self):
-        for path, ctype in (("/", "text/html"), ("/app.js", "text/javascript"), ("/app.css", "text/css")):
-            with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}") as r:
-                self.assertEqual(r.status, 200, path)
-                self.assertTrue(r.headers["Content-Type"].startswith(ctype), path)
-        for path in ("/../bin/life", "/%2e%2e/bin/life", "/web/app.js", "/app.js/", "/life/__init__.py"):
+    def test_the_server_is_api_only_and_does_not_serve_a_web_screen(self):
+        # the assistant screen is bundled in the desktop app, not served here; only the API answers
+        for path in ("/", "/index.html", "/app.js", "/app.css", "/favicon.svg"):
             req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}")
             with self.assertRaises(urllib.error.HTTPError) as cm:
                 urllib.request.urlopen(req)

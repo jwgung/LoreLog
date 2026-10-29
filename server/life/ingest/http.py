@@ -5,8 +5,8 @@ import re
 import ssl
 import sys
 from datetime import datetime
-from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import unquote
 
 from life.assistant.chat import chat_history, chat_reply
 from life.assistant.diaryfile import save_user
@@ -14,18 +14,11 @@ from life.assistant.senders import list_senders, load_allow, save_allow
 from life.assistant.todos import todo_act, todo_add_user
 from life.ingest import jobs
 from life.ingest.asr import transcribe_audio
+from life.ingest.filestore import has_blob, keep_file, record_sighting
 from life.ingest.store import store
 
 DAY = r"(\d{4}-\d{2}-\d{2})"
 BODY_LIMIT = 1_000_000
-
-# The web screen is a handful of static files; the page holds no data, so they are served without the token
-# (the data calls it makes still need it). Only these names are served: no path from the request reaches the disk.
-WEB_DIR = Path(__file__).resolve().parent.parent.parent / "web"
-WEB_FILES = {"/": ("index.html", "text/html; charset=utf-8"), "/index.html": ("index.html", "text/html; charset=utf-8"),
-             "/app.js": ("app.js", "text/javascript; charset=utf-8"), "/app.css": ("app.css", "text/css; charset=utf-8"),
-             "/favicon.svg": ("favicon.svg", "image/svg+xml")}
-
 
 class Reject(Exception):
     """Abort the request with this status and body."""
@@ -124,6 +117,32 @@ def make_handler(root, token, cls, max_bytes):
             sys.stderr.flush()
             return 200, {"accepted": ok, "duplicates": dup, "rejected": bad}
 
+        def _file_has(self, m):
+            return 200, {"sha256": m.group(1), "present": has_blob(root, m.group(1))}
+
+        def _file_put(self, m):
+            sha = (self.headers.get("X-File-Sha256") or "").strip().lower()
+            name = unquote(self.headers.get("X-File-Name") or "")[:400] or "(unnamed)"
+            mime = (self.headers.get("X-File-Mime") or "application/octet-stream")[:200]
+            ts = self.headers.get("X-File-Ts")
+            when = int(ts) if ts and ts.isdigit() else int(datetime.now().timestamp() * 1000)
+            if (self.headers.get("X-File-Sighting") or "").strip() == "1":
+                try:
+                    record_sighting(root, sha, name, mime, when, cls)  # size comes from the kept blob
+                except KeyError:
+                    return 409, {"error": "blob not present"}
+                return 200, {"sha256": sha, "stored": False, "duplicate": True}
+            data = self._blob()
+            try:
+                sha, stored, dup = keep_file(root, data, sha, name, mime, when, cls)
+            except ValueError:
+                return 400, {"error": "hash mismatch"}
+            safe = name.encode("unicode_escape").decode("ascii")  # no raw newlines etc. in the journal line
+            sys.stderr.write(f"{datetime.now():%H:%M:%S} file {sha[:12]} {'stored' if stored else 'dup'} {safe}\n")
+            sys.stderr.flush()
+            return 200, {"sha256": sha, "stored": stored, "duplicate": dup}
+
+
         # (method, path regex, handler). All but /healthz need the Bearer token. Order matters: /diary/senders before /diary/<date>.
         ROUTES = [
             ("GET", r"/healthz", lambda s, m: (200, {"ok": True})),
@@ -139,27 +158,12 @@ def make_handler(root, token, cls, max_bytes):
             ("GET", rf"/diary/{DAY}(\?refresh=1)?", lambda s, m: jobs.draft(m.group(1), bool(m.group(2)))),
             ("POST", rf"/diary/{DAY}", _diary_post),
             ("POST", r"/transcribe", _transcribe),
+            ("GET", r"/ingest/file/([0-9a-f]{64})", _file_has),
+            ("POST", r"/ingest/file", _file_put),
             ("POST", r"/ingest/([a-z0-9_-]{1,32})/?", _ingest),
         ]
 
-        def _static(self):
-            name, ctype = WEB_FILES[self.path]
-            try:
-                data = (WEB_DIR / name).read_bytes()
-            except OSError:
-                return self._send(404, {"error": "not found"})
-            self.send_response(200)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Referrer-Policy", "no-referrer")
-            self.end_headers()
-            self.wfile.write(data)
-
         def _dispatch(self, method):
-            if method == "GET" and self.path in WEB_FILES:
-                return self._static()
             for meth, pattern, fn in self.ROUTES:
                 m = meth == method and re.fullmatch(pattern, self.path)
                 if not m:

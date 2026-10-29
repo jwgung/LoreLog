@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import tempfile
 import threading
 from datetime import datetime
 
@@ -28,6 +29,37 @@ def ensure_dir(p):
         os.chmod(p, 0o700)
     except OSError:
         pass  # on Windows etc. folder permissions are left to the OS (ACL)
+
+
+def blob_path(root, sha):
+    """Where a deliverable's bytes live: named by their own content hash, shared by every channel that sees the file."""
+    return root / "raw" / "files" / sha[:2] / sha
+
+
+def put_blob(root, data):
+    """Write the bytes once, under their hash. -> (sha256, newly written)"""
+    sha = hashlib.sha256(data).hexdigest()
+    path = blob_path(root, sha)
+    if path.exists() and path.stat().st_size == len(data):
+        return sha, False
+    ensure_dir(root)
+    ensure_dir(root / "raw")
+    ensure_dir(root / "raw" / "files")
+    ensure_dir(path.parent)
+    # a unique temp name so two uploads of the same content do not share (and corrupt) one temp file
+    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return sha, True
 
 
 def store(root, source, body, cls):

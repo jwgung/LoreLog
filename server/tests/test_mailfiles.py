@@ -6,7 +6,8 @@ from pathlib import Path
 
 import _env  # noqa: F401
 from life.collect import cli
-from life.collect.mailfiles import attachments, blob_path, is_sent_folder, keep
+from life.collect.mailfiles import attachments, is_sent_folder, keep
+from life.ingest.store import blob_path
 
 PDF = b"%PDF-1.4 quote v1"
 XLSX = b"PK\x03\x04 spreadsheet"
