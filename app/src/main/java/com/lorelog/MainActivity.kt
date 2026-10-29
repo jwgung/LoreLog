@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -86,24 +87,51 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+internal enum class AppScreen { CHAT, DRAWER, COLLECT, REMINDER, SENDERS, EXPORT, TODOS }
+
+/** 알림에서 대화 화면을 열라는 요청. 화면이 읽고 나면 false 로 되돌린다. */
+internal object DiaryNav {
+    val requested = kotlinx.coroutines.flow.MutableStateFlow(false)
+}
+
 class MainActivity : ComponentActivity() {
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        if (intent.getBooleanExtra(com.lorelog.work.DiaryReminderWorker.EXTRA_OPEN_DIARY, false)) DiaryNav.requested.value = true
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (intent.getBooleanExtra(com.lorelog.work.DiaryReminderWorker.EXTRA_OPEN_DIARY, false)) DiaryNav.requested.value = true
         enableEdgeToEdge()
         setContent {
             val context = LocalContext.current
-            val colors = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                dynamicDarkColorScheme(context) else darkColorScheme()
-            MaterialTheme(colorScheme = colors) {
+            MaterialTheme(colorScheme = LifeColors, shapes = LifeShapes, typography = LifeTypography) {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    HomeScreen()
+                    var screen by remember { mutableStateOf(AppScreen.CHAT) }
+                    val requested by DiaryNav.requested.collectAsStateWithLifecycle()
+                    LaunchedEffect(requested) {
+                        if (requested) { screen = AppScreen.CHAT; DiaryNav.requested.value = false }
+                    }
+                    androidx.activity.compose.BackHandler(enabled = screen != AppScreen.CHAT) {
+                        screen = if (screen == AppScreen.DRAWER || screen == AppScreen.TODOS) AppScreen.CHAT else AppScreen.DRAWER
+                    }
+                    when (screen) {
+                        AppScreen.CHAT -> ChatScreen(onDrawer = { screen = AppScreen.DRAWER }, onCollect = { screen = AppScreen.COLLECT }, onTodos = { screen = AppScreen.TODOS })
+                        AppScreen.TODOS -> TodosScreen(onBack = { screen = AppScreen.CHAT })
+                        AppScreen.DRAWER -> DrawerScreen(onBack = { screen = AppScreen.CHAT }, onOpen = { screen = it })
+                        AppScreen.REMINDER -> DrawerPage("하루 정리 알림", onBack = { screen = AppScreen.DRAWER }) { DiaryReminderSettings() }
+                        AppScreen.SENDERS -> DrawerPage("일기에 쓰는 메신저", onBack = { screen = AppScreen.DRAWER }) { DiarySenderSettings() }
+                        AppScreen.COLLECT -> HomeScreen(onBack = { screen = AppScreen.DRAWER })
+                        AppScreen.EXPORT -> HomeScreen(onBack = { screen = AppScreen.DRAWER }, initialPage = "export")
+                    }
                 }
             }
         }
     }
 }
 
-private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+internal val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
 private fun isScreenCaptureEnabled(context: android.content.Context): Boolean {
     val enabled = Settings.Secure.getString(
@@ -117,7 +145,7 @@ private fun isNotificationAccessEnabled(context: android.content.Context): Boole
     NotificationManagerCompat.getEnabledListenerPackages(context).contains(context.packageName)
 
 @Composable
-private fun HomeScreen() {
+private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
     val context = LocalContext.current
     val running by LoggerService.isRunning.collectAsStateWithLifecycle()
     val timeline by LogRepository.timeline.collectAsStateWithLifecycle()
@@ -163,6 +191,7 @@ private fun HomeScreen() {
     val llmUrl = LlmConfig.baseUrl(context)
     var llmKey by remember { mutableStateOf(LlmConfig.apiKey(context) ?: "") }
     var showKey by remember { mutableStateOf(false) }
+    var showToken by remember { mutableStateOf(false) }
     var keyChecking by remember { mutableStateOf(false) }
     var txEngine by remember { mutableStateOf(TranscribeConfig.engine(context)) }
     var whisperId by remember { mutableStateOf(TranscribeConfig.modelId(context)) }
@@ -200,7 +229,21 @@ private fun HomeScreen() {
         )
     }
 
-    var showSettings by remember { mutableStateOf(false) }
+    // 상태 줄의 안내는 잠깐만 보인다. 지난 오류가 계속 남아 있으면 지금 일처럼 보인다.
+    LaunchedEffect(status) {
+        if (status.isNotEmpty()) {
+            kotlinx.coroutines.delay(8_000)
+            if (LogRepository.status.value == status) LogRepository.setStatus("")
+        }
+    }
+    // null = 개요(항목 목록). 그 외에는 항목 하나의 설정 화면.
+    var page by remember { mutableStateOf(initialPage) }
+    androidx.activity.compose.BackHandler(enabled = page != null) { page = null }
+    val pageTitle = when (page) {
+        "collect" -> "수집 항목"; "stt" -> "음성 전사 방식"; "server" -> "서버 연결"; "call" -> "통화 녹음 가져오기"
+        "notif" -> "알림·표시"; "gemini" -> "Gemini 키·요약"; "export" -> "내보내기·삭제"; "version" -> "버전·업데이트"
+        "log" -> "최근 기록"; else -> "수집·연동 설정"
+    }
     var hideNotif by remember { mutableStateOf(NotifPrefs.hide(context)) }
     var overlayBadge by remember { mutableStateOf(NotifPrefs.overlay(context)) }
 
@@ -213,11 +256,10 @@ private fun HomeScreen() {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("LoreLog", style = MaterialTheme.typography.headlineMedium)
-            TextButton(onClick = { showSettings = !showSettings }) {
-                Text(if (showSettings) "닫기" else "설정")
-            }
+            Text(pageTitle, style = MaterialTheme.typography.headlineSmall)
+            if (page == null) NavButton(NavIcon.DRAWER, "서랍", onClick = onBack) else NavButton(NavIcon.BACK, "수집·연동 설정으로", onClick = { page = null })
         }
+        if (page == null) {
         Text(
             if (running) "기록 중 — 이 기기에만 저장됩니다" else "멈춤",
             style = MaterialTheme.typography.bodyMedium,
@@ -272,7 +314,7 @@ private fun HomeScreen() {
             }
         }
 
-        Button(onClick = {
+        Button(modifier = Modifier.fillMaxWidth(), onClick = {
             if (running) {
                 LoggerService.stop(context)
             } else {
@@ -324,17 +366,31 @@ private fun HomeScreen() {
         }
 
 
-        if (showSettings) {
-        Text("통화 녹음 가져오기", style = MaterialTheme.typography.labelLarge)
+        androidx.compose.foundation.layout.Spacer(Modifier.padding(top = 4.dp))
+        DrawerRow("수집 항목", "${collectorOn.values.count { it }}개 켜짐") { page = "collect" }
+        DrawerRow("음성 전사 방식", when (txEngine) {
+            TranscribeConfig.Engine.SERVER -> "내 서버"; TranscribeConfig.Engine.GEMINI -> "Gemini"; TranscribeConfig.Engine.WHISPER -> "온디바이스"
+        }) { page = "stt" }
+        DrawerRow("서버 연결", if (EndpointConfig.isConfigured(context)) "주소 있음" else "주소 없음") { page = "server" }
+        DrawerRow("통화 녹음 가져오기", if (callFolder != null) "폴더 지정됨" else "미지정") { page = "call" }
+        DrawerRow("알림·표시", "") { page = "notif" }
+        DrawerRow("Gemini 키·요약", if (LlmConfig.isConfigured(context)) "키 있음" else "없음") { page = "gemini" }
+        DrawerRow("내보내기·삭제", "") { page = "export" }
+        DrawerRow("버전·업데이트", UpdateChecker.currentVersion(context)) { page = "version" }
+        DrawerRow("최근 기록", "") { page = "log" }
+        HorizontalDivider()
+        }
+        if (page != null) {
+        if (page == "call") {
         Text(
             "라이브 통화는 OS가 막습니다. 전화앱 설정에서 '통화 자동 녹음'을 켜 두고, " +
                 "그 저장 폴더(예: 내장메모리 Recordings/Call)를 지정하면 새 녹음을 전사합니다. " +
-                "전사는 아래 '음성 전사 방식'에서 고른 엔진(Gemini/온디바이스)을 씁니다. 15분마다 새 녹음을 확인합니다.",
-            style = MaterialTheme.typography.bodySmall,
+                "전사는 '음성 전사 방식'에서 고른 방식(내 서버·Gemini·온디바이스)을 씁니다. 15분마다 새 녹음을 확인합니다.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
             if (callFolder != null) "지정됨: ${Uri.decode(callFolder)}" else "폴더 미지정",
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { callFolderPicker.launch(null) }) { Text("통화 녹음 폴더 선택") }
@@ -344,47 +400,43 @@ private fun HomeScreen() {
             }) { Text("지금 가져오기") }
         }
 
+        }
+        if (page == "collect") {
+        if (!usageGranted || !screenGranted || !notifGranted) {
+            Text("먼저 필요한 권한", style = MaterialTheme.typography.titleSmall)
+            Text("아래를 켜야 해당 기록이 쌓입니다. 한 번만 켜면 됩니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         if (!usageGranted) {
-            OutlinedButton(onClick = {
+            PermRow("앱 사용 기록 (사용 정보 접근)", onClick = {
                 context.startActivity(
                     Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 )
-            }) { Text("앱 사용 기록 켜기 (사용 정보 접근)") }
+            })
         }
 
         if (!screenGranted) {
-            OutlinedButton(onClick = {
+            PermRow("화면 내용 기록 (접근성)", onClick = {
                 context.startActivity(
                     Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 )
-            }) { Text("화면 내용 기록 켜기 (접근성)") }
+            })
             Text(
-                "토글이 회색이면: 앱 정보 → 우상단 ⋮ → '제한된 설정 허용'을 먼저 누르세요. " +
-                    "플레이스토어 밖에서 설치한 앱이라 OS가 접근성을 막아둔 것입니다.",
-                style = MaterialTheme.typography.bodySmall,
+                "토글이 회색이면 앱 정보 → ⋮ → '제한된 설정 허용'을 먼저 누르세요.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            TextButton(onClick = {
-                context.startActivity(
-                    Intent(
-                        Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                        Uri.parse("package:${context.packageName}"),
-                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                )
-            }) { Text("앱 정보 열기 (제한된 설정 허용)") }
         }
 
         if (!notifGranted) {
-            OutlinedButton(onClick = {
+            PermRow("알림 기록 (알림 접근)", onClick = {
                 context.startActivity(
                     Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                 )
-            }) { Text("알림 기록 켜기 (알림 접근)") }
+            })
         }
 
-        Text("수집 항목", style = MaterialTheme.typography.labelLarge)
         CollectorPrefs.ALL.forEach { (key, label) ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -403,7 +455,8 @@ private fun HomeScreen() {
             }
         }
 
-        Text("알림 / 표시", style = MaterialTheme.typography.labelLarge)
+        }
+        if (page == "notif") {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -423,7 +476,7 @@ private fun HomeScreen() {
         Text(
             "멈춤 알림은 숨겨집니다. 기록 중 알림은 OS 규칙상 완전히 못 숨기고 최소화만 됩니다" +
                 "(상태바 아이콘 없이 알림창 맨 아래로).",
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -457,7 +510,8 @@ private fun HomeScreen() {
             )
         }) { Text("다른 앱 위에 표시 허용") }
 
-        Text("내보내기 / 삭제", style = MaterialTheme.typography.labelLarge)
+        }
+        if (page == "export") {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = {
                 coroutineScope.launch {
@@ -483,16 +537,18 @@ private fun HomeScreen() {
                     LogRepository.setStatus(if (n > 0) "폴더에 새 기록 ${n}줄 추가됨" else "폴더에 추가할 새 기록 없음")
                 }
             }) { Text("폴더에 새 기록 추가") }
-            OutlinedButton(onClick = { showDeleteDialog = true }) { Text("전체 삭제") }
+            OutlinedButton(onClick = { showDeleteDialog = true }) { Text("전체 삭제", color = androidx.compose.ui.graphics.Color(0xFFE3A3B8)) }
         }
         Text(
-            "JSON 공유 = 전체 기록을 파일 하나로 다른 앱에 보냄(복사본, 커서 안 움직임). " +
-                "폴더 추가 = 지난번 이후 새 기록만 Android/data/com.lorelog/files/exports/ 에 NDJSON 으로 이어 씀(매일 자동, 여기선 즉시). " +
-                "폴더·HTTP 로 내보낸 기록은 보관 오디오가 지워지고 30일 뒤 정리 대상이 됩니다.",
-            style = MaterialTheme.typography.bodySmall,
+            "JSON 공유: 전체 기록을 파일 하나로 다른 앱에 보냅니다(복사본).\n" +
+                "폴더에 추가: 지난번 이후 새 기록만 앱 전용 폴더에 이어 씁니다(매일 자동).\n" +
+                "내보낸 기록은 보관 음성이 지워지고 30일 뒤 정리됩니다.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
-        Text("HTTP 내보내기", style = MaterialTheme.typography.labelLarge)
+        }
+        if (page == "server") {
+        Text("기록을 내 서버로 보내는 주소입니다. 음성 전사와 일기도 같은 주소와 토큰을 씁니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         OutlinedTextField(
             value = endpointUrl,
             onValueChange = { endpointUrl = it },
@@ -505,6 +561,8 @@ private fun HomeScreen() {
             onValueChange = { endpointToken = it },
             label = { Text("토큰 (선택)") },
             singleLine = true,
+            visualTransformation = if (showToken) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = { TextButton(onClick = { showToken = !showToken }) { Text(if (showToken) "숨김" else "표시") } },
             modifier = Modifier.fillMaxWidth(),
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -526,11 +584,13 @@ private fun HomeScreen() {
             }) { Text("지금 전송") }
         }
 
+        }
+        if (page == "gemini") {
         Text("Gemini API 키", style = MaterialTheme.typography.labelLarge)
         Text(
             "클라우드 전사와 요약이 함께 쓰는 키입니다. 입력하면 바로 저장됩니다. " +
                 "AI Studio 무료 키면 됩니다(Flash 계열 무료, 한도는 모델별).",
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         OutlinedTextField(
             value = llmKey,
@@ -566,7 +626,7 @@ private fun HomeScreen() {
         Text(
             "선택 기능입니다. 끄면 원본만 모으고 내보냅니다(권장 — 요약은 지식그래프 쪽에서). " +
                 "켜면 하루 한 번 최근 24시간을 요약해 앱에서 보여 주고 내보내기에도 포함합니다.",
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -585,7 +645,7 @@ private fun HomeScreen() {
         if (summaryOn) {
             Text(
                 "모델은 자동입니다. 기본 ${LlmConfig.DEFAULT_MODEL}, 한도가 차면 다른 Flash 모델로 넘어갑니다.",
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             OutlinedButton(onClick = {
                 LogRepository.setStatus("요약 중…")
@@ -598,8 +658,9 @@ private fun HomeScreen() {
             }) { Text("지금 요약 (최근 24시간)") }
         }
 
-        Text("버전 / 업데이트", style = MaterialTheme.typography.labelLarge)
-        Text("현재 버전 ${UpdateChecker.currentVersion(context)}", style = MaterialTheme.typography.bodySmall)
+        }
+        if (page == "version") {
+        Text("현재 버전 ${UpdateChecker.currentVersion(context)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             OutlinedButton(
                 enabled = !checking,
@@ -632,11 +693,12 @@ private fun HomeScreen() {
             }
         }
 
-        Text("음성 전사 방식", style = MaterialTheme.typography.labelLarge)
+        }
+        if (page == "stt") {
         Text(
             "녹음은 VAD로 말할 때만, 화면 꺼져도 유지됩니다. 전사 방식을 고르세요. " +
                 "준비가 안 됐으면 말소리는 음성파일(voice_pending)로 쌓였다가 준비되면 자동 전사됩니다.",
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -671,8 +733,18 @@ private fun HomeScreen() {
         Text(
             "기기 내장 효과(NoiseSuppressor·AutomaticGainControl)를 녹음에 붙입니다. 배경 소음이 줄고 멀리서 하는 말이 커집니다. " +
                 "소리가 이상하게 뭉개지면 끄세요. 기기마다 지원이 다릅니다.",
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        EngineOption(
+            selected = txEngine == TranscribeConfig.Engine.SERVER,
+            title = "내 서버 (권장)",
+            desc = "내 서버의 음성 모델로 전사. 소리가 내 서버 밖으로 안 나가고 정확합니다. 서버에 닿아야 하며, 못 닿으면 쌓아 두었다가 나중에 보냅니다.",
+        ) {
+            txEngine = TranscribeConfig.Engine.SERVER
+            TranscribeConfig.setEngine(context, txEngine)
+            coroutineScope.launch { WhisperEngine.release() }
+            LoggerService.reapply(context)
+        }
         EngineOption(
             selected = txEngine == TranscribeConfig.Engine.GEMINI,
             title = "클라우드 · Gemini",
@@ -694,6 +766,13 @@ private fun HomeScreen() {
         }
 
         when (txEngine) {
+            TranscribeConfig.Engine.SERVER -> {
+                Text(
+                    if (EndpointConfig.isConfigured(context)) "✓ 서버 주소 있음 — 위 'HTTP 내보내기'의 주소와 토큰을 그대로 씁니다."
+                    else "⚠ 'HTTP 내보내기'에 서버 주소가 없어 전사가 안 됩니다(음성은 쌓아 둡니다). 주소와 토큰을 넣으세요.",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             TranscribeConfig.Engine.GEMINI -> {
                 Text(
                     if (LlmConfig.isConfigured(context)) {
@@ -701,16 +780,16 @@ private fun HomeScreen() {
                     } else {
                         "⚠ 위 'Gemini API 키'가 비어 있어 전사가 안 됩니다. 키를 넣으세요."
                     },
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
                     "모델은 자동입니다. ${TranscribeConfig.DEFAULT_GEMINI_MODEL} 로 받아쓰고, 하루 한도(모델당 500회)가 차면 " +
                         "${TranscribeConfig.GEMINI_FALLBACKS.joinToString(" → ")} 순으로 넘어갑니다. 실패 사유는 상태줄에 표시됩니다.",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             TranscribeConfig.Engine.WHISPER -> {
-                Text("정확도 — 클수록 정확·느림", style = MaterialTheme.typography.bodySmall)
+                Text("정확도 — 클수록 정확·느림", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 WhisperModels.ALL.forEach { m ->
                     val ready = WhisperModels.isReady(context, m.id)
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
@@ -724,7 +803,7 @@ private fun HomeScreen() {
                         )
                         Column {
                             Text(m.label, style = MaterialTheme.typography.bodyMedium)
-                            Text(if (ready) "다운로드됨" else "다운로드 필요", style = MaterialTheme.typography.bodySmall)
+                            Text(if (ready) "다운로드됨" else "다운로드 필요", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
@@ -751,14 +830,14 @@ private fun HomeScreen() {
                 }
                 when (dl) {
                     is ModelDownloader.State.Downloading -> if (dl.id == whisperId) {
-                        Text("다운로드 중… ${dl.pct}%", style = MaterialTheme.typography.bodySmall)
+                        Text("다운로드 중… ${dl.pct}%", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                    is ModelDownloader.State.Failed -> Text("실패: ${dl.reason}", style = MaterialTheme.typography.bodySmall)
+                    is ModelDownloader.State.Failed -> Text("실패: ${dl.reason}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     else -> {}
                 }
                 Text(
                     "arm64 기기만 지원. 첫 전사에서 모델 로딩에 수 초 걸릴 수 있습니다.",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -780,63 +859,13 @@ private fun HomeScreen() {
         }) { Text("대화 묶기 지금 실행") }
         Text(
             "음성 조각을 5분 간격으로 대화로 묶고 겹치는 통화·일정으로 참석자를 붙입니다. 15분마다 자동으로 돌며, 못 붙인 대화는 '태그할 대화'에 올라옵니다.",
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         }
-
-        val pending = conversations.filter { it.status == "pending" }
-        if (pending.isNotEmpty()) {
-            Text("태그할 대화 (${pending.size})", style = MaterialTheme.typography.labelLarge)
-            Text(
-                "통화·일정으로 상대를 못 알아낸 대화입니다. 아래 내용을 보거나 들어 보고 누구와였는지 적어 주세요.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            pending.take(10).forEach { conv ->
-                // 이 대화에 속한 음성 조각(오래된 것부터). 뭘 말했는지 보여 주고, 보관 오디오가 있으면 들려 준다.
-                val segs = voiceSegments.filter { it.timestampMs in conv.startMs..conv.endMs }.sortedBy { it.timestampMs }
-                val playable = segs.firstOrNull { it.audio != null }
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            timeFormat.format(Date(conv.startMs)) + "\u2013" + timeFormat.format(Date(conv.endMs)) +
-                                " \u00b7 ${segs.size}조각" +
-                                if (conv.context.isNotEmpty()) " \u00b7 ${conv.context}" else "",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.weight(1f),
-                        )
-                        playable?.audio?.let { PlayButton(VoiceAudio.file(context, it), playable.text) }
-                    }
-                    val excerpt = segs.take(3).joinToString("\n") { s ->
-                        (s.speaker?.let { "$it: " } ?: "") + s.text.replace('\n', ' ').take(80)
-                    }
-                    Text(
-                        if (excerpt.isEmpty()) "(음성 조각이 지워졌거나 아직 불러오지 않았습니다)"
-                        else excerpt + if (segs.size > 3) "\n… 외 ${segs.size - 3}조각" else "",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = tagInputs[conv.id] ?: "",
-                            onValueChange = { tagInputs[conv.id] = it },
-                            label = { Text("누구와") },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                        )
-                        OutlinedButton(onClick = {
-                            LogRepository.tagConversation(conv.id, tagInputs[conv.id].orEmpty())
-                            tagInputs.remove(conv.id)
-                        }) { Text("저장") }
-                        TextButton(onClick = {
-                            LogRepository.skipConversation(conv.id)
-                            tagInputs.remove(conv.id)
-                        }) { Text("넘기기") }
-                    }
-                }
-            }
         }
+
+        if (page == "log") {
 
         HorizontalDivider()
 
@@ -854,6 +883,7 @@ private fun HomeScreen() {
             ) {
                 timeline.take(200).forEach { item -> TimelineRow(item) }
             }
+        }
         }
     }
 }
@@ -887,7 +917,7 @@ private fun itemKey(item: TimelineItem): String = when (item) {
 
 /** 음성 조각 옆 "▶ 듣기 / ■ 정지" 버튼. 보관 오디오가 있을 때만 그린다. */
 @Composable
-private fun PlayButton(file: File, text: String? = null) {
+internal fun PlayButton(file: File, text: String? = null) {
     val playing by VoicePlayer.playing.collectAsStateWithLifecycle()
     val isThis = playing == file.absolutePath
     TextButton(onClick = { VoicePlayer.toggle(file, text) }) {

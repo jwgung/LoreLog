@@ -7,9 +7,10 @@ import android.content.Context
  * - GEMINI: 요약용 LlmConfig(Gemini) 키·URL 을 재사용하되 모델은 따로 고른다(클라우드).
  *   받아쓰기는 가벼워 Flash-Lite 로 충분하고, 요약 모델과 분리해야 한도를 따로 쓸 수 있다.
  * - WHISPER: 온디바이스 whisper.cpp. 모델을 다운로드해 기기 안에서 전사(기기 밖 안 나감).
+ * - SERVER: 내 서버의 음성 모델(tailnet 안). 소리가 내 서버 밖으로 안 나가고 큰 모델이라 정확하다. 기본값.
  */
 object TranscribeConfig {
-    enum class Engine { GEMINI, WHISPER }
+    enum class Engine { GEMINI, WHISPER, SERVER }
 
     private const val PREF = "transcribe"
     private const val KEY_ENGINE = "engine"
@@ -43,10 +44,14 @@ object TranscribeConfig {
         c.applicationContext.getSharedPreferences(PREF, Context.MODE_PRIVATE)
 
     fun engine(c: Context): Engine =
-        if (prefs(c).getString(KEY_ENGINE, null) == "whisper") Engine.WHISPER else Engine.GEMINI
+        when (prefs(c).getString(KEY_ENGINE, null)) {
+            "whisper" -> Engine.WHISPER
+            "gemini" -> Engine.GEMINI
+            else -> Engine.SERVER
+        }
 
     fun setEngine(c: Context, e: Engine) {
-        prefs(c).edit().putString(KEY_ENGINE, if (e == Engine.WHISPER) "whisper" else "gemini").apply()
+        prefs(c).edit().putString(KEY_ENGINE, when (e) { Engine.WHISPER -> "whisper"; Engine.GEMINI -> "gemini"; Engine.SERVER -> "server" }).apply()
     }
 
     fun modelId(c: Context): String =

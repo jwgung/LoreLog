@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The settings page talks to the shell; the shell drives the window and the webview from Rust.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

@@ -10,6 +10,7 @@ import com.lorelog.work.ExportWorker
 import com.lorelog.work.CallRecordingWorker
 import com.lorelog.work.PendingVoiceWorker
 import com.lorelog.work.ConversationWorker
+import com.lorelog.work.DiaryReminderWorker
 import com.lorelog.work.PruneWorker
 import com.lorelog.work.SummaryWorker
 
@@ -23,6 +24,7 @@ class LifeLogApp : Application() {
         SummaryWorker.schedule(this)
         PruneWorker.schedule(this)
         ConversationWorker.schedule(this)
+        DiaryReminderWorker.schedule(this)
         CallRecordingWorker.schedule(this)
         PendingVoiceWorker.schedule(this)
         val channel = NotificationChannel(

@@ -1,0 +1,13 @@
+[package]
+name = "life-agent"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+ctrlc = "3.5.2"
+life_agent_core = { version = "0.1.0", path = "../core" }
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_Threading", "Win32_System_SystemInformation"] }
