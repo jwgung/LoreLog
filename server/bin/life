@@ -262,6 +262,10 @@ def sync(dry):
     if not jobs:
         print("No sources configured. Add one with `life add mail` or `life add calendar`.", file=sys.stderr)
         return 2
+    # last: index what was just collected (and the phone/PC records that arrived since), so the librarian can find it.
+    # A dry run saves nothing, the index included.
+    if not dry:
+        jobs.append(("librarian", [sys.executable, str(BIN / "life-librarian"), "update"]))
     for name, cmd in jobs:
         ok = run_job(name, cmd, dry) and ok
     return 0 if ok else 1
@@ -270,6 +274,8 @@ def sync(dry):
 def status():
     src, st = read_sources(), load_status()
     configured = [k for k in ("mail", "files", "calendar") if (src.get("mail") if k == "files" else src.get(k))]
+    if configured:  # sync indexes whatever it collected
+        configured.append("librarian")
     if not configured:
         print("No sources configured.")
         return 0

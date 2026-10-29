@@ -4,6 +4,7 @@ import collections
 import datetime as dt
 import json
 import re
+import sys
 
 from life.assistant.config import DATA, NOISE_PKGS, VAULT
 from life.assistant.senders import is_allowed, load_allow
@@ -84,10 +85,16 @@ def gather_mail(day):
 
 
 def load_conversations():
-    """Latest state of every LoreLog conversation (an updated status arrives as a new line)."""
+    """Latest state of every LoreLog conversation (an updated status arrives as a new line). A file that cannot be
+    read right now is passed over."""
     convs = {}
     for path in sorted((DATA / "raw/lorelog").glob("*.ndjson")):
-        for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as e:
+            sys.stderr.write(f"conversations: skipped {path.name}: {type(e).__name__}\n")
+            continue
+        for line in text.splitlines():
             try:
                 d = json.loads(line)
             except ValueError:

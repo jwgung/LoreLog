@@ -15,6 +15,20 @@ USER_PART = """
 <!-- 오늘 어땠는지 자유롭게 -->
 """
 
+# A correction said in chat is stored as one user line: the summary sentence it corrects, then what the user said.
+_CORRECTION = '(정리의 이 문장이 틀렸다고 알려 주셨어요: "{wrong}")\n{message}'
+_CORRECTION_RE = re.compile(r'^\(정리의 이 문장이 틀렸다고 알려 주셨어요: "(.*?)"\)\n(.*)$', re.S)
+
+
+def wrap_correction(wrong, message):
+    return _CORRECTION.format(wrong=wrong, message=message)
+
+
+def split_correction(text):
+    """(wrong sentence, what the user said) for a stored correction line, else None."""
+    m = _CORRECTION_RE.match(text or "")
+    return (m.group(1), m.group(2)) if m else None
+
 
 def section(text, name):
     """Body of '## <name>' up to the next '## ' heading or the end, without the placeholder comment."""
