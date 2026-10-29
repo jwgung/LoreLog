@@ -11,6 +11,7 @@
 - `bin/life-ingest` 폰·PC가 보내는 기록 수신, 일기·할 일·전사 HTTP (코드는 `life/ingest/`: `settings`, `store`, `asr`, `jobs`, `http`, `cli`)
 - `bin/life-diary` 하루 정리 (코드는 `life/assistant/`. `life-ingest`는 이 모듈을 프로세스 없이 직접 부른다), 대화, 할 일, 메신저 허용
 - `bin/mail-sync`, `bin/calendar-sync` 메일·일정 수집
+- `bin/mail-files` 보낸 편지함의 첨부 원본을 그대로 보관(`raw/files/<sha256>` + `raw/mailfile/<날짜>.ndjson`). 변환·요약 없이, 받는 사람은 복사하지 않는다(메일 노트에 있다). 읽기 전용, `--dry-run`은 크기만 센다. 코드는 `life/collect/`
 - `web/` 데스크톱·폰 브라우저용 화면(대화, 할 일, 서랍, 말하기). `life-ingest`가 `/`에서 그대로 내준다. 토큰은 처음 한 번 입력하면 그 브라우저에 기억한다.
 - `deploy/` systemd 유닛과 환경 파일 예시
 
