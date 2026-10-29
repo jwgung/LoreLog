@@ -6,13 +6,16 @@ use crate::config::{Config, HIDDEN_TITLE};
 use serde::Serialize;
 
 /// One look at the machine.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Sample {
-    /// Empty when nothing usable is in front (locked screen, no window).
+    /// Empty when nothing usable is in front (locked screen, no window, or a window we may not read).
     pub app: String,
     pub title: String,
     /// Seconds since the last keyboard or mouse input.
     pub idle_s: f64,
+    /// A window is in front but its process may not be read (an elevated app). Not the same as a locked screen:
+    /// the user is working, we just cannot say in what.
+    pub unreadable: bool,
 }
 
 /// What goes to the server (one NDJSON line).
@@ -119,11 +122,17 @@ impl Segmenter {
 
     /// Feed one sample taken at `now`. Returns the segments it closed (0, 1 or 2 records).
     pub fn feed(&mut self, now: f64, s: &Sample) -> Vec<Record> {
-        let away = s.app.is_empty() || s.idle_s >= self.idle_after_s;
+        let away = s.app.is_empty() || s.idle_s >= self.idle_after_s; // an unreadable window has an empty app too
         // the last real input, not the moment we noticed: an away period starts there
         let since = (now - s.idle_s).max(self.cur.as_ref().map_or(now, |c| c.start));
         if away {
-            let reason = if s.app.is_empty() { "locked" } else { "idle" };
+            let reason = if s.unreadable {
+                "unreadable"
+            } else if s.app.is_empty() {
+                "locked"
+            } else {
+                "idle"
+            };
             if matches!(&self.cur, Some(Cur { kind: Kind::Idle(r), .. }) if *r == reason) {
                 return self.cut(now);
             }
@@ -185,6 +194,7 @@ mod tests {
             app: app.into(),
             title: title.into(),
             idle_s: idle,
+            ..Sample::default()
         }
     }
 
@@ -319,6 +329,25 @@ mod tests {
             vec![("window", None), ("idle", Some("locked"))]
         );
         assert_eq!(out[1].dur_s, 150);
+    }
+
+    #[test]
+    fn an_unreadable_window_is_not_a_locked_screen() {
+        let mut seg = Segmenter::new(&cfg(), "H");
+        let elevated = Sample {
+            idle_s: 0.0,
+            unreadable: true,
+            ..Sample::default()
+        };
+        let mut out = seg.feed(0.0, &sample("a.exe", "x", 0.0));
+        out.extend(seg.feed(50.0, &elevated));
+        out.extend(seg.feed(120.0, &elevated));
+        out.extend(seg.finish(150.0));
+        assert_eq!(
+            out.iter().map(|r| (r.kind, r.reason)).collect::<Vec<_>>(),
+            vec![("window", None), ("idle", Some("unreadable"))]
+        );
+        assert_eq!(out[1].dur_s, 100);
     }
 
     #[test]

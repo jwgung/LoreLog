@@ -89,6 +89,7 @@ fn rig(url: &str, token: &str) -> Rig {
         app: "a.exe".into(),
         title: "문서".into(),
         idle_s: 0.0,
+        ..Sample::default()
     })));
     let cfg = Config {
         url: url.into(),
@@ -122,6 +123,7 @@ impl Rig {
             app: app.into(),
             title: title.into(),
             idle_s: 0.0,
+            ..Sample::default()
         });
     }
 }
