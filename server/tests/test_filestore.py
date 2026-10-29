@@ -1,4 +1,5 @@
 """POST /ingest/file keeps a PC deliverable's bytes under its content hash and records a sighting, like mail-files."""
+import datetime as dt
 import hashlib
 import json
 import threading
@@ -51,7 +52,7 @@ class FileIngest(unittest.TestCase):
     def test_stores_the_bytes_under_their_hash_and_records_a_sighting(self):
         data = "분기 보고서 본문".encode("utf-8")
         sha = hashlib.sha256(data).hexdigest()
-        when = int(__import__("datetime").datetime(2026, 10, 27, 9, 0).timestamp() * 1000)
+        when = int(dt.datetime(2026, 10, 27, 9, 0).timestamp() * 1000)
         status, body = self.upload(data, name="보고서.pdf", when_ms=when)
         self.assertEqual(status, 200)
         self.assertEqual(body, {"sha256": sha, "stored": True, "duplicate": False})
@@ -64,8 +65,8 @@ class FileIngest(unittest.TestCase):
 
     def test_resend_keeps_one_blob_but_records_each_sighting(self):
         data = b"same file seen twice"
-        when1 = int(__import__("datetime").datetime(2026, 10, 28, 8, 0).timestamp() * 1000)
-        when2 = int(__import__("datetime").datetime(2026, 10, 28, 15, 0).timestamp() * 1000)
+        when1 = int(dt.datetime(2026, 10, 28, 8, 0).timestamp() * 1000)
+        when2 = int(dt.datetime(2026, 10, 28, 15, 0).timestamp() * 1000)
         self.assertEqual(self.upload(data, name="a.txt", when_ms=when1)[1]["stored"], True)
         status, body = self.upload(data, name="a.txt", when_ms=when2)
         self.assertEqual(status, 200)
@@ -83,14 +84,15 @@ class FileIngest(unittest.TestCase):
         data = b"ask before upload"
         sha = hashlib.sha256(data).hexdigest()
         self.assertEqual(self.req("GET", f"/ingest/file/{sha}")[1], {"sha256": sha, "present": False})
-        self.upload(data, name="c.txt")
+        # dated on a day no other test writes, so the sighting line does not land in another test's day file
+        self.upload(data, name="c.txt", when_ms=int(dt.datetime(2026, 1, 2, 9, 0).timestamp() * 1000))
         self.assertEqual(self.req("GET", f"/ingest/file/{sha}")[1], {"sha256": sha, "present": True})
 
     def test_sighting_only_records_a_line_without_re_sending_bytes(self):
         data = b"a kept deliverable seen again"
         sha = hashlib.sha256(data).hexdigest()
-        when1 = int(__import__("datetime").datetime(2026, 10, 30, 9, 0).timestamp() * 1000)
-        when2 = int(__import__("datetime").datetime(2026, 10, 30, 17, 0).timestamp() * 1000)
+        when1 = int(dt.datetime(2026, 10, 30, 9, 0).timestamp() * 1000)
+        when2 = int(dt.datetime(2026, 10, 30, 17, 0).timestamp() * 1000)
         self.upload(data, name="d.txt", when_ms=when1)
         headers = {"X-File-Sha256": sha, "X-File-Name": urllib.parse.quote("d.txt"), "X-File-Mime": "text/plain",
                    "X-File-Sighting": "1", "X-File-Ts": str(when2)}
