@@ -11,7 +11,18 @@ async function load() {
     $("cfgpath").textContent = "설정 파일: " + s.config_path;
     renderWatch(s.watch_dirs || []);
   } catch (e) { msg("설정을 읽지 못했습니다: " + e, false); }
+  try { $("autostart").checked = await invoke("get_autostart"); }
+  catch (e) { $("autostart").disabled = true; $("autostartMsg").textContent = String(e); }
 }
+
+// Starting at login is the user's choice (off until they turn it on); the OS keeps it, so the box shows what the OS says.
+$("autostart").onchange = async () => {
+  const want = $("autostart").checked;
+  try {
+    $("autostart").checked = await invoke("set_autostart", { on: want });
+    $("autostartMsg").textContent = $("autostart").checked ? "로그인할 때 자동으로 시작합니다." : "자동으로 시작하지 않습니다.";
+  } catch (e) { $("autostart").checked = !want; $("autostartMsg").textContent = String(e); }
+};
 
 function renderWatch(dirs) {
   const ul = $("watchlist");

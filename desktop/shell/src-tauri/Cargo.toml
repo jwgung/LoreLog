@@ -23,3 +23,4 @@ life-agent = { path = "../../agent" }
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
+tauri-plugin-autostart = "2"
