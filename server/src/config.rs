@@ -1,10 +1,13 @@
 //! Where the server reads and writes. Every place has a default and can be moved with an environment variable, so the
 //! same code runs as the home server, inside the desktop app, or in a test against throwaway directories.
 //!
-//! The defaults are those of the Python server this replaces, so both read and write the same files:
+//! The defaults sit in the OS places ([`OsDirs`]); on Linux they are the files the home server always used:
 //!   vault       LIFE_VAULT, else OBSIDIAN_VAULT, else ~/Obsidian          (Mail/, Events/, Diary/ notes)
 //!   data        LIFE_DATA_DIR, else LIFE_DATA_DIR in ingest.env, else the OS data dir + /life   (raw/, todos.json, index)
-//!   config      LIFE_CONF_DIR, else ~/.config/vault-sync/                 (env, sources.toml, ingest.env, diary.json)
+//!   config      LIFE_CONF_DIR, else the OS config dir + /vault-sync       (env, sources.toml, ingest.env, diary.json)
+//!               (Linux ~/.config/vault-sync, Windows %APPDATA%\vault-sync,
+//!               macOS ~/Library/Application Support/vault-sync)
+//! On Linux the OS places follow XDG_CONFIG_HOME and XDG_DATA_HOME when they are set.
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,13 +26,14 @@ impl Paths {
     /// The places from the environment and `ingest.env`, with the defaults above.
     pub fn from_env() -> Paths {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let conf = env_path("LIFE_CONF_DIR").unwrap_or_else(|| home.join(".config/vault-sync"));
+        let os = OsDirs::here();
+        let conf = env_path("LIFE_CONF_DIR").unwrap_or_else(|| os.conf_dir());
         let vault =
             env_path("LIFE_VAULT").or_else(|| env_path("OBSIDIAN_VAULT")).unwrap_or_else(|| home.join("Obsidian"));
         let ingest = read_env_file(&conf.join("ingest.env"));
         let data = env_path("LIFE_DATA_DIR")
             .or_else(|| ingest.get("LIFE_DATA_DIR").filter(|v| !v.is_empty()).map(|v| expand_home(v, &home)))
-            .unwrap_or_else(default_data_dir);
+            .unwrap_or_else(|| os.data_dir());
         let allow_file = env_path("LIFE_DIARY_CONFIG").unwrap_or_else(|| conf.join("diary.json"));
         Paths { vault, data, conf, allow_file }
     }
@@ -61,10 +65,36 @@ fn expand_home(v: &str, home: &Path) -> PathBuf {
     }
 }
 
-/// The OS place for application data: Linux `$XDG_DATA_HOME/life` (else ~/.local/share/life), Windows
-/// `%LOCALAPPDATA%\life`, macOS `~/Library/Application Support/life`.
-pub fn default_data_dir() -> PathBuf {
-    dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".")).join("life")
+/// The OS base places the defaults hang off, so the library runs the same on every OS (in the home server or inside
+/// the desktop app) without a path of one OS written into it.
+#[derive(Clone, Debug)]
+pub struct OsDirs {
+    /// Linux `$XDG_CONFIG_HOME` (else ~/.config), Windows `%APPDATA%`, macOS `~/Library/Application Support`
+    pub config: PathBuf,
+    /// Linux `$XDG_DATA_HOME` (else ~/.local/share), Windows `%LOCALAPPDATA%`, macOS `~/Library/Application Support`
+    pub data: PathBuf,
+}
+
+impl OsDirs {
+    pub fn here() -> OsDirs {
+        let base = || PathBuf::from(".");
+        OsDirs { config: dirs::config_dir().unwrap_or_else(base), data: dirs::data_local_dir().unwrap_or_else(base) }
+    }
+
+    /// Settings: `env`, `sources.toml`, `ingest.env`, `diary.json`.
+    pub fn conf_dir(&self) -> PathBuf {
+        self.config.join("vault-sync")
+    }
+
+    /// Records, the vault of files and the index.
+    pub fn data_dir(&self) -> PathBuf {
+        self.data.join("life")
+    }
+
+    /// What the collectors remember between runs (seen UIDs, locks).
+    pub fn state_dir(&self) -> PathBuf {
+        self.data.join("vault-sync")
+    }
 }
 
 /// A `KEY=VALUE` file (secrets live in these, mode 600). Blank lines and `#` comments are skipped; values may be quoted.
@@ -101,6 +131,21 @@ mod tests {
         assert_eq!(m.get("C").map(String::as_str), Some("x=y"));
         assert_eq!(m.len(), 3);
         assert!(read_env_file(&dir.path().join("missing")).is_empty());
+    }
+
+    #[test]
+    fn default_places_follow_the_os_and_stay_put_on_linux() {
+        let os = OsDirs { config: PathBuf::from("/os/config"), data: PathBuf::from("/os/data") };
+        assert_eq!(os.conf_dir(), PathBuf::from("/os/config/vault-sync"));
+        assert_eq!(os.state_dir(), PathBuf::from("/os/data/vault-sync"));
+        assert_eq!(os.data_dir(), PathBuf::from("/os/data/life"));
+        #[cfg(target_os = "linux")]
+        if std::env::var_os("XDG_CONFIG_HOME").is_none() && std::env::var_os("XDG_DATA_HOME").is_none() {
+            let home = dirs::home_dir().unwrap();
+            let here = OsDirs::here();
+            assert_eq!(here.conf_dir(), home.join(".config/vault-sync"), "where the Linux server has always read");
+            assert_eq!(here.state_dir(), home.join(".local/share/vault-sync"));
+        }
     }
 
     #[test]

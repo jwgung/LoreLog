@@ -15,7 +15,7 @@ Import events (VEVENT) from CalDAV calendars into the vault as Events/ notes. Re
 - An existing event is recognised by (dav_uid, start). Only events whose etag changed are rewritten.
   Notes of events that disappeared from the server are not deleted.
 
-Settings live in ~/.config/vault-sync/ :
+Settings live in the OS config place + vault-sync/ (Linux ~/.config/vault-sync/, or LIFE_CONF_DIR):
   env           secrets only (KEY=VALUE, mode 600): CALDAV_USER / CALDAV_PASSWORD (default: IMAP_USER / IMAP_PASSWORD)
   sources.toml  what to collect, under [calendar]: urls, past_days, future_days
                 (env may also carry CALDAV_URL (comma-separated), CALDAV_PAST_DAYS, CALDAV_FUTURE_DAYS; sources.toml wins)

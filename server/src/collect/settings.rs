@@ -1,4 +1,5 @@
-//! Settings shared by the collectors, in `~/.config/vault-sync/` (or `LIFE_CONF_DIR`):
+//! Settings shared by the collectors, in the OS config place + `vault-sync` (Linux ~/.config/vault-sync; or
+//! `LIFE_CONF_DIR`):
 //!   env           secrets only (KEY=VALUE, mode 600): IMAP_USER, IMAP_PASSWORD, CALDAV_USER, CALDAV_PASSWORD
 //!   sources.toml  what to collect (no secrets): [mail] host, port, account, folders, since; [calendar] urls, past_days,
 //!                 future_days. Values in sources.toml win over the same settings in env.
@@ -78,9 +79,9 @@ pub fn list(v: Option<&String>, default: &str) -> Vec<String> {
         .collect()
 }
 
-/// Where a collector keeps its state between runs: `~/.local/share/vault-sync/`.
+/// Where a collector keeps its state between runs: the OS data place + `vault-sync` (Linux ~/.local/share/vault-sync).
 pub fn state_dir() -> PathBuf {
-    dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")).join(".local/share/vault-sync")
+    crate::config::OsDirs::here().state_dir()
 }
 
 /// A non-blocking exclusive lock, so a timer run and a manual run never overlap (both would write the same notes).
