@@ -39,6 +39,26 @@ function el(tag, cls, text) {
   return e;
 }
 
+// ---------- first run: where the vault lives ----------
+function showChoose(msg = "") {
+  $("app").hidden = true;
+  $("setup").hidden = true;
+  $("choose").hidden = false;
+  $("chooseError").textContent = msg;
+}
+async function choose(mode) {
+  $("chooseError").textContent = mode === "host" ? "서버를 띄우는 중…" : "";
+  try {
+    await invoke("choose_mode", { mode });
+    $("choose").hidden = true;
+    await boot();
+  } catch (e) {
+    $("chooseError").textContent = String(e);
+  }
+}
+$("chooseHost").addEventListener("click", () => choose("host"));
+$("chooseConnect").addEventListener("click", () => choose("connect"));
+
 // ---------- first-run setup (server address + token) ----------
 function showSetup(msg = "") {
   $("app").hidden = true;
@@ -366,7 +386,9 @@ async function start() {
 async function boot() {
   if (!invoke) { showSetup("이 화면은 데스크톱 앱 안에서만 동작합니다."); return; }
   try {
-    const s = await invoke("server_config");   // { base, token }
+    const s = await invoke("server_config");   // { mode, base, token }
+    if (!s.mode) { showChoose(); return; }
+    if (s.host_error) { showChoose(`이 PC의 서버를 띄우지 못했습니다: ${s.host_error}`); return; }
     API_BASE = (s.base || "").replace(/\/+$/, "");
     token = s.token || "";
     if (API_BASE && token) start(); else showSetup();

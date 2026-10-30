@@ -9,12 +9,18 @@
 //!      watched-folder intake (deliverables the user drops into folders they chose). The settings the loop reads
 //!      (url, token, watched folders) live in the core config, shared with the CLI.
 //!
+//!   3. **The server, in host mode** — when the user keeps the vault on this PC (docs/adr/0002), the app runs the
+//!      server library itself (`host.rs`): receiving on loopback and the tailnet address, syncing every hour, the
+//!      librarian. The screens and the collector then talk to it on loopback like to any server.
+//!
 //! The shell owns no judgement about the diary: it exposes the config to the UI as commands and runs the collector.
+mod host;
+
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use life_agent_core::config;
+use life_agent_core::config::{self, Mode};
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
@@ -32,8 +38,74 @@ struct Settings {
 
 #[derive(Serialize)]
 struct ServerConfig {
+    /// "host", "connect", or null before the user chose where the vault lives
+    mode: Option<Mode>,
     base: String,
     token: String,
+    /// host mode: why the app's own server is not running (the screen shows it instead of a chat that cannot work)
+    host_error: Option<String>,
+}
+
+/// The server this app runs in host mode, once started, or why it could not start.
+struct HostSlot(Mutex<Result<Option<host::Hosting>, String>>);
+
+impl Default for HostSlot {
+    fn default() -> Self {
+        HostSlot(Mutex::new(Ok(None)))
+    }
+}
+
+fn slot(s: &HostSlot) -> std::sync::MutexGuard<'_, Result<Option<host::Hosting>, String>> {
+    s.0.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn hosting<T>(s: &HostSlot, f: impl FnOnce(&host::Hosting) -> T) -> Option<T> {
+    slot(s).as_ref().ok().and_then(|h| h.as_ref()).map(f)
+}
+
+/// The app-wide stop flag (set when the app exits).
+struct Stop(Arc<AtomicBool>);
+
+/// Start the server unless it runs. A failure is kept (the screen shows it) and returned.
+fn start_hosting(s: &HostSlot, stop: &Arc<AtomicBool>) -> Result<(), String> {
+    let mut held = slot(s);
+    if matches!(*held, Ok(Some(_))) {
+        return Ok(());
+    }
+    let started = config::load().and_then(|mut cfg| host::Hosting::start(&mut cfg, stop.clone()));
+    let result = started.as_ref().map(|_| ()).map_err(Clone::clone);
+    *held = started.map(Some);
+    result
+}
+
+/// Where the vault lives, chosen on the first run: "host" (this PC; the app runs the server) or "connect" (a server
+/// elsewhere; the screen then asks for its address and token). Switching later does not move any data.
+#[tauri::command]
+fn choose_mode(mode: Mode, slot: tauri::State<HostSlot>, stop: tauri::State<Stop>) -> Result<(), String> {
+    if mode == Mode::Host {
+        start_hosting(&slot, &stop.0)?; // the choice is kept only once the server runs
+    }
+    let mut cfg = config::load()?;
+    cfg.mode = Some(mode);
+    config::save(&cfg)
+}
+
+/// What the screens show about the server this app runs (null when it runs none).
+#[tauri::command]
+fn host_info(slot: tauri::State<HostSlot>) -> Option<host::Info> {
+    hosting(&slot, |h| h.info())
+}
+
+/// Sync mail and calendars now (host mode).
+#[tauri::command]
+fn sync_now(slot: tauri::State<HostSlot>) -> Result<(), String> {
+    hosting(&slot, |h| h.sync_now()).ok_or_else(|| "이 PC에 금고를 둔 경우에만 동기화합니다".to_string())
+}
+
+/// The last result of every sync job (host mode).
+#[tauri::command]
+fn sync_status(slot: tauri::State<HostSlot>) -> Option<serde_json::Value> {
+    hosting(&slot, |h| h.status())
 }
 
 #[tauri::command]
@@ -50,18 +122,27 @@ fn get_settings() -> Result<Settings, String> {
 /// The server address and token the bundled assistant UI needs to call the API. Returned only to the app's own
 /// screen (a Tauri command), never exposed as a web endpoint.
 #[tauri::command]
-fn server_config() -> Result<ServerConfig, String> {
+fn server_config(slot: tauri::State<HostSlot>) -> Result<ServerConfig, String> {
     let cfg = config::load()?;
-    Ok(ServerConfig {
-        base: cfg.url.trim_end_matches('/').to_string(),
-        token: cfg.token,
-    })
+    let host_error = if cfg.mode == Some(Mode::Host) {
+        match &*self::slot(&slot) {
+            Ok(Some(_)) => None,
+            Ok(None) => Some("서버가 아직 시작되지 않았습니다".to_string()),
+            Err(e) => Some(e.clone()),
+        }
+    } else {
+        None
+    };
+    Ok(ServerConfig { mode: cfg.mode, base: cfg.url.trim_end_matches('/').to_string(), token: cfg.token, host_error })
 }
 
 /// Save the server address and (if given) the token. An empty token leaves the stored one untouched. The address
 /// must be a tailnet/loopback host (see `config::is_acceptable_url`) so the token is never sent to a public host.
 #[tauri::command]
 fn save_settings(url: String, token: Option<String>) -> Result<(), String> {
+    if config::load()?.mode == Some(Mode::Host) {
+        return Err("이 PC에 금고를 둔 동안에는 이 앱의 서버를 씁니다. 다른 서버로 바꾸려면 금고 위치를 바꾸세요".into());
+    }
     let url = url.trim().trim_end_matches('/').to_string();
     if !config::is_acceptable_url(&url) {
         return Err("주소는 tailnet(*.ts.net) 이어야 합니다 (http는 로컬/테일넷만)".into());
@@ -209,10 +290,22 @@ pub fn run() {
             server_config,
             save_settings,
             add_watch,
-            remove_watch
+            remove_watch,
+            choose_mode,
+            host_info,
+            sync_now,
+            sync_status
         ])
+        .manage(HostSlot::default())
+        .manage(Stop(stop.clone()))
         .setup(move |app| {
             build_tray(app.handle())?;
+            if config::load().ok().and_then(|c| c.mode) == Some(Mode::Host)
+                && let Err(e) = start_hosting(&app.state::<HostSlot>(), &stop)
+            {
+                // kept in the slot too: the screen shows it
+                life_agent_core::agent::log(&config::home(), &format!("server not running: {e}"));
+            }
             if started_at_login && let Some(w) = app.get_webview_window("main") {
                 let _ = w.hide(); // started at login: collect in the tray, open when the user asks
             }
@@ -229,9 +322,10 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building the app")
-        .run(move |_app, event| {
+        .run(move |app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 stop_for_exit.store(true, Ordering::SeqCst);
+                hosting(&app.state::<HostSlot>(), |h| h.stop());
             }
         });
 }

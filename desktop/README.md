@@ -19,7 +19,7 @@ Omni 데스크톱 클라이언트(`dev` 브랜치의 `pc_activity`)를 읽고 �
 ## 구조
 - `core/` 순수 로직과 전송: `segments`(표본 → 구간), `spool`, `sender`(전송·파일 업로더 `ServerUploader`), `intake`(감시 폴더 엔진), `agent`(루프 한 번), `config`. OS 호출이 없어 어디서나 테스트한다.
 - `agent/` OS 쪽: `platform/windows.rs`(앞 창·프로세스·마지막 입력, `windows-sys`), 명령줄 `life-agent`. 수집 루프 `run::run_until(stop)`은 CLI와 데스크톱 앱이 함께 쓴다.
-- `shell/` 데스크톱 앱(Tauri): 비서 화면(대화·할일·서랍·말하기)과 설정 화면을 **앱에 번들**해 띄우고, 백그라운드로 수집 루프를 돌리며, 트레이(열기·채팅 열기·설정·종료)를 둔다. 화면은 Tauri webview로 그리지만 서버에서 당겨오지 않는다("웹 클라이언트"가 아니다) — 서버 주소·토큰은 앱 설정(`server_config` 커맨드)에서 받아 서버 API를 직접 호출한다. `ui/index.html`=비서, `ui/settings.html`=설정.
+- `shell/` 데스크톱 앱(Tauri): 비서 화면(대화·할일·서랍·말하기)과 설정 화면을 **앱에 번들**해 띄우고, 백그라운드로 수집 루프를 돌리며, 트레이(열기·채팅 열기·설정·종료)를 둔다. 금고를 이 PC에 두면 서버도 돌린다(아래 "금고를 어디에 두나"). 화면은 Tauri webview로 그리지만 서버에서 당겨오지 않는다("웹 클라이언트"가 아니다) — 서버 주소·토큰은 앱 설정(`server_config` 커맨드)에서 받아 서버 API를 직접 호출한다. `ui/index.html`=비서, `ui/settings.html`=설정.
 
 배포하는 것은 둘이다 — **`life-desktop`**(보통 사용자는 이것만: 대화 + 백그라운드 수집 + 트레이)와 **`life-agent`**(설정·진단·감시 폴더를 터미널에서 다루는 명령줄). 데스크톱 앱이 백그라운드 수집을 하므로 별도 데몬은 두지 않는다. 데스크톱 앱과 `life-agent run`을 동시에 돌리지 않는다(둘 다 수집한다).
 
@@ -44,7 +44,18 @@ Omni 데스크톱 클라이언트(`dev` 브랜치의 `pc_activity`)를 읽고 �
     cd desktop && cargo tauri dev   # 개발 실행 (리눅스는 WebKitGTK, Windows는 WebView2)
     cd desktop && cargo tauri build # 설치용 번들
 
-처음 뜨면 설정 화면이 나온다 — 서버 주소와 토큰을 넣으면 앱에 번들된 비서 화면(대화·할일·서랍·말하기)으로 넘어간다. 화면은 앱 안에 있고(브라우저로 열리지 않는다) 서버 API만 호출한다. 창을 닫아도 트레이에 남아 수집을 계속하고, 트레이 "채팅 열기"·"설정"으로 화면을 오간다. 설정은 CLI와 같은 파일을 쓴다 — 비밀 아닌 설정은 `config.toml`, 토큰은 별도 파일 `token`(0600). 서버의 `sources.toml`+`env` 분리와 같은 방식.
+처음 뜨면 금고를 어디에 둘지 묻는다(위). "다른 곳의 금고에 연결"을 고르면 서버 주소와 토큰을 넣는 화면이 나오고, 넣으면 앱에 번들된 비서 화면(대화·할일·서랍·말하기)으로 넘어간다. 화면은 앱 안에 있고(브라우저로 열리지 않는다) 서버 API만 호출한다. 창을 닫아도 트레이에 남아 수집을 계속하고, 트레이 "채팅 열기"·"설정"으로 화면을 오간다. 설정은 CLI와 같은 파일을 쓴다 — 비밀 아닌 설정은 `config.toml`, 토큰은 별도 파일 `token`(0600). 서버의 `sources.toml`+`env` 분리와 같은 방식.
+
+## 금고를 어디에 두나 (처음 켤 때)
+처음 켜면 고른다(`config.toml`의 `mode`, 결정은 `docs/adr/0002-vault-on-the-users-device.md`).
+- **이 PC에 두기**(`host`): 앱이 서버 라이브러리(`life-server`)를 품는다(`shell/src-tauri/src/host.rs`). 데이터와 설정은 서버가 이 OS에서 쓰는 자리에 둔다(Windows `%LOCALAPPDATA%\life`, `%APPDATA%\vault-sync`). 그래서 같은 PC의 `life` 명령줄 도구도 같은 금고를 본다(명령줄의 `LIFE_*_DIR` 같은 위치 바꾸기는 앱이 따르지 않는다). 메일·일정 노트는 `config.toml`의 `vault_dir`(예: Obsidian 볼트)에, 비어 있으면 `%LOCALAPPDATA%\life\notes`에 쓴다.
+  - 받기: loopback(`127.0.0.1:<포트>`, 이 앱의 화면과 PC 수집기)과 tailnet 주소(폰·다른 PC). 포트는 `ingest.env`의 `INGEST_PORT`(기본 8765), 토큰은 처음 켤 때 `ingest.env`에 만든다. Tailscale이 앱보다 늦게 올라와도 30초마다 다시 보고 tailnet 주소에서도 받기 시작한다. Windows는 처음 tailnet 주소로 받을 때 방화벽 허용을 묻는다.
+  - 다른 기기에 넣을 주소는 `http://<PC의 tailnet 이름>:<포트>`. tailnet 안의 HTTP는 WireGuard로 이미 암호화된다. HTTPS를 원하면 사용자가 `tailscale serve`로 붙인다. tailnet 안에서는 토큰이 유일한 문이므로, 다른 사람과 tailnet을 함께 쓰면 Tailscale ACL로 이 포트에 닿을 기기를 좁힌다. 받는 주소는 Tailscale 인터페이스의 tailnet 주소뿐이다(같은 100.64.0.0/10 대역이라도 다른 인터페이스, 예컨대 통신사 CGNAT는 쓰지 않는다).
+  - 서버를 띄우지 못하면(포트를 다른 프로그램이 쓰는 등) 처음 화면에 그 이유를 보여 준다. 금고를 이 PC에 둔 동안 설정의 서버 주소는 바꿀 수 없다.
+  - 동기화: 켤 때 한 번, 그 뒤 1시간마다 메일·첨부·일정을 가져오고 사서 색인을 갱신한다(`life sync`와 같은 함수). 결과는 `life status`와 같은 `status.json`.
+  - 모델: `ingest.env`의 `LIFE_LLM_URL`·`LIFE_LLM_MODEL`·`LIFE_ASR_URL`·`LIFE_ASR_MODEL`. 비어 있으면 대화·음성이 실패한다(설정 화면은 다음 단계).
+  - 서버의 기록(받은 줄, 실패, 사서가 건너뛴 파일)은 `%LOCALAPPDATA%\life\desktop.log`.
+- **다른 곳의 금고에 연결**(`connect`): 지금까지의 방식. 서버 주소와 토큰을 넣는다. 모드가 생기기 전에 주소를 넣어 둔 설정은 이쪽으로 읽는다.
 
 ## 빌드
 이 저장소의 리눅스 PC에서 Windows exe까지 만든다(`cargo-xwin`이 Windows SDK를 받아 둔다).
@@ -54,7 +65,7 @@ Omni 데스크톱 클라이언트(`dev` 브랜치의 `pc_activity`)를 읽고 �
 결과(이 PC는 `CARGO_TARGET_DIR`가 `~/.cache/cargo-target`): `.../x86_64-pc-windows-msvc/release/life-desktop.exe`(데스크톱 앱)와 `life-agent.exe`(명령줄). Windows에서 직접 빌드하려면 Rust와 Visual Studio Build Tools(C++)를 설치하고 `cargo build --release -p life-desktop -p life-agent`. 데스크톱 앱은 실행할 때 **WebView2 런타임**이 필요하다(Windows 11 기본 포함, Windows 10은 Edge WebView2 Evergreen Runtime 설치).
 
 ## Windows에서 시작하기 (데스크톱 앱)
-1. `life-desktop.exe`를 실행한다. 처음에는 설정 화면이 뜬다 — 서버 주소(예: `https://gungbuntu.tail8d1ab7.ts.net:48765`, PC가 tailnet에 있어야 한다)와 토큰(서버의 `INGEST_TOKEN`)을 넣고 "저장하고 대화 열기".
+1. `life-desktop.exe`를 실행한다. 처음에는 금고를 어디에 둘지 묻는다. "이 PC에 두기"면 바로 대화로 넘어간다(폰에 넣을 주소·토큰을 보여 주는 화면은 다음 단계). "다른 곳의 금고에 연결"이면 서버 주소(예: `https://gungbuntu.tail8d1ab7.ts.net:48765`, PC가 tailnet에 있어야 한다)와 토큰(서버의 `INGEST_TOKEN`)을 넣고 "저장하고 대화 열기".
 2. 그 자리에서 앱에 번들된 비서 화면(대화)으로 넘어간다. 창을 닫아도 트레이에 남아 수집을 계속한다. 트레이: 열기 / 채팅 열기 / 설정 / 종료.
 3. "설정"에서 감시 폴더를 더한다(예: 다운로드). 아무것도 더하지 않으면 파일은 보지 않고 창 활동만 수집한다.
 

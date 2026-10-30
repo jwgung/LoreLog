@@ -26,6 +26,7 @@ Usage: calendar-sync [--dry-run] [--list [SERVER_URL]] [-h]
            Without SERVER_URL it starts from the first configured URL.";
 
 fn main() -> ExitCode {
+    life_server::logging::to_stderr();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!("{HELP}");

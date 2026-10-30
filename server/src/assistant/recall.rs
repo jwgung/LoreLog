@@ -165,7 +165,7 @@ pub fn find_with(
             Ok(r) if r.skipped > 0 => notes.push(PARTIAL), // what was found stands, but "not found" would claim more than we know
             Ok(_) => {}
             Err(e) => {
-                eprintln!("librarian update failed: {}", first_word(&e));
+                log::warn!("librarian update failed: {}", first_word(&e));
                 notes.push(STALE);
             }
         }
@@ -178,7 +178,7 @@ pub fn find_with(
             std::iter::once(render(&hits)).chain(notes.iter().map(|n| n.to_string())).collect::<Vec<_>>().join("\n"),
         ),
         Err(e) => {
-            eprintln!("librarian unavailable: {}", first_word(&e));
+            log::warn!("librarian unavailable: {}", first_word(&e));
             Some(UNAVAILABLE.to_string())
         }
     }

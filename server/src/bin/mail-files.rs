@@ -16,6 +16,7 @@ marks its files as sent, the others as received. Processed UIDs are remembered p
 it has not seen. --limit is per folder. --dry-run reads sizes and headers only and stores nothing.";
 
 fn main() -> ExitCode {
+    life_server::logging::to_stderr();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!("{HELP}");

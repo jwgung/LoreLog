@@ -46,18 +46,6 @@ pub struct App {
 }
 
 impl App {
-    /// An app that talks to the model and speech servers named in the environment.
-    pub fn new(paths: Paths, token: &str, cls: &str, max_bytes: usize) -> App {
-        App::with(
-            paths,
-            token,
-            cls,
-            max_bytes,
-            Arc::new(crate::llm::Http::from_env()),
-            Arc::new(crate::llm::HttpSpeech::from_env()),
-        )
-    }
-
     pub fn with(
         paths: Paths,
         token: &str,
@@ -214,7 +202,7 @@ fn authorized_token(token: &str, headers: &HeaderMap) -> bool {
 /// A failure the client is not told about; the type goes to the journal.
 fn internal(req: &Request, what: &dyn std::fmt::Debug) -> Reply {
     let path = req.target.split('?').next().unwrap_or("");
-    eprintln!("{} {} {} failed: {}", Local::now().format("%H:%M:%S"), req.method, path, crate::errors::kind(what));
+    log::warn!("{} {} {} failed: {}", Local::now().format("%H:%M:%S"), req.method, path, crate::errors::kind(what));
     Reply::new(500, json!({"error": "internal error"}))
 }
 
@@ -299,7 +287,7 @@ fn ingest(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, Rep
     let source = &caps[1];
     let body = String::from_utf8_lossy(req.blob(app.max_bytes)?).into_owned();
     let c = app.store.store(source, &body, &app.cls).map_err(|e| internal(req, &e))?;
-    eprintln!(
+    log::info!(
         "{} {source} stored {} duplicates {} rejected {}",
         Local::now().format("%H:%M:%S"),
         c.accepted,
@@ -343,7 +331,7 @@ fn file_put(app: &App, req: &Request, _caps: &regex::Captures) -> Result<Reply, 
         Ok((sha, stored)) => {
             let safe: String = name.escape_default().collect(); // no raw newlines etc. in the journal line
             let what = if stored { "stored" } else { "dup" };
-            eprintln!("{} file {} {what} {safe}", Local::now().format("%H:%M:%S"), &sha[..12]);
+            log::info!("{} file {} {what} {safe}", Local::now().format("%H:%M:%S"), &sha[..12]);
             Ok(Reply::ok(json!({"sha256": sha, "stored": stored, "duplicate": !stored})))
         }
         Err(FileError::HashMismatch) => Ok(Reply::new(400, json!({"error": "hash mismatch"}))),

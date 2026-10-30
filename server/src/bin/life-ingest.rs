@@ -1,9 +1,11 @@
 //! life-ingest: the collection endpoint and the assistant's HTTP API.
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::Arc;
 
-use life_server::config::{Paths, read_env_file};
-use life_server::http::{App, serve, serve_tls};
+use life_server::config::Paths;
+use life_server::host::{IngestSettings, Models};
+use life_server::http::{serve, serve_tls};
+use life_server::llm::{Http, HttpSpeech};
 
 const HELP: &str = r#"life-ingest: collection endpoint that any client (phone, PC, ...) can send NDJSON to. Raw data is stored on this server.
 
@@ -42,47 +44,41 @@ Settings: <config>/ingest.env  (KEY=VALUE, mode 600; <config> is LIFE_CONF_DIR, 
   INGEST_CLASS=personal       default class (work | personal)
   INGEST_MAX_MB=20            maximum size of one request
   INGEST_CERT / INGEST_KEY    HTTPS if both are set (PEM files)
+  LIFE_LLM_URL / LIFE_LLM_MODEL, LIFE_ASR_URL / LIFE_ASR_MODEL
+                              the chat and speech models (OpenAI-compatible); the environment wins over this file
 
 Usage: life-ingest [-h]"#;
 
 fn main() -> std::process::ExitCode {
+    life_server::logging::to_stderr();
     if std::env::args().skip(1).any(|a| a == "-h" || a == "--help") {
         println!("{HELP}");
         return std::process::ExitCode::SUCCESS;
     }
     let paths = Paths::from_env();
-    let env_file = paths.conf.join("ingest.env");
-    let cfg = read_env_file(&env_file);
-    let get = |k: &str, d: &str| cfg.get(k).cloned().unwrap_or_else(|| d.to_string());
-    let token = get("INGEST_TOKEN", "");
-    if token.chars().count() < 16 {
-        eprintln!("{} needs INGEST_TOKEN (at least 16 characters).", env_file.display());
-        return std::process::ExitCode::from(2);
-    }
-    let bind = get("INGEST_BIND", "127.0.0.1");
-    let Ok(ip) = bind.parse::<IpAddr>() else {
-        eprintln!("INGEST_BIND is not an IP address: {bind}");
-        return std::process::ExitCode::from(2);
+    let s = match IngestSettings::load(&paths) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("{e}");
+            return std::process::ExitCode::from(2);
+        }
     };
-    let Ok(port) = get("INGEST_PORT", "8765").parse::<u16>() else {
-        eprintln!("INGEST_PORT is not a port number");
-        return std::process::ExitCode::from(2);
-    };
-    let max_mb: f64 = get("INGEST_MAX_MB", "20").parse().unwrap_or(20.0);
-    let max_bytes = (max_mb * 1024.0 * 1024.0) as usize;
-    let cert = cfg.get("INGEST_CERT").filter(|v| !v.is_empty()).cloned();
-    let key = cfg.get("INGEST_KEY").filter(|v| !v.is_empty()).cloned();
-    let app = Arc::new(App::new(paths.clone(), &token, &get("INGEST_CLASS", "personal"), max_bytes));
-    let addr = SocketAddr::new(ip, port);
+    // the model addresses from ingest.env or the environment, else this server's old defaults
+    let (chat, asr) = (Http::from_env(), HttpSpeech::from_env());
+    let defaults = Models { chat_url: chat.url, chat_model: chat.model, asr_url: asr.url, asr_model: asr.model };
+    let app = Arc::new(Models::load(&paths).or(&defaults).app(paths.clone(), &s));
+    let addr = SocketAddr::new(s.bind, s.port);
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let result = rt.block_on(async move {
-        let https = cert.is_some() && key.is_some();
+        let https = s.cert.is_some() && s.key.is_some();
         eprintln!(
-            "life-ingest started: {bind}:{port}  data: {}  {}",
+            "life-ingest started: {}:{}  data: {}  {}",
+            s.bind,
+            s.port,
             paths.data.display(),
             if https { "HTTPS" } else { "HTTP" }
         );
-        match (cert, key) {
+        match (&s.cert, &s.key) {
             (Some(c), Some(k)) => serve_tls(app, addr, c.as_ref(), k.as_ref()).await,
             _ => {
                 let listener = tokio::net::TcpListener::bind(addr).await?;

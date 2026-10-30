@@ -73,7 +73,7 @@ impl Jobs {
         std::thread::spawn(move || {
             let today = Local::now().format("%Y-%m-%d").to_string();
             if let Err(e) = todos::extract(&paths, model.as_ref(), &today, false) {
-                eprintln!("todo extract failed: {e}"); // the next request retries; nothing for the client to wait on
+                log::warn!("todo extract failed: {e}"); // the next request retries; nothing for the client to wait on
             }
             me.extracting.store(false, Ordering::SeqCst);
         });

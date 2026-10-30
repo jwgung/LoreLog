@@ -2063,6 +2063,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "if-addrs"
+version = "0.13.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69b2eeee38fef3aa9b4cc5f1beea8a2444fc00e7377cafae396de3f5c2065e24"
+dependencies = [
+ "libc",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "imap"
 version = "3.0.0-alpha.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2394,13 +2404,21 @@ dependencies = [
 name = "life-desktop"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "if-addrs",
  "life-agent",
+ "life-server",
  "life_agent_core",
+ "log",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",
  "tauri-plugin-single-instance",
+ "tempfile",
+ "tokio",
+ "ureq",
 ]
 
 [[package]]
@@ -2415,10 +2433,12 @@ dependencies = [
  "chrono-tz",
  "dirs 7.0.0",
  "encoding_rs",
+ "getrandom 0.3.4",
  "hex",
  "html-escape",
  "imap",
  "indexmap 2.14.2",
+ "log",
  "mail-parser",
  "percent-encoding",
  "regex",
@@ -5488,6 +5508,15 @@ name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
+dependencies = [
+ "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "windows-sys"
+version = "0.59.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets 0.52.6",
 ]
