@@ -52,27 +52,6 @@ pub fn default_folders(folders: &[(String, Vec<String>)]) -> Vec<String> {
     picked
 }
 
-/// The jobs of a sync, in order: mail, its attachments, calendars, and last the librarian (it indexes what was just
-/// collected and the phone and PC records that arrived since). A dry run saves nothing, the index included.
-pub fn sync_jobs(sources: &toml::Table, dry: bool) -> Vec<(&'static str, Vec<String>)> {
-    let extra: Vec<String> = if dry { vec!["--dry-run".into()] } else { Vec::new() };
-    let has = |t: &str, k: &str| {
-        sources.get(t).and_then(|v| v.get(k)).and_then(toml::Value::as_array).map(|a| !a.is_empty()).unwrap_or(false)
-    };
-    let mut jobs = Vec::new();
-    if has("mail", "folders") {
-        jobs.push(("mail", [vec!["mail-sync".to_string()], extra.clone()].concat()));
-        jobs.push(("files", [vec!["mail-files".to_string(), "--limit".into(), "200".into()], extra.clone()].concat()));
-    }
-    if has("calendar", "urls") {
-        jobs.push(("calendar", [vec!["calendar-sync".to_string()], extra.clone()].concat()));
-    }
-    if !jobs.is_empty() && !dry {
-        jobs.push(("librarian", vec!["life-librarian".into(), "update".into()]));
-    }
-    jobs
-}
-
 /// The names `life status` reports, in order.
 pub fn configured(sources: &toml::Table) -> Vec<&'static str> {
     let mut out: Vec<&'static str> = Vec::new();
@@ -135,15 +114,5 @@ mod tests {
             ["INBOX", "Sent Messages"]
         );
         assert_eq!(default_folders(&[f("INBOX", &[]), f("Sent", &[])]), ["INBOX", "Sent"]);
-    }
-
-    #[test]
-    fn the_librarian_indexes_after_collecting_and_a_dry_run_leaves_the_index_alone() {
-        let src: toml::Table = "[mail]\nfolders = [\"INBOX\"]\n[calendar]\nurls = [\"x\"]\n".parse().unwrap();
-        let names: Vec<&str> = sync_jobs(&src, false).iter().map(|(n, _)| *n).collect();
-        assert_eq!(names, ["mail", "files", "calendar", "librarian"]);
-        assert_eq!(sync_jobs(&src, false).last().unwrap().1, ["life-librarian", "update"]);
-        assert!(!sync_jobs(&src, true).iter().any(|(n, _)| *n == "librarian"));
-        assert!(sync_jobs(&toml::Table::new(), false).is_empty());
     }
 }

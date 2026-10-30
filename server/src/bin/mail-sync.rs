@@ -1,11 +1,9 @@
 //! mail-sync: import IMAP mail (inbox and sent folders) into the vault as Mail/ notes. Read-only mirror.
-use std::collections::HashSet;
 use std::process::ExitCode;
 
-use chrono::Local;
-use life_server::collect::{imapc, mail, settings};
+use life_server::collect::settings;
+use life_server::collect::sync::{self, MailRun};
 use life_server::config::Paths;
-use serde_json::Value;
 
 const HELP: &str = "\
 Import IMAP mail (inbox and sent folders) into the vault as Mail/ notes. Read-only mirror.
@@ -27,141 +25,16 @@ Exit status: 0 on success, 1 if the connection failed or a folder could not be r
 
 Usage: mail-sync [--dry-run] [--limit N] [--folder NAME] [-h]";
 
-const DEFAULT_LIMIT: usize = 300;
-
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!("{HELP}");
         return ExitCode::SUCCESS;
     }
-    let dry = args.iter().any(|a| a == "--dry-run");
-    let _lock = if dry {
-        None // a dry run writes nothing, so it needs no lock
-    } else {
-        match settings::lock("mail-sync") {
-            Some(l) => Some(l),
-            None => {
-                println!("Another mail-sync run is in progress; skipping this one.");
-                return ExitCode::SUCCESS;
-            }
-        }
+    let run = MailRun {
+        dry: args.iter().any(|a| a == "--dry-run"),
+        limit: settings::arg(&args, "--limit").and_then(|v| v.parse().ok()).unwrap_or(sync::MAIL_LIMIT),
+        folder: settings::arg(&args, "--folder"),
     };
-    let limit = settings::arg(&args, "--limit").and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_LIMIT);
-    let paths = Paths::from_env();
-    let cfg = match settings::imap(&paths, settings::arg(&args, "--folder")) {
-        Ok(c) => c,
-        Err(need) => {
-            eprintln!(
-                "Missing {} (env: {}, sources.toml: {}). Run `life add mail`.",
-                need.join(", "),
-                settings::env_file(&paths).display(),
-                settings::sources_file(&paths).display()
-            );
-            return ExitCode::from(2);
-        }
-    };
-    let identity = life_server::config::OsDirs::here().data.join("hub-sync/identity.json");
-    let own: HashSet<String> = std::fs::read_to_string(identity)
-        .ok()
-        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        .and_then(|v| {
-            v["emails"].as_array().map(|a| a.iter().filter_map(Value::as_str).map(str::to_lowercase).collect())
-        })
-        .unwrap_or_default();
-    let state_file = settings::state_dir().join("mail-state.json");
-    let mut state = imapc::State::load(&state_file);
-    let (mut known, mut known_fp) = mail::known_notes(&paths.vault);
-    let synced = Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string();
-    let mut s = match imapc::connect(&cfg.host, cfg.port, &cfg.user, &cfg.password) {
-        Ok(s) => s,
-        Err(k) => {
-            eprintln!("IMAP connection failed: {k}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let (mut total, mut failed) = (0usize, false);
-    for folder in &cfg.folders {
-        let (uidv, all) = match imapc::open(&mut s, folder, cfg.since.as_deref()) {
-            Ok(x) => x,
-            Err(_) => {
-                eprintln!("[{folder}] cannot open folder");
-                failed = true;
-                continue;
-            }
-        };
-        let mut seen = state.seen(folder, &uidv);
-        let todo: Vec<u32> = all.iter().copied().filter(|u| !seen.contains(u)).collect();
-        // 1) the headers first, so mails that already have a note are not downloaded
-        let mut fresh = Vec::new();
-        for batch in todo.chunks(200) {
-            let heads = match imapc::headers(&mut s, batch) {
-                Ok(h) => h,
-                Err(_) => {
-                    eprintln!("[{folder}] cannot read headers");
-                    failed = true;
-                    break;
-                }
-            };
-            for u in batch {
-                let (mid, fp) = heads
-                    .get(u)
-                    .and_then(|h| {
-                        mail::parse(h).map(|m| (mail::norm_id(m.message_id().unwrap_or("")), mail::msg_fingerprint(&m)))
-                    })
-                    .unwrap_or_default();
-                if (!mid.is_empty() && known.contains(&mid)) || (!fp.is_empty() && known_fp.contains(&fp)) {
-                    seen.insert(*u);
-                } else {
-                    fresh.push(*u);
-                }
-            }
-        }
-        let take: Vec<u32> = fresh.iter().copied().take(limit).collect();
-        println!(
-            "[{folder}] server {} · already known/processed {} · new {} (this run {})",
-            all.len(),
-            all.len() - fresh.len(),
-            fresh.len(),
-            take.len()
-        );
-        let mut wrote = 0;
-        for u in take {
-            let raw = match imapc::body(&mut s, u) {
-                Ok(Some(r)) => r,
-                Ok(None) => continue,
-                Err(_) => {
-                    eprintln!("[{folder}] cannot read a mail");
-                    failed = true;
-                    break;
-                }
-            };
-            let Some(msg) = mail::parse(&raw) else { continue };
-            let (rel, note, mid) = mail::render(&msg, &format!("{}/{folder}", cfg.account), &own, &synced);
-            seen.insert(u);
-            let fp = mail::msg_fingerprint(&msg);
-            if known.contains(&mid) || (!fp.is_empty() && known_fp.contains(&fp)) {
-                continue;
-            }
-            if !dry && let Err(e) = mail::write_note(&paths.vault, &rel, &note) {
-                eprintln!("[{folder}] writing a note failed: {:?}", e.kind());
-                failed = true;
-                break;
-            }
-            known.insert(mid);
-            known_fp.insert(fp);
-            wrote += 1;
-        }
-        total += wrote;
-        if !dry {
-            state.set(folder, &uidv, &seen);
-        }
-    }
-    let _ = s.logout();
-    if !dry && let Err(e) = state.save(&state_file) {
-        eprintln!("saving the state failed: {:?}", e.kind());
-        failed = true;
-    }
-    println!("{}{total} new notes", if dry { "[dry-run] " } else { "" });
-    if failed { ExitCode::FAILURE } else { ExitCode::SUCCESS }
+    ExitCode::from(sync::mail(&Paths::from_env(), &run, &mut sync::console).exit_code())
 }

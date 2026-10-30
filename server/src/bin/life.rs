@@ -4,10 +4,10 @@
 //! librarian indexes it. Secrets live in env (mode 600); what to collect lives in sources.toml (no secrets). Passwords
 //! are read without echo.
 use std::io::{BufRead, IsTerminal, Write};
-use std::path::PathBuf;
-use std::process::{Command, ExitCode};
 
-use life_server::collect::{calendar, imapc, settings, setup};
+use std::process::ExitCode;
+
+use life_server::collect::{calendar, imapc, settings, setup, sync};
 use life_server::config::{Paths, read_env_file};
 use life_server::fsutil::write_private_atomic;
 
@@ -43,16 +43,8 @@ Files (secrets live only in env):
       run results",
         settings::env_file(paths).display(),
         settings::sources_file(paths).display(),
-        status_file(paths).display()
+        sync::status_file(paths).display()
     )
-}
-
-fn status_file(paths: &Paths) -> PathBuf {
-    paths.data.join("status.json")
-}
-
-fn bin(name: &str) -> PathBuf {
-    std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join(name))).unwrap_or_else(|| PathBuf::from(name))
 }
 
 // ---------- prompts ----------
@@ -257,42 +249,24 @@ fn add_calendar(paths: &Paths) -> Result<(), ExitCode> {
 
 // ---------- sync / status ----------
 
-/// Run one job and record its result (not for a dry run). -> whether it worked
-fn run_job(paths: &Paths, name: &str, cmd: &[String], dry: bool) -> bool {
-    let out = Command::new(bin(&cmd[0])).args(&cmd[1..]).output();
-    let (ok, stdout, all) = match out {
-        Ok(o) => {
-            let so = String::from_utf8_lossy(&o.stdout).into_owned();
-            let se = String::from_utf8_lossy(&o.stderr).into_owned();
-            (o.status.success(), so.clone(), format!("{so}{se}").trim().to_string())
-        }
-        Err(e) => (false, String::new(), format!("{}: cannot run ({:?})", cmd[0], e.kind())),
-    };
-    println!("== {name}\n{all}\n");
-    if !dry {
-        let detail = if ok {
-            stdout.trim().lines().last().unwrap_or("").to_string()
-        } else {
-            all.lines().last().unwrap_or("").to_string()
-        };
-        if let Err(e) = setup::record(&status_file(paths), name, ok, &detail) {
-            eprintln!("could not record the result: {:?}", e.kind());
-        }
-    }
-    ok
-}
-
 fn sync(paths: &Paths, dry: bool) -> ExitCode {
-    let jobs = setup::sync_jobs(&settings::read_sources(paths), dry);
-    if jobs.is_empty() {
-        eprintln!("No sources configured. Add one with `life add mail` or `life add calendar`.");
-        return ExitCode::from(2);
+    let shown = sync::sync(paths, dry, &mut |job, _, lines| {
+        let text: Vec<&str> = lines
+            .iter()
+            .map(|l| match l {
+                sync::Line::Say(s) | sync::Line::Problem(s) => s.as_str(),
+            })
+            .collect();
+        println!("== {}\n{}\n", job.name(), text.join("\n"));
+    });
+    match shown {
+        Err(sync::NoSources) => {
+            eprintln!("No sources configured. Add one with `life add mail` or `life add calendar`.");
+            ExitCode::from(2)
+        }
+        Ok(true) => ExitCode::SUCCESS,
+        Ok(false) => ExitCode::FAILURE,
     }
-    let mut ok = true;
-    for (name, cmd) in &jobs {
-        ok = run_job(paths, name, cmd, dry) && ok;
-    }
-    if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE }
 }
 
 fn status(paths: &Paths) -> ExitCode {
@@ -301,7 +275,7 @@ fn status(paths: &Paths) -> ExitCode {
         println!("No sources configured.");
         return ExitCode::SUCCESS;
     }
-    let st = setup::load_status(&status_file(paths));
+    let st = setup::load_status(&sync::status_file(paths));
     for name in names {
         let Some(j) = st.get(name) else {
             println!("{name:<9} never run");

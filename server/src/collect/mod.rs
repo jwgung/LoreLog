@@ -5,3 +5,4 @@ pub mod mail;
 pub mod mailfiles;
 pub mod settings;
 pub mod setup;
+pub mod sync;
