@@ -17,12 +17,18 @@ use regex::Regex;
 use serde_json::{Value, json};
 use subtle::ConstantTimeEq;
 
+use crate::assistant::{chat, diary, senders, todos};
 use crate::config::Paths;
 use crate::filestore::{self, FileError, FileMeta};
+use crate::jobs::Jobs;
+use crate::llm::{Model, Speech};
 use crate::store::RawStore;
 
 /// Largest JSON body read for the small endpoints.
 pub const BODY_LIMIT: usize = 1_000_000;
+
+/// What the librarian adds to a chat question (see [`chat::Recall`]); set by whoever builds the app.
+pub type RecallFn = Arc<dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync>;
 
 /// What the server needs to answer requests.
 pub struct App {
@@ -33,10 +39,33 @@ pub struct App {
     pub cls: String,
     /// largest body for uploads (records, files, audio)
     pub max_bytes: usize,
+    pub model: Arc<dyn Model>,
+    pub speech: Arc<dyn Speech>,
+    pub recall: RecallFn,
+    pub jobs: Arc<Jobs>,
 }
 
 impl App {
+    /// An app that talks to the model and speech servers named in the environment, and asks no librarian.
     pub fn new(paths: Paths, token: &str, cls: &str, max_bytes: usize) -> App {
+        App::with(
+            paths,
+            token,
+            cls,
+            max_bytes,
+            Arc::new(crate::llm::Http::from_env()),
+            Arc::new(crate::llm::HttpSpeech::from_env()),
+        )
+    }
+
+    pub fn with(
+        paths: Paths,
+        token: &str,
+        cls: &str,
+        max_bytes: usize,
+        model: Arc<dyn Model>,
+        speech: Arc<dyn Speech>,
+    ) -> App {
         let store = RawStore::new(&paths.data);
         App {
             paths,
@@ -44,6 +73,10 @@ impl App {
             token: token.to_string(),
             cls: cls.to_string(),
             max_bytes,
+            model,
+            speech,
+            recall: Arc::new(|_, _, _| None),
+            jobs: Arc::new(Jobs::default()),
         }
     }
 }
@@ -79,7 +112,6 @@ impl Request {
     }
 
     /// The body as JSON (at most `limit` bytes; a longer body is a bad request).
-    #[allow(dead_code)] // the diary, chat and to-do routes use it (next ticket)
     fn json(&self, limit: usize) -> Result<Value, Reply> {
         let n = self.length()?;
         let bad = || Reply::new(400, json!({"error": "bad body"}));
@@ -125,12 +157,45 @@ type Handler = fn(&App, &Request, &regex::Captures) -> Result<Reply, Reply>;
 /// (method, target pattern, handler). Order matters where patterns overlap: `/diary/senders` before `/diary/<day>`.
 static ROUTES: LazyLock<Vec<(Method, Regex, Handler)>> = LazyLock::new(|| {
     let r = |p: &str| Regex::new(&format!("^(?:{p})$")).expect("route pattern");
+    const DAY: &str = "([0-9]{4}-[0-9]{2}-[0-9]{2})";
     vec![
         (
             Method::GET,
             r("/healthz"),
             (|_, _, _| Ok(Reply::ok(json!({"ok": true})))) as Handler,
         ),
+        (Method::GET, r("/todos"), |app, _, _| {
+            Ok(Reply::ok(app.jobs.todos(&app.paths)))
+        }),
+        (Method::POST, r("/todos"), todos_post),
+        (Method::POST, r("/todos/extract"), todos_extract),
+        (Method::POST, r("/todos/([0-9a-f]{10})"), todo_act),
+        (Method::GET, r("/diary/senders"), |app, _, _| {
+            Ok(Reply::ok(Value::Array(senders::list_senders(
+                &app.paths, 14,
+            ))))
+        }),
+        (Method::GET, r("/diary/allow"), |app, _, _| {
+            Ok(Reply::ok(json!({"allow": senders::load_allow(&app.paths)})))
+        }),
+        (Method::POST, r("/diary/senders"), senders_post),
+        (
+            Method::GET,
+            r(&format!("/diary/{DAY}/chat")),
+            |app, _, c| {
+                Ok(Reply::ok(
+                    json!({"messages": chat::chat_history(&app.paths, &c[1])}),
+                ))
+            },
+        ),
+        (Method::POST, r(&format!("/diary/{DAY}/chat")), chat_post),
+        (
+            Method::GET,
+            r(&format!("/diary/{DAY}(\\?refresh=1)?")),
+            draft_get,
+        ),
+        (Method::POST, r(&format!("/diary/{DAY}")), diary_post),
+        (Method::POST, r("/transcribe"), transcribe),
         (Method::GET, r("/ingest/file/([0-9a-f]{64})"), file_has),
         (Method::POST, r("/ingest/file"), file_put),
         (Method::POST, r("/ingest/([a-z0-9_-]{1,32})/?"), ingest),
@@ -186,6 +251,110 @@ fn kind_of(what: &dyn std::fmt::Debug) -> String {
 }
 
 // ---------- handlers ----------
+
+fn today() -> String {
+    Local::now().format("%Y-%m-%d").to_string()
+}
+
+fn todos_post(app: &App, req: &Request, _: &regex::Captures) -> Result<Reply, Reply> {
+    let payload = req.json(100_000)?;
+    let raw = payload.as_object().map(|o| {
+        o.get("text")
+            .map(|v| crate::assistant::util::pystr(Some(v)))
+            .unwrap_or_default()
+    });
+    let Some(raw) = raw else {
+        return Err(internal(req, &"BadPayload"));
+    };
+    let text: String = raw.trim().chars().take(200).collect();
+    if text.is_empty() {
+        return Ok(Reply::new(400, json!({"error": "empty"})));
+    }
+    todos::add_user(&app.paths, &text, &today()).map_err(|e| internal(req, &e))?;
+    Ok(Reply::ok(json!({"ok": true})))
+}
+
+fn todo_act(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {
+    let payload = req.json(100_000)?;
+    let action = payload.get("action").and_then(Value::as_str).unwrap_or("");
+    if !matches!(action, "done" | "dismiss" | "reopen") {
+        return Ok(Reply::new(400, json!({"error": "bad action"})));
+    }
+    match todos::act(&app.paths, &caps[1], action).map_err(|e| internal(req, &e))? {
+        true => Ok(Reply::ok(json!({"ok": true}))),
+        false => Ok(Reply::new(404, json!({"error": "not found"}))),
+    }
+}
+
+fn todos_extract(app: &App, _: &Request, _: &regex::Captures) -> Result<Reply, Reply> {
+    app.jobs.extract_todos(&app.paths, &app.model);
+    Ok(Reply::new(202, json!({"status": "extracting"})))
+}
+
+fn senders_post(app: &App, req: &Request, _: &regex::Captures) -> Result<Reply, Reply> {
+    let payload = req.json(BODY_LIMIT)?;
+    let items = payload
+        .get("allow")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    senders::save_allow(&app.paths, &items).map_err(|e| internal(req, &e))?;
+    Ok(Reply::ok(json!({"saved": true})))
+}
+
+fn chat_post(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {
+    let payload = req.json(BODY_LIMIT)?;
+    let Some(message) = payload
+        .get("message")
+        .and_then(Value::as_str)
+        .filter(|m| !m.trim().is_empty())
+    else {
+        return Ok(Reply::new(400, json!({"error": "bad body"})));
+    };
+    let wrong = payload
+        .get("wrong")
+        .and_then(Value::as_str)
+        .filter(|w| !w.is_empty());
+    let recall = |m: &str, d: &str, said: &[String]| (app.recall)(m, d, said);
+    match chat::chat_reply(
+        &app.paths,
+        app.model.as_ref(),
+        &recall,
+        &caps[1],
+        message,
+        wrong,
+    ) {
+        Ok(reply) => Ok(Reply::ok(json!({"reply": reply}))),
+        Err(e) => Ok(Reply::new(
+            502,
+            json!({"error": format!("chat failed: {e}").chars().take(300).collect::<String>()}),
+        )),
+    }
+}
+
+fn draft_get(app: &App, _: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {
+    let (status, body) = app
+        .jobs
+        .draft(&app.paths, &app.model, &caps[1], caps.get(2).is_some());
+    Ok(Reply::new(status, body))
+}
+
+fn diary_post(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {
+    let payload = req.json(BODY_LIMIT)?;
+    diary::save_user(&app.paths, &caps[1], &payload).map_err(|e| internal(req, &e))?;
+    Ok(Reply::ok(json!({"saved": true})))
+}
+
+fn transcribe(app: &App, req: &Request, _: &regex::Captures) -> Result<Reply, Reply> {
+    let audio = req.blob(app.max_bytes)?;
+    match app.speech.transcribe(audio) {
+        Ok(text) => Ok(Reply::ok(json!({"text": text}))),
+        Err(e) => Ok(Reply::new(
+            502,
+            json!({"error": format!("asr failed: {}", kind_of(&e))}),
+        )),
+    }
+}
 
 fn ingest(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {
     let source = &caps[1];

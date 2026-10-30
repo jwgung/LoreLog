@@ -2,7 +2,10 @@
 pub mod chat;
 pub mod context;
 pub mod diary;
+pub mod recall;
 pub mod senders;
+pub mod summary;
+pub mod todos;
 pub mod util;
 
 /// Phone system apps whose notifications and app events say nothing about the user's day.

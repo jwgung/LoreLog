@@ -5,4 +5,6 @@ pub mod config;
 pub mod filestore;
 pub mod fsutil;
 pub mod http;
+pub mod jobs;
+pub mod llm;
 pub mod store;

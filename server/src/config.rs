@@ -4,7 +4,7 @@
 //! The defaults are those of the Python server this replaces, so both read and write the same files:
 //!   vault       LIFE_VAULT, else OBSIDIAN_VAULT, else ~/Obsidian          (Mail/, Events/, Diary/ notes)
 //!   data        LIFE_DATA_DIR, else LIFE_DATA_DIR in ingest.env, else the OS data dir + /life   (raw/, todos.json, index)
-//!   config      ~/.config/vault-sync/                                     (env, sources.toml, ingest.env, diary.json)
+//!   config      LIFE_CONF_DIR, else ~/.config/vault-sync/                 (env, sources.toml, ingest.env, diary.json)
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ impl Paths {
     /// The places from the environment and `ingest.env`, with the defaults above.
     pub fn from_env() -> Paths {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let conf = home.join(".config/vault-sync");
+        let conf = env_path("LIFE_CONF_DIR").unwrap_or_else(|| home.join(".config/vault-sync"));
         let vault = env_path("LIFE_VAULT")
             .or_else(|| env_path("OBSIDIAN_VAULT"))
             .unwrap_or_else(|| home.join("Obsidian"));
