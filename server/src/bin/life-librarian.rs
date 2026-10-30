@@ -77,6 +77,10 @@ fn main() -> ExitCode {
         return usage("the following arguments are required: FILE");
     }
     let paths = Paths::from_env();
+    if cmd == "eval" && !life_server::librarian::index::default_path(&paths).exists() {
+        eprintln!("{OUTDATED}"); // measuring writes nothing, so it does not make an index either
+        return ExitCode::FAILURE;
+    }
     if matches!(cmd, "update" | "rebuild") {
         return ExitCode::from(sync::librarian(&paths, cmd == "rebuild", &mut sync::console).exit_code());
     }

@@ -1,6 +1,6 @@
 //! The questions the assistant took to the librarian (#7), kept so real questions can join the evaluation: the
-//! question, the words searched and where the hits are (file paths), never what the records say or what the assistant
-//! answered. `<data>/librarian-asks.ndjson` (0600), one line per question; lines older than 90 days are dropped by the
+//! question, the words searched and which records the hits were (an id per record file, [`ref_id`]: file names can
+//! carry a mail's subject), never what the records say or what the assistant answered. `<data>/librarian-asks.ndjson` (0600), one line per question; lines older than 90 days are dropped by the
 //! sync. `LIBRARIAN_ASK_LOG=off` in ingest.env stops it.
 use std::path::PathBuf;
 
@@ -24,17 +24,14 @@ pub fn enabled(paths: &Paths) -> bool {
 
 /// Turn keeping questions on or off (in ingest.env, its other settings kept).
 pub fn set_enabled(paths: &Paths, on: bool) -> Result<(), String> {
-    let f = crate::host::ingest_env(paths);
-    let mut cfg = read_env_file(&f);
-    if on {
-        cfg.remove("LIBRARIAN_ASK_LOG");
-    } else {
-        cfg.insert("LIBRARIAN_ASK_LOG".into(), "off".into());
-    }
-    let text: String = cfg.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
-    let fail = |e: std::io::Error| format!("저장하지 못했습니다: {:?}", e.kind());
-    fsutil::ensure_private_dir(&paths.conf).map_err(fail)?;
-    fsutil::write_private_atomic(&f, text.as_bytes()).map_err(fail)
+    crate::config::set_env_keys(&crate::host::ingest_env(paths), &[("LIBRARIAN_ASK_LOG", (!on).then_some("off"))])
+}
+
+/// The id a hit is kept under: the first 16 hex digits of the SHA-256 of its file path. The same file always has the
+/// same id, so a kept question can be matched to the records again; the id tells nothing about the record.
+pub fn ref_id(path: &str) -> String {
+    use sha2::Digest;
+    hex::encode(&sha2::Sha256::digest(path.as_bytes())[..8])
 }
 
 /// What became of one question.
@@ -55,9 +52,10 @@ pub fn record(paths: &Paths, day: &str, q: &str, words: Option<&[String]>, found
     let (state, refs): (&str, &[String]) = match found {
         Found::NotSearched => ("not searched", &[]),
         Found::Hits(r) if r.is_empty() => ("nothing", &[]),
-        Found::Hits(r) => ("found", r),
+        Found::Hits(r) => ("found", r.as_slice()),
         Found::Unavailable => ("unavailable", &[]),
     };
+    let refs: Vec<String> = refs.iter().map(|r| ref_id(r)).collect();
     let line = json!({"ts": Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string(), "day": day, "q": q,
                       "words": words, "found": state, "refs": refs});
     let write = fsutil::ensure_private_dir(&paths.data)

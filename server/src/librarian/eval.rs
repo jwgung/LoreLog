@@ -52,6 +52,7 @@ pub struct Case {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct File {
     #[serde(rename = "case", default)]
     cases: Vec<Case>,
@@ -59,7 +60,12 @@ struct File {
 
 /// The cases of a file. Err: not TOML, an unknown kind, or a case without what it should find.
 pub fn load(path: &Path) -> anyhow::Result<Vec<Case>> {
-    let f: File = toml::from_str(&std::fs::read_to_string(path)?)?;
+    let text = std::fs::read_to_string(path)?;
+    // the message only: toml's own error quotes the line, and the file holds private questions
+    let f: File = toml::from_str(&text).map_err(|e| {
+        let line = e.span().map(|s| text[..s.start.min(text.len())].lines().count().max(1));
+        anyhow::anyhow!("line {}: {}", line.map(|l| l.to_string()).unwrap_or_else(|| "?".into()), e.message())
+    })?;
     for (i, c) in f.cases.iter().enumerate() {
         let missing = match c.kind {
             Kind::Status | Kind::Precedent if c.thread.is_none() => Some("thread"),

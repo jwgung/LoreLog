@@ -122,6 +122,53 @@ pub fn read_env_file(path: &Path) -> BTreeMap<String, String> {
     out
 }
 
+/// Set (`Some`) or remove (`None`) keys in a `KEY=VALUE` file, editing only their lines: comments, order and the other
+/// keys stay as written. A new key goes at the end; the file is created (0600, its folder 0700) if missing. Err, with
+/// the file untouched, when it exists but cannot be read as text (so it is never rewritten from nothing) or a value
+/// holds a control character.
+pub fn set_env_keys(path: &Path, keys: &[(&str, Option<&str>)]) -> Result<(), String> {
+    if keys.iter().any(|(_, v)| v.is_some_and(|v| !env_value_ok(v))) {
+        return Err("줄바꿈 같은 제어 문자는 넣을 수 없습니다".into());
+    }
+    let text = match fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(format!("{}을(를) 읽지 못해 바꾸지 않았습니다: {:?}", path.display(), e.kind())),
+    };
+    let key_of = |line: &str| {
+        let l = line.trim();
+        (!l.starts_with('#')).then(|| l.split_once('=').map(|(k, _)| k.trim().to_string())).flatten()
+    };
+    let mut done = std::collections::HashSet::new();
+    let mut lines: Vec<String> = Vec::new();
+    for line in text.lines() {
+        match key_of(line).and_then(|k| keys.iter().find(|(want, _)| *want == k)) {
+            Some((k, v)) => {
+                if let Some(v) = v
+                    && done.insert(*k)
+                {
+                    lines.push(format!("{k}={v}"));
+                }
+                done.insert(*k); // later copies of the key go
+            }
+            None => lines.push(line.to_string()),
+        }
+    }
+    for (k, v) in keys {
+        if let Some(v) = v
+            && !done.contains(k)
+        {
+            lines.push(format!("{k}={v}"));
+        }
+    }
+    let body: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    let fail = |e: std::io::Error| format!("저장하지 못했습니다: {:?}", e.kind());
+    if let Some(dir) = path.parent() {
+        crate::fsutil::ensure_private_dir(dir).map_err(fail)?;
+    }
+    crate::fsutil::write_private_atomic(path, body.as_bytes()).map_err(fail)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -152,6 +199,28 @@ mod tests {
             assert_eq!(here.conf_dir(), home.join(".config/vault-sync"), "where the Linux server has always read");
             assert_eq!(here.state_dir(), home.join(".local/share/vault-sync"));
         }
+    }
+
+    #[test]
+    fn setting_keys_edits_only_those_lines_and_an_unreadable_file_is_not_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("ingest.env");
+        fs::write(&p, "# the server\nINGEST_TOKEN=abc\nLIBRARIAN_ASK_LOG=off\nINGEST_PORT=9000\n").unwrap();
+        set_env_keys(&p, &[("LIBRARIAN_ASK_LOG", None), ("LIFE_LLM_URL", Some("http://h/v1"))]).unwrap();
+        assert_eq!(
+            fs::read_to_string(&p).unwrap(),
+            "# the server\nINGEST_TOKEN=abc\nINGEST_PORT=9000\nLIFE_LLM_URL=http://h/v1\n",
+            "comments and order kept, the key removed, the new one added"
+        );
+        set_env_keys(&p, &[("INGEST_PORT", Some("9001"))]).unwrap();
+        assert!(fs::read_to_string(&p).unwrap().contains("INGEST_PORT=9001\nLIFE_LLM_URL"));
+        assert!(set_env_keys(&p, &[("A", Some("x\nB=y"))]).is_err(), "a line break is refused");
+        let fresh = dir.path().join("new/env");
+        set_env_keys(&fresh, &[("A", Some("1"))]).unwrap();
+        assert_eq!(fs::read_to_string(&fresh).unwrap(), "A=1\n");
+        fs::write(&p, b"\xff\xfeINGEST_TOKEN=abc\n").unwrap(); // not text: must not be rewritten from nothing
+        assert!(set_env_keys(&p, &[("A", Some("1"))]).is_err());
+        assert_eq!(fs::read(&p).unwrap(), b"\xff\xfeINGEST_TOKEN=abc\n");
     }
 
     #[test]

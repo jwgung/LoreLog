@@ -44,7 +44,8 @@ async function loadHost() {
     $("hostNote").textContent = "받는 곳: " + info.listening.join(", ") + failed + " · 노트: " + info.notes_dir;
   }
   await Promise.all([loadSources(), loadModels(), loadSync()]);
-  $("asks").checked = await invoke("asks_get").catch(() => true);
+  try { $("asks").checked = await invoke("asks_get"); }
+  catch (e) { $("asks").disabled = true; $("asksMsg").textContent = "설정을 읽지 못했습니다: " + e; }
 }
 
 $("showToken").onclick = () => {

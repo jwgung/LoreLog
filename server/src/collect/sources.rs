@@ -6,7 +6,7 @@ use serde::Serialize;
 use super::calendar::{self, Account};
 use super::{imapc, settings, setup};
 use crate::config::{Paths, read_env_file};
-use crate::fsutil::{set_mode, write_private_atomic};
+use crate::fsutil::write_private_atomic;
 
 const SOURCES_HEADER: &str = "# What to collect. No passwords or tokens here (they live in env). Safe to commit.\n# `life add mail`, `life add calendar` and the desktop app's settings rewrite this file, so comments are not preserved.\n\n";
 
@@ -94,13 +94,6 @@ fn write_sources(paths: &Paths, src: &toml::Table) -> std::io::Result<()> {
     write_private_atomic(&settings::sources_file(paths), text.as_bytes())
 }
 
-fn write_env(paths: &Paths, env: &std::collections::BTreeMap<String, String>) -> std::io::Result<()> {
-    let text: String = env.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
-    write_private_atomic(&settings::env_file(paths), text.as_bytes())?;
-    set_mode(&paths.conf, 0o700);
-    Ok(())
-}
-
 /// The password to use: the given one, else the stored one when the server is the one it was stored for (a stored
 /// password never goes to another server). Err when there is none to use.
 fn password(paths: &Paths, host: &str, port: u16, given: &Option<String>) -> Result<String, String> {
@@ -168,9 +161,7 @@ pub fn save_mail(paths: &Paths, m: &MailSetup) -> Result<(), String> {
     if ![host, user, pw.as_str()].iter().all(|v| crate::config::env_value_ok(v)) {
         return Err("줄바꿈 같은 제어 문자는 넣을 수 없습니다".into());
     }
-    let mut env = read_env_file(&settings::env_file(paths));
-    env.insert("IMAP_USER".into(), user.to_string());
-    env.insert("IMAP_PASSWORD".into(), pw);
+
     let mut src = settings::read_sources(paths);
     let mut t = table(&src, "mail");
     t.insert("host".into(), toml::Value::String(host.to_string()));
@@ -179,8 +170,11 @@ pub fn save_mail(paths: &Paths, m: &MailSetup) -> Result<(), String> {
     t.insert("folders".into(), toml::Value::Array(m.folders.iter().cloned().map(toml::Value::String).collect()));
     src.insert("mail".into(), toml::Value::Table(t));
     let fail = |e: std::io::Error| format!("저장하지 못했습니다: {:?}", e.kind());
+    crate::config::set_env_keys(
+        &settings::env_file(paths),
+        &[("IMAP_USER", Some(user)), ("IMAP_PASSWORD", Some(&pw))],
+    )?;
     crate::fsutil::ensure_private_dir(&paths.conf).map_err(fail)?;
-    write_env(paths, &env).map_err(fail)?;
     write_sources(paths, &src).map_err(fail)
 }
 

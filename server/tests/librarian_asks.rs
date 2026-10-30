@@ -44,7 +44,8 @@ fn a_question_is_kept_with_its_words_and_where_the_hits_are_but_not_what_they_sa
         (Some("포트 열어 준 거 됐나"), Some("2026-10-30"), Some("found"))
     );
     assert_eq!(l["words"], json!(["포트"]));
-    assert!(l["refs"][0].as_str().unwrap().ends_with("Mail/2026/a.md"));
+    let mail = p.vault.join("Mail/2026/a.md");
+    assert_eq!(l["refs"], json!([asks::ref_id(&mail.to_string_lossy())]), "an id, not the file name");
     assert!(!fs::read_to_string(asks::file(&p)).unwrap().contains("비밀문구사과"), "no text of the records");
     #[cfg(unix)]
     {
