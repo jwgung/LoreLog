@@ -74,6 +74,9 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 .todo button svg { width: 16px; height: 16px; }
 .todo.done .t { color: var(--muted); text-decoration: line-through; }
 .todo .auto { font-size: 12px; color: var(--accent); }
+#proposedBox { margin-bottom: 10px; }
+#proposedBox h3 { margin: 4px 0; font-size: 14px; }
+.todo.proposed .t { color: var(--muted); }
 #todoAdd { display: flex; gap: 8px; margin: 10px 0; }
 #todoAdd input { flex: 1; min-width: 0; }
 details { margin-top: 8px; } summary { cursor: pointer; color: var(--muted); font-size: 14px; }

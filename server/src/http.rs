@@ -244,7 +244,7 @@ fn todos_post(app: &App, req: &Request, _: &regex::Captures) -> Result<Reply, Re
 fn todo_act(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {
     let payload = req.json(100_000)?;
     let action = payload.get("action").and_then(Value::as_str).unwrap_or("");
-    if !matches!(action, "done" | "dismiss" | "reopen") {
+    if !matches!(action, "accept" | "done" | "dismiss" | "reopen") {
         return Ok(Reply::new(400, json!({"error": "bad action"})));
     }
     match todos::act(&app.paths, &caps[1], action).map_err(|e| internal(req, &e))? {

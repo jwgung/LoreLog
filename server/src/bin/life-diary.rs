@@ -22,7 +22,7 @@ date: YYYY-MM-DD (default: today)
   --chat           read {message, wrong?} from stdin; save it and print the assistant's reply as JSON
   --todos          print open and recently done to-dos as JSON
   --todos-extract  extract new to-dos from the day's records (throttled)
-  --todo-act       read {id, action: done|dismiss|reopen} from stdin
+  --todo-act       read {id, action: accept|done|dismiss|reopen} from stdin
   --todo-add       read {text} from stdin and add it as the user's own to-do
   --dry-run        print the generated draft instead of writing it";
 

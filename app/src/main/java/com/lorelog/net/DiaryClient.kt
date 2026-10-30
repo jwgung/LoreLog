@@ -128,7 +128,8 @@ object DiaryClient {
     }
 
     data class Todo(val id: String, val title: String, val source: String, val due: String, val auto: Boolean = false)
-    data class Todos(val open: List<Todo>, val done: List<Todo>, val extracting: Boolean)
+    /** proposed: 기록에서 비서가 찾았지만 사용자가 아직 받지 않은 것. */
+    data class Todos(val proposed: List<Todo>, val open: List<Todo>, val done: List<Todo>, val extracting: Boolean)
 
     private fun parseTodos(arr: JSONArray) = (0 until arr.length()).map {
         val o = arr.getJSONObject(it)
@@ -142,7 +143,8 @@ object DiaryClient {
             conn = open(context, "/todos", "GET") ?: return@withContext null
             if (conn.responseCode != 200) return@withContext null
             val o = JSONObject(conn.inputStream.bufferedReader().readText())
-            Todos(parseTodos(o.getJSONArray("open")), parseTodos(o.getJSONArray("done")), o.optBoolean("extracting"))
+            val proposed = o.optJSONArray("proposed") ?: JSONArray() // 예전 서버에는 없다
+            Todos(parseTodos(proposed), parseTodos(o.getJSONArray("open")), parseTodos(o.getJSONArray("done")), o.optBoolean("extracting"))
         } catch (e: Exception) { null } finally { conn?.disconnect() }
     }
 
@@ -160,7 +162,7 @@ object DiaryClient {
     /** 서버가 기록에서 새 할 일을 뽑게 한다(30분에 한 번만 실제로 돈다). */
     suspend fun refreshTodos(context: Context): Boolean = post(context, "/todos/extract", null)
 
-    /** action: "done" | "dismiss" | "reopen" */
+    /** action: "accept"(제안을 할 일로) | "done" | "dismiss" | "reopen" */
     suspend fun actTodo(context: Context, id: String, action: String): Boolean =
         post(context, "/todos/$id", JSONObject().put("action", action))
 

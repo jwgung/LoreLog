@@ -21,9 +21,9 @@ const HELP: &str = r#"life-ingest: collection endpoint that any client (phone, P
   GET  /diary/<date>/chat    the day's chat exchange (to show it again)
   POST /diary/<date>/chat    body: {message, wrong?}; stores it in the diary and returns the assistant's reply
   POST /transcribe           body: audio (wav); returns {text} from the speech model (LIFE_ASR_URL); nothing is stored
-  GET  /todos                open and recently done to-dos (+ extracting flag)
+  GET  /todos                proposed (found by the model), open and recently done to-dos (+ extracting flag)
   POST /todos                body: {text}; add the user's own to-do
-  POST /todos/<id>           body: {action: done|dismiss|reopen}
+  POST /todos/<id>           body: {action: accept|done|dismiss|reopen}
   POST /todos/extract        extract new to-dos from the records in the background (throttled)
   GET  /healthz              only reports that it is alive (no auth, reveals nothing else)
 

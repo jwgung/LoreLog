@@ -52,8 +52,8 @@ private val TAccent = Color(0xFF9DB7FF)
 private val TWarn = Color(0xFFE8B86A)
 
 /**
- * 할 일. 비서가 기록(메일·통화·메신저·일정)에서 뽑아 제안하고, 사용자는 끝냈으면 누르고 아니면 지운다.
- * 지운 것은 다시 제안하지 않는다. 아래 입력창으로 사용자가 직접 말해 넣을 수도 있다.
+ * 할 일. 비서가 기록(메일·통화·메신저·일정)에서 찾은 것은 제안으로 보이고, 사용자가 받아야 할 일이 된다.
+ * 사용자는 끝냈으면 누르고 아니면 지운다. 지운 것은 다시 제안하지 않는다. 아래 입력창으로 직접 말해 넣을 수도 있다.
  */
 @Composable
 internal fun TodosScreen(onBack: () -> Unit) {
@@ -92,7 +92,7 @@ internal fun TodosScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(
-                "기록에서 제가 뽑아 봤어요. 아닌 건 지워 주세요. 지운 건 다시 올리지 않아요.",
+                "기록에서 찾은 건 위에 제안으로 올려요. 맞으면 받아 주시고, 아닌 건 지워 주세요. 지운 건 다시 올리지 않아요.",
                 color = TSub, fontSize = 13.sp, lineHeight = 20.sp, modifier = Modifier.padding(vertical = 6.dp),
             )
             val t = todos
@@ -100,7 +100,12 @@ internal fun TodosScreen(onBack: () -> Unit) {
                 t == null && failed -> Text("서버에 연결하지 못했어요. 연결을 확인하고 다시 열어 주세요.", color = TSub, fontSize = 13.sp)
                 t == null -> Text("불러오는 중…", color = TSub, fontSize = 13.sp)
                 else -> {
-                    if (t.open.isEmpty()) {
+                    if (t.proposed.isNotEmpty()) {
+                        Text("기록에서 찾은 할 일", color = TSub, fontSize = 12.sp, modifier = Modifier.padding(start = 4.dp))
+                        t.proposed.forEach { item -> ProposedRow(item, onAccept = { act(item.id, "accept") }, onDismiss = { act(item.id, "dismiss") }) }
+                        androidx.compose.foundation.layout.Spacer(Modifier.size(6.dp))
+                    }
+                    if (t.open.isEmpty() && t.proposed.isEmpty()) {
                         Text(
                             if (t.extracting) "기록에서 할 일을 찾고 있어요…" else "지금 할 일이 없어요. 하고 싶은 일이 있으면 아래에 말해 주세요.",
                             color = TSub, fontSize = 14.sp, lineHeight = 22.sp,
@@ -138,6 +143,31 @@ internal fun TodosScreen(onBack: () -> Unit) {
                 scope.launch { DiaryClient.addTodo(context, text); reload() }
             }) { Icon(Lucide.Up, contentDescription = null, tint = if (input.isNotBlank()) Color(0xFF0E1630) else Color(0xFF6F7785), modifier = Modifier.size(22.dp)) }
         }
+    }
+}
+
+/** 비서의 제안: 받으면(+) 할 일이 되고, 지우면(×) 다시 올리지 않는다. */
+@Composable
+private fun ProposedRow(item: DiaryClient.Todo, onAccept: () -> Unit, onDismiss: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).border(1.dp, TLine, RoundedCornerShape(16.dp))
+            .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(item.title, fontSize = 15.sp, lineHeight = 22.sp, color = TText)
+            val meta = listOf(item.source.takeIf { it.isNotBlank() }?.let { "${it}에서" }, item.due.takeIf { it.isNotBlank() })
+                .filterNotNull().joinToString(" · ")
+            if (meta.isNotEmpty()) Text(meta, fontSize = 12.sp, color = TSub)
+        }
+        Box(
+            modifier = Modifier.size(44.dp).clip(CircleShape).clickable(onClick = onAccept).semantics { contentDescription = "할 일로 받기" },
+            contentAlignment = Alignment.Center,
+        ) { Icon(Lucide.Check, contentDescription = null, tint = TAccent, modifier = Modifier.size(18.dp)) }
+        Box(
+            modifier = Modifier.size(44.dp).clip(CircleShape).clickable(onClick = onDismiss).semantics { contentDescription = "아니에요" },
+            contentAlignment = Alignment.Center,
+        ) { Icon(Lucide.Close, contentDescription = null, tint = TSub, modifier = Modifier.size(18.dp)) }
     }
 }
 
