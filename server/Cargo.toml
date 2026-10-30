@@ -27,6 +27,7 @@ mail-parser = { version = "0.11.9", features = ["full_encoding"] }
 percent-encoding = "2.3.2"
 regex = "1.13.1"
 roxmltree = "0.21.2"
+rpassword = "7.5.4"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs"] }
 serde = { version = "1.0.229", features = ["derive"] }
