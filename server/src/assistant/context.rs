@@ -26,6 +26,13 @@ static BULK_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 static MAIL_NAME_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d{4}-\d{2}-\d{2})-(\d{2})(\d{2})-").unwrap());
 
+/// Text someone else wrote (a mail subject, a message, a call note, a window title) as it may sit in a prompt: on one
+/// line, so it cannot start a heading or a row of its own, and without square brackets, so it cannot pass for one of
+/// the marks the assistant adds ([내가 보냄], [이미 회신함], ...) or for the librarian's quote markers.
+pub fn data(text: &str) -> String {
+    super::recall::plain(&text.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
 // ---------- records ----------
 
 /// The JSON objects of an NDJSON file, in order. Undecodable bytes and lines that are not objects are passed over
@@ -189,7 +196,7 @@ pub fn gather_mail(paths: &Paths, day: &str) -> Vec<String> {
                 _ => "",
             }
         };
-        rows.push(format!("{time} {from} — {subj}{mark}"));
+        rows.push(format!("{} {} — {}{mark}", data(time), data(from), data(&subj)));
     }
     rows.sort();
     rows
@@ -202,7 +209,7 @@ pub fn gather_events(paths: &Paths, day: &str) -> Vec<String> {
         .map(|p| {
             let f = front(p, &["title", "start", "end", "all_day"]);
             let start = slice(&f[1], 11, 16);
-            format!("{}~{} {}", if start.is_empty() { "종일".to_string() } else { start }, slice(&f[2], 11, 16), f[0])
+            format!("{}~{} {}", if start.is_empty() { "종일".to_string() } else { start }, slice(&f[2], 11, 16), data(&f[0]))
         })
         .collect();
     rows.sort();
@@ -252,7 +259,7 @@ pub fn gather_lorelog(paths: &Paths, day: &str) -> Lorelog {
                     continue;
                 };
                 if let Some(who) = confirmed_voice_label(convs.values(), ts) {
-                    out.voice.push(format!("{} (with {who}) {}", hm_of(at), take(&pystr(d.get("text")), 200)));
+                    out.voice.push(format!("{} (with {}) {}", hm_of(at), data(&who), data(&take(&pystr(d.get("text")), 200))));
                 }
             }
             "comm" => {
@@ -260,6 +267,8 @@ pub fn gather_lorelog(paths: &Paths, day: &str) -> Lorelog {
                 let party =
                     if truthy(d.get("party_name")) { pystr(d.get("party_name")) } else { pystr(d.get("party")) };
                 let content = if d.contains_key("content") { pystr(d.get("content")) } else { String::new() };
+                let party = data(&party);
+                let content = data(&content);
                 out.comm.push(format!(
                     "{} {}/{} {party} {content}",
                     hm_of(at),
@@ -268,14 +277,14 @@ pub fn gather_lorelog(paths: &Paths, day: &str) -> Lorelog {
                 ));
             }
             "notification" if !noise(&d) && record_allowed(&allow, &d) => {
-                let key = format!("{}: {}", pystr(d.get("label")), pystr(d.get("title")));
+                let key = format!("{}: {}", data(&pystr(d.get("label"))), data(&pystr(d.get("title"))));
                 out.notif.add(key.clone());
                 if truthy(d.get("text")) {
                     let Some(at) = when else { continue };
-                    out.msgs.entry(key).or_default().push(format!("{} {}", hm_of(at), take(&pystr(d.get("text")), 80)));
+                    out.msgs.entry(key).or_default().push(format!("{} {}", hm_of(at), data(&take(&pystr(d.get("text")), 80))));
                 }
             }
-            "app" if !noise(&d) => out.apps.add(pystr(d.get("label"))),
+            "app" if !noise(&d) => out.apps.add(data(&pystr(d.get("label")))),
             "location" => {
                 let (Some(at), Some(la), Some(lo)) = (when, num(d.get("lat")), num(d.get("lon"))) else {
                     continue;
@@ -360,7 +369,7 @@ pub fn gather_pc(paths: &Paths, day: &str, top: usize) -> Vec<String> {
         .iter()
         .map(|m| {
             let (a, b) = (local(m.ts).map(hm_of).unwrap_or_default(), local(m.end).map(hm_of).unwrap_or_default());
-            format!("{a}~{b} {} \"{}\" ({}분)", m.app, take(&m.title, 80), m.secs.div_euclid(60))
+            format!("{a}~{b} {} \"{}\" ({}분)", data(&m.app), data(&take(&m.title, 80)), m.secs.div_euclid(60))
         })
         .collect()
 }
