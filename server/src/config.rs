@@ -97,6 +97,12 @@ impl OsDirs {
     }
 }
 
+/// Can this be a value in a `KEY=VALUE` file? A line break (or any control character) would start a line of its own
+/// and could set another key.
+pub fn env_value_ok(v: &str) -> bool {
+    !v.chars().any(char::is_control)
+}
+
 /// A `KEY=VALUE` file (secrets live in these, mode 600). Blank lines and `#` comments are skipped; values may be quoted.
 /// A missing or unreadable file is empty.
 pub fn read_env_file(path: &Path) -> BTreeMap<String, String> {

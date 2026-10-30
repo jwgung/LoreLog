@@ -21,6 +21,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use life_agent_core::config::{self, Mode};
+use life_server::collect::sources;
+use life_server::host::Models;
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
@@ -83,11 +85,100 @@ fn start_hosting(s: &HostSlot, stop: &Arc<AtomicBool>) -> Result<(), String> {
 #[tauri::command]
 fn choose_mode(mode: Mode, slot: tauri::State<HostSlot>, stop: tauri::State<Stop>) -> Result<(), String> {
     if mode == Mode::Host {
-        start_hosting(&slot, &stop.0)?; // the choice is kept only once the server runs
+        start_hosting(&slot, &stop.0)?; // the choice is kept only once the server runs (it wrote url and token)
+        let mut cfg = config::load()?;
+        cfg.mode = Some(Mode::Host);
+        return config::save(&cfg);
     }
+    // Connect: the vault stays where it is; this app stops serving it and asks for another server's address and
+    // token (its own token is not offered to that server)
     let mut cfg = config::load()?;
-    cfg.mode = Some(mode);
-    config::save(&cfg)
+    let was_host = cfg.mode == Some(Mode::Host);
+    cfg.mode = Some(Mode::Connect);
+    if was_host {
+        cfg.url.clear();
+        cfg.token.clear();
+        config::clear_token()?;
+    }
+    config::save(&cfg)?;
+    let mut held = self::slot(&slot);
+    if let Ok(Some(h)) = &*held {
+        h.stop();
+    }
+    *held = Ok(None);
+    Ok(())
+}
+
+/// The vault's paths when this app runs the server, else an error for the settings screen.
+fn host_paths(s: &HostSlot) -> Result<life_server::config::Paths, String> {
+    hosting(s, |h| h.paths().clone()).ok_or_else(|| "이 PC에 금고를 둔 경우에만 설정합니다".to_string())
+}
+
+/// What is collected (the mail account without its password, the calendars).
+#[tauri::command]
+fn sources_view(slot: tauri::State<HostSlot>) -> Result<sources::SourcesView, String> {
+    Ok(sources::view(&host_paths(&slot)?))
+}
+
+/// Log in to the mail server and list its folders (nothing saved). An empty password uses the stored one.
+#[tauri::command]
+async fn mail_folders(
+    host: String,
+    port: u16,
+    user: String,
+    password: Option<String>,
+    slot: tauri::State<'_, HostSlot>,
+) -> Result<Vec<sources::Folder>, String> {
+    let paths = host_paths(&slot)?;
+    blocking(move || sources::mail_folders(&paths, &host, port, &user, &password.filter(|p| !p.is_empty()))).await
+}
+
+/// Save the mail account and folders, then sync.
+#[tauri::command]
+fn mail_save(
+    host: String,
+    port: u16,
+    user: String,
+    password: Option<String>,
+    folders: Vec<String>,
+    slot: tauri::State<HostSlot>,
+) -> Result<(), String> {
+    let password = password.filter(|p| !p.is_empty());
+    sources::save_mail(&host_paths(&slot)?, &sources::MailSetup { host, port, user, password, folders })?;
+    hosting(&slot, |h| h.sync_now());
+    Ok(())
+}
+
+/// The calendars on a CalDAV server, with the mail account (nothing saved).
+#[tauri::command]
+async fn calendar_list(server: String, slot: tauri::State<'_, HostSlot>) -> Result<Vec<sources::Calendar>, String> {
+    let paths = host_paths(&slot)?;
+    blocking(move || sources::calendars(&paths, &server)).await
+}
+
+/// Save the calendars to collect, then sync.
+#[tauri::command]
+fn calendar_save(urls: Vec<String>, slot: tauri::State<HostSlot>) -> Result<(), String> {
+    sources::save_calendars(&host_paths(&slot)?, &urls)?;
+    hosting(&slot, |h| h.sync_now());
+    Ok(())
+}
+
+/// The model addresses written in the settings.
+#[tauri::command]
+fn models_get(slot: tauri::State<HostSlot>) -> Result<Models, String> {
+    Ok(life_server::host::saved_models(&host_paths(&slot)?))
+}
+
+/// Save the model addresses; they apply from the next question on.
+#[tauri::command]
+fn models_save(models: Models, slot: tauri::State<HostSlot>) -> Result<(), String> {
+    hosting(&slot, |h| h.set_models(&models)).unwrap_or_else(|| Err("이 PC에 금고를 둔 경우에만 설정합니다".into()))
+}
+
+/// Network calls (IMAP, CalDAV) off the UI thread.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
 }
 
 /// What the screens show about the server this app runs (null when it runs none).
@@ -294,7 +385,14 @@ pub fn run() {
             choose_mode,
             host_info,
             sync_now,
-            sync_status
+            sync_status,
+            sources_view,
+            mail_folders,
+            mail_save,
+            calendar_list,
+            calendar_save,
+            models_get,
+            models_save
         ])
         .manage(HostSlot::default())
         .manage(Stop(stop.clone()))

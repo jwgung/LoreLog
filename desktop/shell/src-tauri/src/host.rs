@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use life_agent_core::config::{self, Config};
 use life_server::collect::{setup, sync};
 use life_server::config::{OsDirs, Paths};
-use life_server::host::{self, IngestSettings, Models, Running};
+use life_server::host::{self, IngestSettings, LiveModels, Models, Running};
 use life_server::http::App;
 use serde::Serialize;
 
@@ -103,7 +103,10 @@ pub struct Info {
 
 /// The server running in this app.
 pub struct Hosting {
+    /// set by [`Hosting::stop`]: its threads end (the app's flag ends them too, when the app exits)
+    halted: Arc<AtomicBool>,
     rt: tokio::runtime::Runtime,
+    models: Arc<LiveModels>,
     app: Arc<App>,
     paths: Paths,
     port: u16,
@@ -121,7 +124,8 @@ impl Hosting {
         log_to_file(&paths.data);
         let token = host::ensure_token(&paths).map_err(|e| format!("토큰을 만들지 못했습니다: {e}"))?;
         let settings = IngestSettings::load(&paths)?;
-        let app = Arc::new(Models::load(&paths).app(paths.clone(), &settings));
+        let models = LiveModels::new(Models::load(&paths));
+        let app = Arc::new(models.app(paths.clone(), &settings));
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .thread_name("life-host")
@@ -137,7 +141,9 @@ impl Hosting {
         config::save(cfg)?;
         let (sync_now, wake) = mpsc::channel();
         let hosting = Hosting {
+            halted: Arc::new(AtomicBool::new(false)),
             rt,
+            models,
             app,
             paths,
             port: addr.port(),
@@ -145,18 +151,19 @@ impl Hosting {
             sync_now,
             syncing: Arc::new(AtomicBool::new(false)),
         };
-        hosting.keep_tailnet(stop.clone());
-        hosting.keep_syncing(stop, wake);
+        let halt = Halt { app: stop, own: hosting.halted.clone() };
+        hosting.keep_tailnet(halt.clone());
+        hosting.keep_syncing(halt, wake);
         Ok(hosting)
     }
 
     /// Listen on the tailnet address too as soon as there is one (Tailscale may come up after the app).
-    fn keep_tailnet(&self, stop: Arc<AtomicBool>) {
+    fn keep_tailnet(&self, stop: Halt) {
         let (rt, app, port, running) = (self.rt.handle().clone(), self.app.clone(), self.port, self.running.clone());
         std::thread::spawn(move || {
             // an address is tried once: one that cannot be bound (port taken, refused) is reported, not retried
             let mut tried: Vec<IpAddr> = Vec::new();
-            while !stop.load(Ordering::SeqCst) {
+            while !stop.is_set() {
                 let fresh: Vec<IpAddr> = tailnet_addrs().into_iter().filter(|a| !tried.contains(a)).collect();
                 if !fresh.is_empty() {
                     let r = host::start(&rt, app.clone(), port, &fresh);
@@ -172,7 +179,7 @@ impl Hosting {
     }
 
     /// Sync now, then every hour, and whenever asked ([`Hosting::sync_now`]), until `stop`.
-    fn keep_syncing(&self, stop: Arc<AtomicBool>, wake: mpsc::Receiver<()>) {
+    fn keep_syncing(&self, stop: Halt, wake: mpsc::Receiver<()>) {
         let (paths, syncing) = (self.paths.clone(), self.syncing.clone());
         std::thread::spawn(move || {
             loop {
@@ -186,15 +193,30 @@ impl Hosting {
                 syncing.store(false, Ordering::SeqCst);
                 let until = Instant::now() + SYNC_EVERY;
                 loop {
-                    if stop.load(Ordering::SeqCst) {
+                    if stop.is_set() {
                         return;
                     }
-                    if wake.recv_timeout(Duration::from_secs(1)).is_ok() || Instant::now() >= until {
-                        break;
+                    match wake.recv_timeout(Duration::from_secs(1)) {
+                        Ok(()) => break,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => return, // the Hosting is gone
+                        Err(mpsc::RecvTimeoutError::Timeout) if Instant::now() >= until => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => {}
                     }
                 }
             }
         });
+    }
+
+    /// Where its vault and settings are.
+    pub fn paths(&self) -> &Paths {
+        &self.paths
+    }
+
+    /// Save new model addresses and use them from the next request on (no restart).
+    pub fn set_models(&self, m: &Models) -> Result<(), String> {
+        host::save_models(&self.paths, m)?;
+        self.models.set(Models::load(&self.paths)); // the environment still wins, as at start
+        Ok(())
     }
 
     /// Ask for a sync now (one waiting request is enough; a running sync is not doubled).
@@ -236,17 +258,31 @@ impl Hosting {
         }
     }
 
-    /// Stop listening (requests in flight finish). The sync and tailnet threads end with the app's stop flag.
+    /// Stop listening (requests in flight finish) and end its sync and tailnet threads.
     pub fn stop(&self) {
+        self.halted.store(true, Ordering::SeqCst);
         for r in locked(&self.running).iter() {
             r.stop();
         }
     }
 }
 
-fn sleep_unless(stop: &AtomicBool, d: Duration) {
+/// Stopped: the app exits, or this server was stopped.
+#[derive(Clone)]
+struct Halt {
+    app: Arc<AtomicBool>,
+    own: Arc<AtomicBool>,
+}
+
+impl Halt {
+    fn is_set(&self) -> bool {
+        self.app.load(Ordering::SeqCst) || self.own.load(Ordering::SeqCst)
+    }
+}
+
+fn sleep_unless(stop: &Halt, d: Duration) {
     let until = Instant::now() + d;
-    while Instant::now() < until && !stop.load(Ordering::SeqCst) {
+    while Instant::now() < until && !stop.is_set() {
         std::thread::sleep(Duration::from_millis(500));
     }
 }
@@ -286,9 +322,9 @@ mod tests {
         assert_eq!(info.address_for_devices.is_some(), on_tailnet);
         assert_eq!(h.status()["jobs"], serde_json::json!([]), "nothing to sync until mail or a calendar is added");
 
-        stop.store(true, Ordering::SeqCst);
-        h.stop();
+        h.stop(); // its own threads end without the app's flag
         std::thread::sleep(Duration::from_millis(300));
+        assert!(h.halted.load(Ordering::SeqCst) && !stop.load(Ordering::SeqCst));
         assert!(ureq::get(&format!("{}/healthz", cfg.url)).call().is_err());
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");

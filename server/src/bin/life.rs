@@ -6,11 +6,8 @@
 use std::io::{BufRead, IsTerminal, Write};
 use std::process::ExitCode;
 
-use life_server::collect::{calendar, imapc, settings, setup, sync};
+use life_server::collect::{settings, setup, sources, sync};
 use life_server::config::{Paths, read_env_file};
-use life_server::fsutil::write_private_atomic;
-
-const SOURCES_HEADER: &str = "# What to collect. No passwords or tokens here (they live in env). Safe to commit.\n# `life add mail` and `life add calendar` rewrite this file, so comments are not preserved.\n\n";
 
 fn help(paths: &Paths) -> String {
     format!(
@@ -88,94 +85,46 @@ fn choose(items: &[String], labels: &[String], defaults: &[String], what: &str) 
         })
 }
 
-fn write_env(paths: &Paths, env: &std::collections::BTreeMap<String, String>) -> std::io::Result<()> {
-    let text: String = env.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
-    write_private_atomic(&settings::env_file(paths), text.as_bytes())?;
-    life_server::fsutil::set_mode(&paths.conf, 0o700);
-    Ok(())
-}
-
-fn write_sources(paths: &Paths, src: &toml::Table) -> std::io::Result<()> {
-    let text = format!("{SOURCES_HEADER}{}", toml::to_string(src).unwrap_or_default());
-    write_private_atomic(&settings::sources_file(paths), text.as_bytes())
-}
-
 // ---------- add ----------
 
 fn add_mail(paths: &Paths) -> Result<(), ExitCode> {
     need_tty()?;
-    let mut env = read_env_file(&settings::env_file(paths));
-    let mut src = settings::read_sources(paths);
-    let cur = src.get("mail").and_then(toml::Value::as_table).cloned().unwrap_or_default();
-    let get = |k: &str| {
-        cur.get(k).map(|v| v.as_str().map(str::to_string).unwrap_or_else(|| v.to_string())).unwrap_or_default()
-    };
-    let host = ask("IMAP server", &get("host"));
-    let port_default = if get("port").is_empty() { "993".to_string() } else { get("port") };
-    let port_text = ask("Port", &port_default);
-    let Ok(port) = port_text.parse::<u16>() else {
+    let cur = sources::view(paths).mail;
+    let (host0, port0) =
+        cur.as_ref().map(|m| (m.host.clone(), m.port.to_string())).unwrap_or_else(|| (String::new(), "993".into()));
+    let env = read_env_file(&settings::env_file(paths));
+    let user0 = env.get("IMAP_USER").cloned().unwrap_or_default();
+    let host = ask("IMAP server", &host0);
+    let Ok(port) = ask("Port", &port0).parse::<u16>() else {
         eprintln!("The port is a number.");
         return Err(ExitCode::from(2));
     };
-    let user = ask("Account", env.get("IMAP_USER").map(String::as_str).unwrap_or(""));
+    let user = ask("Account", &user0);
     let typed = rpassword::prompt_password("Password (hidden; Enter keeps the current one): ").unwrap_or_default();
-    let pw = if typed.is_empty() { env.get("IMAP_PASSWORD").cloned().unwrap_or_default() } else { typed };
-    if host.is_empty() || user.is_empty() || pw.is_empty() {
+    let password = (!typed.is_empty()).then_some(typed);
+    let same_server = cur.as_ref().is_some_and(|m| m.host == host && m.port == port && m.has_password);
+    if host.is_empty() || user.is_empty() || (password.is_none() && !same_server) {
         eprintln!("Server, account and password are all required.");
         return Err(ExitCode::from(2));
     }
-    let mut s = imapc::connect(&host, port, &user, &pw).map_err(|k| {
-        eprintln!("Connection failed: {k}. Nothing was saved.");
+    let folders = sources::mail_folders(paths, &host, port, &user, &password).map_err(|e| {
+        eprintln!("Connection failed: {e}. Nothing was saved.");
         ExitCode::FAILURE
     })?;
-    let names = s.list(None, Some("*"));
-    let _ = s.logout();
-    let folders: Vec<(String, Vec<String>)> = names
-        .map(|ns| {
-            ns.iter()
-                .map(|n| {
-                    // \Sent, \NoSelect, ... as the server's flags read in lower case
-                    let flags: Vec<String> =
-                        n.attributes().iter().map(|a| format!("\\{}", format!("{a:?}").to_lowercase())).collect();
-                    (n.name().to_string(), flags)
-                })
-                .filter(|(_, flags)| !flags.iter().any(|f| f == "\\noselect"))
-                .collect()
-        })
-        .unwrap_or_default();
-    if folders.is_empty() {
-        eprintln!("Could not read the folder list.");
-        return Err(ExitCode::FAILURE);
-    }
     println!("Connected. {} folders:", folders.len());
-    let names: Vec<String> = folders.iter().map(|(n, _)| n.clone()).collect();
-    let mut defaults: Vec<String> = cur
-        .get("folders")
-        .and_then(toml::Value::as_array)
-        .map(|a| {
-            a.iter().filter_map(|v| v.as_str()).filter(|n| names.iter().any(|x| x == n)).map(str::to_string).collect()
-        })
-        .unwrap_or_default();
-    if defaults.is_empty() {
-        defaults = setup::default_folders(&folders);
-    }
-    let labels: Vec<String> = names.iter().map(|n| setup::imap_utf7_decode(n)).collect();
+    let names: Vec<String> = folders.iter().map(|f| f.name.clone()).collect();
+    let labels: Vec<String> = folders.iter().map(|f| f.label.clone()).collect();
+    let defaults: Vec<String> = folders.iter().filter(|f| f.chosen).map(|f| f.name.clone()).collect();
     let chosen = choose(&names, &labels, &defaults, "Folders to collect")?;
     if chosen.is_empty() {
         eprintln!("No folder selected. Nothing was saved.");
         return Err(ExitCode::from(2));
     }
-    env.insert("IMAP_USER".into(), user);
-    env.insert("IMAP_PASSWORD".into(), pw);
-    write_env(paths, &env).map_err(|_| ExitCode::FAILURE)?;
-    let mut table = cur;
-    table.insert("host".into(), toml::Value::String(host));
-    table.insert("port".into(), toml::Value::Integer(port.into()));
-    table.entry("account").or_insert_with(|| toml::Value::String("account".into()));
-    table.insert("folders".into(), toml::Value::Array(chosen.iter().cloned().map(toml::Value::String).collect()));
-    src.insert("mail".into(), toml::Value::Table(table));
-    write_sources(paths, &src).map_err(|_| ExitCode::FAILURE)?;
     let shown: Vec<String> = chosen.iter().map(|c| setup::imap_utf7_decode(c)).collect();
+    sources::save_mail(paths, &sources::MailSetup { host, port, user, password, folders: chosen }).map_err(|e| {
+        eprintln!("{e}");
+        ExitCode::FAILURE
+    })?;
     println!(
         "Saved: {} (mode 600), {}\nFolders: {}\nNext: life sync --dry-run",
         settings::env_file(paths).display(),
@@ -188,21 +137,11 @@ fn add_mail(paths: &Paths) -> Result<(), ExitCode> {
 fn add_calendar(paths: &Paths) -> Result<(), ExitCode> {
     need_tty()?;
     let env = read_env_file(&settings::env_file(paths));
-    let user = env.get("CALDAV_USER").or_else(|| env.get("IMAP_USER")).cloned().unwrap_or_default();
-    let password = env.get("CALDAV_PASSWORD").or_else(|| env.get("IMAP_PASSWORD")).cloned().unwrap_or_default();
-    if user.is_empty() {
+    if env.get("CALDAV_USER").or_else(|| env.get("IMAP_USER")).is_none_or(|u| u.is_empty()) {
         eprintln!("Run `life add mail` first (calendars use the same account).");
         return Err(ExitCode::from(2));
     }
-    let mut src = settings::read_sources(paths);
-    let mut cur = src.get("calendar").and_then(toml::Value::as_table).cloned().unwrap_or_default();
-    let existing = cur
-        .get("urls")
-        .and_then(toml::Value::as_array)
-        .and_then(|a| a.first())
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let existing = sources::view(paths).calendars.first().cloned().unwrap_or_default();
     let base = url::Url::parse(&existing)
         .map(|u| format!("{}://{}/", u.scheme(), u.host_str().unwrap_or("")))
         .unwrap_or_default();
@@ -211,37 +150,22 @@ fn add_calendar(paths: &Paths) -> Result<(), ExitCode> {
         eprintln!("A CalDAV server URL is required.");
         return Err(ExitCode::from(2));
     }
-    let cals = calendar::list_calendars(&server, &calendar::Account { user, password }).map_err(|e| {
+    let cals = sources::calendars(paths, &server).map_err(|e| {
         eprintln!("{e}");
         ExitCode::FAILURE
     })?;
-    let rows: Vec<&(String, String, String)> = cals.iter().filter(|c| c.2.contains("VEVENT")).collect();
-    if rows.is_empty() {
-        eprintln!("No calendar that supports events (VEVENT) was found.");
-        return Err(ExitCode::FAILURE);
-    }
-    let urls: Vec<String> = rows.iter().map(|r| r.1.clone()).collect();
-    let mut defaults: Vec<String> = cur
-        .get("urls")
-        .and_then(toml::Value::as_array)
-        .map(|a| {
-            a.iter().filter_map(|v| v.as_str()).filter(|u| urls.iter().any(|x| x == u)).map(str::to_string).collect()
-        })
-        .unwrap_or_default();
-    if defaults.is_empty() {
-        defaults = urls.clone();
-    }
-    let labels: Vec<String> = rows.iter().map(|r| format!("{}  ({})", r.0, r.2)).collect();
+    let urls: Vec<String> = cals.iter().map(|c| c.url.clone()).collect();
+    let labels: Vec<String> = cals.iter().map(|c| format!("{}  ({})", c.name, c.components)).collect();
+    let defaults: Vec<String> = cals.iter().filter(|c| c.chosen).map(|c| c.url.clone()).collect();
     let chosen = choose(&urls, &labels, &defaults, "Calendars to collect")?;
     if chosen.is_empty() {
         eprintln!("No calendar selected. Nothing was saved.");
         return Err(ExitCode::from(2));
     }
-    cur.insert("urls".into(), toml::Value::Array(chosen.into_iter().map(toml::Value::String).collect()));
-    cur.entry("past_days").or_insert(toml::Value::Integer(400));
-    cur.entry("future_days").or_insert(toml::Value::Integer(400));
-    src.insert("calendar".into(), toml::Value::Table(cur));
-    write_sources(paths, &src).map_err(|_| ExitCode::FAILURE)?;
+    sources::save_calendars(paths, &chosen).map_err(|e| {
+        eprintln!("{e}");
+        ExitCode::FAILURE
+    })?;
     println!("Saved: {}\nNext: life sync --dry-run", settings::sources_file(paths).display());
     Ok(())
 }

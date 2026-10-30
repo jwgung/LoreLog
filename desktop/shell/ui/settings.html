@@ -31,23 +31,88 @@
     .ok { color: green; } .err { color: crimson; }
     .note { font-size: 12px; opacity: 0.7; margin-top: 4px; word-break: break-all; }
     a.back { font-size: 13px; color: AccentColor; text-decoration: none; }
+    h2 { font-size: 16px; margin: 0 0 4px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+    ul.checks li { justify-content: flex-start; gap: 8px; }
+    ul.checks label { margin: 0; font-weight: 400; display: flex; gap: 8px; align-items: center; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    td { padding: 6px 4px; border-bottom: 1px solid color-mix(in srgb, GrayText 30%, transparent); vertical-align: top; }
+    td.state.ok { color: green; } td.state.err { color: crimson; }
   </style>
 </head>
 <body>
   <a class="back" href="index.html">← 대화로</a>
   <h1 style="margin-top:10px;">설정</h1>
-  <p class="sub">서버 주소와 토큰, 감시 폴더. PC 활동과 고른 폴더의 파일은 백그라운드로 서버에 보관됩니다.</p>
+  <p class="sub">금고, 모을 곳, 감시 폴더, 시작.</p>
 
-  <label for="url">서버 주소</label>
-  <input id="url" type="text" placeholder="https://&lt;기기&gt;.&lt;tailnet&gt;.ts.net:48765" />
-
-  <label for="token">토큰 (서버의 INGEST_TOKEN)</label>
-  <input id="token" type="password" placeholder="저장되어 있으면 비워 두면 유지됩니다" />
-
-  <div class="row">
-    <button id="save">저장하고 대화 열기</button>
+  <h2>금고</h2>
+  <div id="hostBox" hidden>
+    <p class="sub">이 PC에 있습니다. 이 앱이 서버를 돌립니다.</p>
+    <label>다른 기기(폰·다른 PC)에 넣을 주소</label>
+    <div class="row"><input id="devAddr" type="text" readonly /><button id="copyAddr" class="secondary" style="margin-top:0;">복사</button></div>
+    <p id="devAddrNote" class="note"></p>
+    <label>토큰</label>
+    <div class="row"><input id="devToken" type="password" readonly /><button id="showToken" class="secondary" style="margin-top:0;">보기</button><button id="copyToken" class="secondary" style="margin-top:0;">복사</button></div>
+    <p class="note">토큰을 아는 기기는 이 금고에 쓰고 읽을 수 있습니다. 내 기기에만 넣으세요.</p>
+    <p id="hostNote" class="note"></p>
+    <button id="toConnect" class="secondary">다른 곳의 금고에 연결하기로 바꾸기</button>
+  </div>
+  <div id="connectBox" hidden>
+    <p class="sub">다른 곳의 서버에 연결합니다.</p>
+    <label for="url">서버 주소</label>
+    <input id="url" type="text" placeholder="https://&lt;기기&gt;.&lt;tailnet&gt;.ts.net:48765" />
+    <label for="token">토큰 (서버의 INGEST_TOKEN)</label>
+    <input id="token" type="password" placeholder="저장되어 있으면 비워 두면 유지됩니다" />
+    <div class="row">
+      <button id="save">저장하고 대화 열기</button>
+      <button id="toHost" class="secondary">이 PC에 금고 두기로 바꾸기</button>
+    </div>
   </div>
   <div id="msg" class="msg"></div>
+
+  <div id="hostOnly" hidden>
+    <hr />
+    <h2>메일</h2>
+    <p class="sub">받은·보낸 메일을 노트로, 첨부는 원본 그대로 보관합니다. 서버의 메일은 바꾸지 않습니다(읽기만).</p>
+    <div class="grid">
+      <div><label for="mHost">IMAP 서버</label><input id="mHost" type="text" placeholder="imap.example.com" /></div>
+      <div><label for="mPort">포트</label><input id="mPort" type="text" value="993" /></div>
+    </div>
+    <label for="mUser">계정</label><input id="mUser" type="text" autocomplete="off" />
+    <label for="mPass">비밀번호</label><input id="mPass" type="password" autocomplete="off" placeholder="" />
+    <button id="mConnect" class="secondary">연결하고 폴더 보기</button>
+    <ul id="mFolders" class="checks"></ul>
+    <button id="mSave" hidden>메일 저장</button>
+    <div id="mMsg" class="msg"></div>
+
+    <hr />
+    <h2>일정</h2>
+    <p class="sub">CalDAV 달력의 일정을 노트로 가져옵니다. 계정은 메일과 같습니다.</p>
+    <label for="cServer">CalDAV 서버</label><input id="cServer" type="text" placeholder="https://caldav.example.com/" />
+    <div class="row"><button id="cFind" class="secondary">달력 찾기</button><button id="cOff" class="secondary" hidden>일정 모으지 않기</button></div>
+    <ul id="cList" class="checks"></ul>
+    <button id="cSave" hidden>일정 저장</button>
+    <div id="cMsg" class="msg"></div>
+
+    <hr />
+    <h2>모델</h2>
+    <p class="sub">대화와 음성 인식에 쓸 모델(OpenAI 호환 주소). 내 기록이 이 주소로 가므로, 내가 정한 곳만 넣으세요.</p>
+    <div class="grid">
+      <div><label for="chatUrl">대화 모델 주소</label><input id="chatUrl" type="text" placeholder="http://&lt;서버&gt;:8000/v1" /></div>
+      <div><label for="chatModel">대화 모델 이름</label><input id="chatModel" type="text" /></div>
+      <div><label for="asrUrl">음성 모델 주소</label><input id="asrUrl" type="text" placeholder="http://&lt;서버&gt;:8000/v1/audio/transcriptions" /></div>
+      <div><label for="asrModel">음성 모델 이름</label><input id="asrModel" type="text" /></div>
+    </div>
+    <button id="modelSave">모델 저장</button>
+    <div id="modelMsg" class="msg"></div>
+
+    <hr />
+    <h2>동기화</h2>
+    <p class="sub">켤 때 한 번, 그 뒤 1시간마다 메일·일정을 가져오고 색인을 갱신합니다.</p>
+    <table id="syncTable"><tbody></tbody></table>
+    <button id="syncNow" class="secondary">지금 동기화</button>
+    <div id="syncMsg" class="msg"></div>
+  </div>
 
   <hr />
 
