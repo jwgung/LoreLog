@@ -176,6 +176,17 @@ fn models_save(models: Models, slot: tauri::State<HostSlot>) -> Result<(), Strin
     hosting(&slot, |h| h.set_models(&models)).unwrap_or_else(|| Err("이 PC에 금고를 둔 경우에만 설정합니다".into()))
 }
 
+/// Are the questions the assistant takes to the librarian kept (to measure it)?
+#[tauri::command]
+fn asks_get(slot: tauri::State<HostSlot>) -> Result<bool, String> {
+    Ok(life_server::librarian::asks::enabled(&host_paths(&slot)?))
+}
+
+#[tauri::command]
+fn asks_set(on: bool, slot: tauri::State<HostSlot>) -> Result<(), String> {
+    life_server::librarian::asks::set_enabled(&host_paths(&slot)?, on)
+}
+
 /// Network calls (IMAP, CalDAV) off the UI thread.
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
@@ -392,7 +403,9 @@ pub fn run() {
             calendar_list,
             calendar_save,
             models_get,
-            models_save
+            models_save,
+            asks_get,
+            asks_set
         ])
         .manage(HostSlot::default())
         .manage(Stop(stop.clone()))

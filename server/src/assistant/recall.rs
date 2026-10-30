@@ -157,7 +157,19 @@ pub fn find_with(
     day: &str,
     said: &[String],
 ) -> Option<String> {
-    let words = search_words(model, message)?;
+    asked(open, model, message, day, said).0
+}
+
+/// [`find_with`], and what to keep of the question: the words searched and where the hits are.
+fn asked(
+    open: impl FnOnce() -> anyhow::Result<Box<dyn Index>>,
+    model: &dyn crate::llm::Model,
+    message: &str,
+    day: &str,
+    said: &[String],
+) -> (Option<String>, Option<Vec<String>>, crate::librarian::asks::Found) {
+    use crate::librarian::asks::Found;
+    let Some(words) = search_words(model, message) else { return (None, None, Found::NotSearched) };
     let mut notes = Vec::new();
     let found = (|| -> anyhow::Result<Vec<Value>> {
         let mut lib = open()?;
@@ -174,12 +186,17 @@ pub fn find_with(
         lib.search(&words.join(" "), LIMIT, day, &all)
     })();
     match found {
-        Ok(hits) => Some(
-            std::iter::once(render(&hits)).chain(notes.iter().map(|n| n.to_string())).collect::<Vec<_>>().join("\n"),
-        ),
+        Ok(hits) => {
+            let refs = hits.iter().filter_map(|h| h["ref"].as_str().map(str::to_string)).collect();
+            let section = std::iter::once(render(&hits))
+                .chain(notes.iter().map(|n| n.to_string()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            (Some(section), Some(words), Found::Hits(refs))
+        }
         Err(e) => {
             log::warn!("librarian unavailable: {}", first_word(&e));
-            Some(UNAVAILABLE.to_string())
+            (Some(UNAVAILABLE.to_string()), Some(words), Found::Unavailable)
         }
     }
 }
@@ -209,7 +226,9 @@ pub fn find(
     let open = || -> anyhow::Result<Box<dyn Index>> {
         Ok(Box::new(crate::librarian::Librarian::open(paths, None, LOCK_WAIT)?))
     };
-    find_with(open, model, message, day, said)
+    let (section, words, found) = asked(open, model, message, day, said);
+    crate::librarian::asks::record(paths, day, message, words.as_deref(), &found);
+    section
 }
 
 #[cfg(test)]

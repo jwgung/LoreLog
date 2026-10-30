@@ -34,6 +34,7 @@
     h2 { font-size: 16px; margin: 0 0 4px; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
     ul.checks li { justify-content: flex-start; gap: 8px; }
+    label.check.plain { display: flex; gap: 8px; align-items: center; font-weight: 400; margin-top: 18px; }
     ul.checks label { margin: 0; font-weight: 400; display: flex; gap: 8px; align-items: center; }
     table { width: 100%; border-collapse: collapse; font-size: 13px; }
     td { padding: 6px 4px; border-bottom: 1px solid color-mix(in srgb, GrayText 30%, transparent); vertical-align: top; }
@@ -112,6 +113,8 @@
     <table id="syncTable"><tbody></tbody></table>
     <button id="syncNow" class="secondary">지금 동기화</button>
     <div id="syncMsg" class="msg"></div>
+    <label class="check plain"><input id="asks" type="checkbox" /> 비서가 사서에게 물은 질문 남기기 (질문·검색어·찾은 기록의 위치만, 90일)</label>
+    <p id="asksMsg" class="note">사서가 무엇을 놓치는지 재려고 남깁니다. 기록의 내용과 비서의 답은 남기지 않습니다.</p>
   </div>
 
   <hr />
