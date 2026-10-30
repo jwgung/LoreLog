@@ -80,8 +80,8 @@ pub fn to_local(value: &str, params: &HashMap<String, String>) -> Option<(String
 
 fn addr(value: &str, params: &HashMap<String, String>) -> String {
     static MAILTO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^mailto:").unwrap());
-    let a = MAILTO.replace(value.trim(), "").to_string();
-    let cn = params.get("CN").map(|c| c.trim()).unwrap_or("");
+    let a = MAILTO.replace(value.trim(), "").split_whitespace().collect::<String>();
+    let cn = params.get("CN").map(|c| c.split_whitespace().collect::<Vec<_>>().join(" ")).unwrap_or_default();
     if cn.is_empty() { format!("<{a}>") } else { format!("{cn} <{a}>") }
 }
 
@@ -128,7 +128,11 @@ pub fn safe_name(title: &str) -> String {
     static BAD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"[/\\:*?"<>#^\[\]]"#).unwrap());
     static WS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
     let s = BAD.replace_all(&title.replace('|', "_"), " ").to_string();
-    let s: String = WS.replace_all(&s, " ").trim().chars().take(80).collect();
+    // at most 80 letters and 200 bytes: with the date, a counter and ".md" the name stays under 255 bytes
+    let mut s: String = WS.replace_all(&s, " ").trim().chars().take(80).collect();
+    while s.len() > 200 {
+        s.pop();
+    }
     let s = s.trim().to_string();
     if s.is_empty() { "untitled".into() } else { s }
 }
@@ -233,7 +237,20 @@ impl std::fmt::Display for DavError {
     }
 }
 
+/// The account's password goes along in every request: only to https URLs without credentials of their own.
+pub fn check_url(url: &str) -> Result<(), String> {
+    let u = url::Url::parse(url).map_err(|_| "not a URL".to_string())?;
+    if u.scheme() != "https" {
+        return Err("a CalDAV URL must use https (the password is sent with every request)".into());
+    }
+    if !u.username().is_empty() || u.password().is_some() {
+        return Err("a CalDAV URL must not carry an account; the account lives in env".into());
+    }
+    Ok(())
+}
+
 fn dav(method: &str, url: &str, acct: &Account, depth: &str, body: String, timeout: u64) -> Result<String, DavError> {
+    check_url(url).map_err(DavError::Other)?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(timeout)))
         .allow_non_standard_methods(true) // REPORT, PROPFIND
@@ -338,6 +355,13 @@ fn propfind(url: &str, acct: &Account, props: &str, depth: &str) -> Result<Strin
     dav("PROPFIND", url, acct, depth, body, 60)
 }
 
+/// A URL for the journal: scheme, host and path only (never an account).
+fn shown(url: &str) -> String {
+    url::Url::parse(url)
+        .map(|u| format!("{}://{}{}", u.scheme(), u.host_str().unwrap_or(""), u.path()))
+        .unwrap_or_else(|_| "(not a URL)".into())
+}
+
 /// CalDAV discovery: principal -> calendar home -> calendars. -> [(name, url, components)]
 pub fn list_calendars(base: &str, acct: &Account) -> Result<Vec<(String, String, String)>, String> {
     let join = |b: &str, h: &str| {
@@ -347,7 +371,7 @@ pub fn list_calendars(base: &str, acct: &Account) -> Result<Vec<(String, String,
         match propfind(url, acct, props, depth) {
             Ok(x) => Some(x),
             Err(e) => {
-                eprintln!("  [{what}] {url} -> {e}");
+                eprintln!("  [{what}] {} -> {e}", shown(url));
                 None
             }
         }

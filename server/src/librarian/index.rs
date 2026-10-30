@@ -253,9 +253,9 @@ pub struct Librarian {
     pub path: PathBuf,
     paths: Paths,
     db: Connection,
-    /// Where the allowed senders come from (the user's list; a test can change it mid-update).
+    /// Where the allowed senders come from: the user's list. A seam: a test changes it during an update.
     pub allowed: AllowSource,
-    /// Called once after a search found its first hit (a test lands another update there).
+    /// Called once after a search made its first hit. A seam: a test lands another update there.
     pub after_first_hit: Option<Box<dyn FnMut() + Send>>,
 }
 
@@ -336,11 +336,6 @@ impl Librarian {
     /// and fill it without a moment of an empty index in between, use `update(true)`.
     pub fn reset(&mut self) -> anyhow::Result<()> {
         self.rebuild_tables(false)
-    }
-
-    /// Is a write transaction open on this connection? (For tests of what happens under the lock.)
-    pub fn in_transaction(&self) -> bool {
-        !self.db.is_autocommit()
     }
 
     fn forget(&self, path: &str) -> rusqlite::Result<()> {

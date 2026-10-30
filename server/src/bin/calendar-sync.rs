@@ -21,7 +21,7 @@ Settings live in ~/.config/vault-sync/ :
                 (env may also carry CALDAV_URL (comma-separated), CALDAV_PAST_DAYS, CALDAV_FUTURE_DAYS; sources.toml wins)
 Prefer `life add calendar` and `life sync` over editing these by hand.
 
-Exit status: 0 on success, 1 if any calendar could not be read.
+Exit status: 0 on success, 1 if any calendar could not be read, 2 if settings are missing.
 
 Usage: calendar-sync [--dry-run] [--list [SERVER_URL]] [-h]
   --list   discover the account's calendars and print: name, URL, supported components (tab-separated).

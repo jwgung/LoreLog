@@ -23,7 +23,7 @@ Settings live in ~/.config/vault-sync/ :
                 (env may also carry IMAP_HOST, IMAP_PORT, MAIL_ACCOUNT, MAIL_FOLDERS, MAIL_SINCE; sources.toml wins)
 Prefer `life add mail` and `life sync` over editing these by hand.
 
-Exit status: 0 on success, 1 if the connection failed or a folder could not be read.
+Exit status: 0 on success, 1 if the connection failed or a folder could not be read, 2 if settings are missing.
 
 Usage: mail-sync [--dry-run] [--limit N] [--folder NAME] [-h]";
 

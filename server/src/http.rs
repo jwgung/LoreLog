@@ -198,9 +198,15 @@ pub fn handle(app: &App, req: &Request) -> Reply {
 }
 
 fn authorized(app: &App, req: &Request) -> bool {
-    let given = req.header("authorization");
+    authorized_token(&app.token, &req.headers)
+}
+
+/// Does the request carry the Bearer token (compared in constant time)?
+fn authorized_token(token: &str, headers: &HeaderMap) -> bool {
+    let given =
+        headers.get("authorization").map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned()).unwrap_or_default();
     match given.strip_prefix("Bearer ") {
-        Some(t) => bool::from(t.trim().as_bytes().ct_eq(app.token.as_bytes())),
+        Some(t) => bool::from(t.trim().as_bytes().ct_eq(token.as_bytes())),
         None => false,
     }
 }
@@ -225,11 +231,8 @@ fn today() -> String {
 
 fn todos_post(app: &App, req: &Request, _: &regex::Captures) -> Result<Reply, Reply> {
     let payload = req.json(100_000)?;
-    let raw =
-        payload.as_object().map(|o| o.get("text").map(|v| crate::assistant::util::pystr(Some(v))).unwrap_or_default());
-    let Some(raw) = raw else {
-        return Err(internal(req, &"BadPayload"));
-    };
+    let Some(o) = payload.as_object() else { return Ok(Reply::new(400, json!({"error": "bad body"}))) };
+    let raw = o.get("text").map(|v| crate::assistant::util::pystr(Some(v))).unwrap_or_default();
     let text: String = raw.trim().chars().take(200).collect();
     if text.is_empty() {
         return Ok(Reply::new(400, json!({"error": "empty"})));
@@ -371,7 +374,9 @@ async fn entry(State(app): State<Arc<App>>, req: axum::extract::Request) -> Axum
         .unwrap_or(0);
     // read only what some handler may use; a larger declared body is refused by the handler without being read
     let cap = app.max_bytes.max(BODY_LIMIT);
-    let body = if declared > 0 && declared <= cap { read(body, declared).await } else { Vec::new() };
+    // an unauthenticated request gets nothing read: it is answered 401 (or 404) without its body
+    let open = target == "/healthz" || authorized_token(&app.token, &parts.headers);
+    let body = if open && declared > 0 && declared <= cap { read(body, declared).await } else { Vec::new() };
     let request = Request { method: parts.method, target, headers: parts.headers, body };
     let app2 = app.clone();
     let reply = tokio::task::spawn_blocking(move || handle(&app2, &request))

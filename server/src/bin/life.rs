@@ -18,7 +18,7 @@ fn help(paths: &Paths) -> String {
         "usage: life <command> ...
 
 Add, run and check collection sources from one place.
-The actual collection is done by mail-sync and calendar-sync; this command ties their setup and runs together.
+The actual collection is done by mail-sync, mail-files and calendar-sync; this command ties their setup and runs together.
 
 commands:
   add mail          mail account (IMAP): server, account, password (hidden), then folders to collect

@@ -32,7 +32,8 @@ Rust 라이브러리 crate 하나(`life-server`)와 그 위의 실행 파일들�
 Rust 툴체인(저장소 루트의 `rust-toolchain.toml`)이 필요하다. `deploy/install.sh`가 release로 빌드하고, 실행 파일을 `~/.local/bin/`에 심볼릭 링크로 걸고, `deploy/systemd/`의 유닛을 `~/.config/systemd/user/`에 둔다(바뀌는 파일은 `~/.local/share/life-install-backup/`에 백업).
 
     server/deploy/install.sh
-    systemctl --user restart life-ingest
+    systemctl --user enable --now life-ingest life-sync.timer   # 처음 한 번
+    systemctl --user restart life-ingest                         # 다시 설치한 뒤
 
 ## 테스트
 
@@ -41,7 +42,7 @@ Rust 툴체인(저장소 루트의 `rust-toolchain.toml`)이 필요하다. `depl
 가짜 모델과 임시 폴더로 실제 HTTP 서버를 띄워 확인한다. 실제 메일·일정 서버에 닿는 부분(IMAP, CalDAV)은 테스트하지 않는다.
 
 ## HTTPS 주소
-`life-ingest`는 기본으로 tailnet 주소에 HTTP로 뜬다(`INGEST_CERT`·`INGEST_KEY`에 PEM 파일을 주면 직접 HTTPS). 보통은 tailscale serve로 앞에 HTTPS를 붙여 쓴다(한 번만, sudo 필요).
+`life-ingest`는 기본으로 `127.0.0.1`에 HTTP로 뜬다(`INGEST_CERT`·`INGEST_KEY`에 PEM 파일을 주면 직접 HTTPS). 폰·PC에서 받으려면 `ingest.env`의 `INGEST_BIND`를 이 머신의 tailnet 주소로 바꾸고, 보통은 tailscale serve로 앞에 HTTPS를 붙여 쓴다(한 번만, sudo 필요).
 
     sudo tailscale serve --bg --https=48765 http://<tailnet 주소>:8765
 

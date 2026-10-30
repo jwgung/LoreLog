@@ -81,11 +81,8 @@ impl State {
         self.0.insert(folder.to_string(), json!({"uidvalidity": uidvalidity, "seen": seen}));
     }
 
+    /// Folder names and UIDs are private mail metadata: written 0600, all at once.
     pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
-        if let Some(d) = path.parent() {
-            std::fs::create_dir_all(d)?;
-        }
-        let m: serde_json::Map<String, Value> = self.0.clone().into_iter().collect();
-        std::fs::write(path, Value::Object(m).to_string())
+        crate::fsutil::write_private_atomic(path, serde_json::to_string(&self.0).expect("JSON serializes").as_bytes())
     }
 }

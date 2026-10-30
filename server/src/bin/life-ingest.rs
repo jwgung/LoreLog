@@ -5,13 +5,26 @@ use std::sync::Arc;
 use life_server::config::{Paths, read_env_file};
 use life_server::http::{App, serve, serve_tls};
 
-const HELP: &str = "\
-life-ingest: collection endpoint that any client (phone, PC, ...) can send NDJSON to. Raw data is stored on this server.
+const HELP: &str = r#"life-ingest: collection endpoint that any client (phone, PC, ...) can send NDJSON to. Raw data is stored on this server.
 
   POST /ingest/<source>      body: NDJSON (one JSON object per line), header: Authorization: Bearer <token>
   POST /ingest/file          body: file bytes; headers X-File-Sha256, X-File-Name (percent-encoded), X-File-Mime, X-File-Ts (ms).
                              Keeps the bytes under their content hash (shared with mail-files) and records a sighting in raw/pcfile.
+                             With X-File-Sighting: 1 and no body: records that an already kept file was seen again.
   GET  /ingest/file/<sha256> {present: bool}: whether that blob is already kept (the agent asks before uploading)
+  GET  /diary/<date>         the day's draft (summary + question); made on demand -> 202 while it is being made
+                             (?refresh=1 makes it again)
+  POST /diary/<date>         body: JSON {corrections:[{wrong,right}], reflection}; stored in the day's note
+  GET  /diary/senders        notification senders of the last 14 days with the user's allowed flag
+  GET  /diary/allow          the allowed list as stored
+  POST /diary/senders        body: {allow: ["<app>: <sender>" | "<app>: *"]}; which messengers may feed the diary
+  GET  /diary/<date>/chat    the day's chat exchange (to show it again)
+  POST /diary/<date>/chat    body: {message, wrong?}; stores it in the diary and returns the assistant's reply
+  POST /transcribe           body: audio (wav); returns {text} from the speech model (LIFE_ASR_URL); nothing is stored
+  GET  /todos                open and recently done to-dos (+ extracting flag)
+  POST /todos                body: {text}; add the user's own to-do
+  POST /todos/<id>           body: {action: done|dismiss|reopen}
+  POST /todos/extract        extract new to-dos from the records in the background (throttled)
   GET  /healthz              only reports that it is alive (no auth, reveals nothing else)
 
 - Raw data is only ever appended to <data dir>/raw/<source>/<YYYY-MM-DD>.ndjson; nothing is edited or deleted.
@@ -24,13 +37,13 @@ Settings: ~/.config/vault-sync/ingest.env  (KEY=VALUE, mode 600)
   INGEST_TOKEN=...            required. The value clients send as the Bearer token (at least 16 characters)
   INGEST_BIND=127.0.0.1       address to listen on; for Tailscale use this machine's tailnet address
   INGEST_PORT=8765
-  LIFE_DATA_DIR=...           default: the OS data location (Linux ~/.local/share/life, Windows %LOCALAPPDATA%\\life,
+  LIFE_DATA_DIR=...           default: the OS data location (Linux ~/.local/share/life, Windows %LOCALAPPDATA%\life,
                               macOS ~/Library/Application Support/life)
   INGEST_CLASS=personal       default class (work | personal)
   INGEST_MAX_MB=20            maximum size of one request
   INGEST_CERT / INGEST_KEY    HTTPS if both are set (PEM files)
 
-Usage: life-ingest [-h]";
+Usage: life-ingest [-h]"#;
 
 fn main() -> std::process::ExitCode {
     if std::env::args().skip(1).any(|a| a == "-h" || a == "--help") {

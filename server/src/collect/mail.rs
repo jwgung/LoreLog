@@ -50,7 +50,10 @@ pub fn addrs(a: Option<&Address>) -> Vec<String> {
     list.iter()
         .filter_map(|x| {
             let addr = x.address.as_deref().filter(|s| !s.is_empty())?;
-            let name = x.name.as_deref().map(str::trim).unwrap_or("");
+            // one line: a decoded line break in a name must not start a new frontmatter key
+            let name =
+                x.name.as_deref().map(|n| n.split_whitespace().collect::<Vec<_>>().join(" ")).unwrap_or_default();
+            let addr = addr.split_whitespace().collect::<String>();
             Some(if name.is_empty() { format!("<{addr}>") } else { format!("{name} <{addr}>") })
         })
         .collect()

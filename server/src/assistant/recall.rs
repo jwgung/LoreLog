@@ -14,30 +14,9 @@ pub const PARTIAL: &str = "- (일부 기록 파일을 지금 읽지 못해 빠�
 pub const STALE: &str = "- (색인을 지금 최신으로 갱신하지 못해 가장 최근에 들어온 기록은 빠졌을 수 있다)";
 pub const MAX_SNIPPET: usize = 200;
 
-const BRACKETS: [(char, char); 10] = [
-    ('[', '('),
-    (']', ')'),
-    ('【', '('),
-    ('】', ')'),
-    ('〔', '('),
-    ('〕', ')'),
-    ('〖', '('),
-    ('〗', ')'),
-    ('⟦', '('),
-    ('⟧', ')'),
-];
-const MORE_BRACKETS: [(char, char); 10] = [
-    ('〘', '('),
-    ('〙', ')'),
-    ('⁅', '('),
-    ('⁆', ')'),
-    ('❲', '('),
-    ('❳', ')'),
-    ('❬', '('),
-    ('❭', ')'),
-    ('〚', '('),
-    ('〛', ')'),
-];
+/// Square brackets and the brackets that look like them, all made round.
+const OPENING: &str = "[【〔〖⟦〘⁅❲❬〚";
+const CLOSING: &str = "]】〕〗⟧〙⁆❳❭〛";
 
 /// A fullwidth, small or vertical form: folded to the plain letter, so a copy of a marker in these forms becomes the
 /// marker itself. Other letters (ㅋ, ², ①, …) are left as written.
@@ -61,7 +40,13 @@ pub fn plain(text: &str) -> String {
     }
     t.chars()
         .map(|c| {
-            BRACKETS.iter().chain(MORE_BRACKETS.iter()).find(|(from, _)| *from == c).map(|(_, to)| *to).unwrap_or(c)
+            if OPENING.contains(c) {
+                '('
+            } else if CLOSING.contains(c) {
+                ')'
+            } else {
+                c
+            }
         })
         .collect()
 }

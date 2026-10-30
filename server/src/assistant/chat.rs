@@ -1,7 +1,5 @@
 //! The assistant's chat: what the user says is saved first, then answered by the model. The log is
 //! `raw/diary/<day>.ndjson` lines of `type: chat`, the user's and the assistant's turns.
-use std::fs;
-
 use chrono::Local;
 use serde_json::{Map, Value, json};
 
@@ -93,7 +91,7 @@ pub fn chat_log(paths: &Paths, day: &str) -> Vec<Map<String, Value>> {
 
 pub fn append_chat(paths: &Paths, day: &str, role: &str, text: &str) -> std::io::Result<()> {
     let raw = paths.raw().join("diary");
-    fs::create_dir_all(&raw)?;
+    crate::fsutil::ensure_private_dir(&raw)?;
     let rec = json!({"type": "chat", "ts": Local::now().timestamp_millis(), "date": day, "role": role, "text": text,
                      "_src": "diary", "_class": "personal"});
     append_private(&raw.join(format!("{day}.ndjson")), &format!("{rec}\n"))

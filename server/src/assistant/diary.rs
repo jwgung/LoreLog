@@ -179,7 +179,7 @@ pub fn save_user(paths: &Paths, day: &str, payload: &Value) -> std::io::Result<(
     text = set_section(&text, "회고", &reflection);
     write_note(paths, day, &text)?;
     let raw = paths.raw().join("diary");
-    fs::create_dir_all(&raw)?;
+    crate::fsutil::ensure_private_dir(&raw)?;
     let rec = json!({
         "type": "reflection", "ts": Local::now().timestamp_millis(), "date": day,
         "corrections": p.get("corrections").cloned().unwrap_or_else(|| json!([])),
@@ -196,10 +196,7 @@ pub fn write_note(paths: &Paths, day: &str, text: &str) -> std::io::Result<()> {
         fs::create_dir_all(&dir)?;
         set_mode(&dir, 0o700);
     }
-    let path = note_path(paths, day);
-    fs::write(&path, text)?;
-    set_mode(&path, 0o600);
-    Ok(())
+    crate::fsutil::write_private_atomic(&note_path(paths, day), text.as_bytes())
 }
 
 /// The note with the AI part replaced by this draft (a new note when there is none yet).
