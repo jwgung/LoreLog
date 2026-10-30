@@ -14,12 +14,17 @@ path = "src/lib.rs"
 anyhow = "1.0.104"
 axum = "0.8.9"
 axum-server = { version = "0.8.0", features = ["tls-rustls"] }
+base64 = "0.23.1"
 chrono = "0.4.45"
+chrono-tz = "0.10.4"
 dirs = "7.0.0"
 hex = "0.4.3"
+imap = { version = "3.0.0-alpha.15", default-features = false, features = ["rustls-tls"] }
 indexmap = "2.14.2"
+mail-parser = "0.11.9"
 percent-encoding = "2.3.2"
 regex = "1.13.1"
+roxmltree = "0.21.2"
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -31,6 +36,7 @@ tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "s
 toml = "1.1.8"
 unicode-normalization = "0.1.26"
 ureq = { version = "3.5.0", features = ["json"] }
+url = "2.5.8"
 
 [dev-dependencies]
 anyhow = "1.0.104"
