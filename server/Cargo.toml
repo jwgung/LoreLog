@@ -1,0 +1,45 @@
+[package]
+name = "life-server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "life server: raw store, diary assistant, librarian and collectors. A library first, so the desktop app can run it too."
+
+[lib]
+name = "life_server"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+axum = "0.8.9"
+axum-server = { version = "0.8.0", features = ["tls-rustls"] }
+base64 = "0.23.1"
+chrono = "0.4.45"
+chrono-tz = "0.10.4"
+dirs = "7.0.0"
+encoding_rs = "0.8.42"
+hex = "0.4.3"
+html-escape = "0.3.0"
+imap = { version = "3.0.0-alpha.15", default-features = false, features = ["rustls-tls"] }
+indexmap = "2.14.2"
+mail-parser = { version = "0.11.9", features = ["full_encoding"] }
+percent-encoding = "2.3.2"
+regex = "1.13.1"
+roxmltree = "0.21.2"
+rpassword = "7.5.4"
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["arbitrary_precision", "preserve_order"] }
+sha1 = "0.11.0"
+sha2 = "0.11.1"
+subtle = "2.6.1"
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+toml = "1.1.8"
+unicode-normalization = "0.1.26"
+ureq = { version = "3.5.0", features = ["json"] }
+url = "2.5.8"
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -1,4 +1,4 @@
-//! life-agent command line: run, once, flush, status, config, install, uninstall.
+//! life-agent command line: run, once, flush, status, config, watch.
 use life_agent::{platform, run};
 use life_agent_core::agent::{Agent, Sampler, system_clock};
 use life_agent_core::segments::Segmenter;
