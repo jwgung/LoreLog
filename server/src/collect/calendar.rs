@@ -365,7 +365,7 @@ pub fn list_calendars(base: &str, acct: &Account) -> Result<Vec<(String, String,
         match propfind(url, acct, props, depth) {
             Ok(x) => Some(x),
             Err(e) => {
-                eprintln!("  [{what}] {} -> {e}", shown(url));
+                log::warn!("  [{what}] {} -> {e}", shown(url));
                 None
             }
         }

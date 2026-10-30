@@ -293,6 +293,7 @@ fn status(paths: &Paths) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    life_server::logging::to_stderr();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let paths = Paths::from_env();
     let first = args.first().map(String::as_str).unwrap_or("");

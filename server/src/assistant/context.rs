@@ -86,7 +86,7 @@ pub fn load_conversations(paths: &Paths) -> Conversations {
                     convs.insert(conversation_key(&c), c);
                 }
             }
-            Err(e) => eprintln!(
+            Err(e) => log::warn!(
                 "conversations: skipped {}: {:?}",
                 path.file_name().unwrap_or_default().to_string_lossy(),
                 e.kind()

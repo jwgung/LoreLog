@@ -372,7 +372,7 @@ impl Librarian {
     fn skip(&self, path: &str, why: &dyn std::fmt::Display) -> rusqlite::Result<()> {
         self.forget(path)?;
         self.db.execute("delete from files where path = ?", [path])?; // read it again next time
-        eprintln!(
+        log::warn!(
             "librarian: skipped {}: {why}",
             Path::new(path).file_name().map(|n| n.to_string_lossy()).unwrap_or_default()
         );

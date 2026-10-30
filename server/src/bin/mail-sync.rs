@@ -26,6 +26,7 @@ Exit status: 0 on success, 1 if the connection failed or a folder could not be r
 Usage: mail-sync [--dry-run] [--limit N] [--folder NAME] [-h]";
 
 fn main() -> ExitCode {
+    life_server::logging::to_stderr();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!("{HELP}");

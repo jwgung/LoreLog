@@ -30,6 +30,7 @@ fn usage(msg: &str) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    life_server::logging::to_stderr();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
         return usage("the following arguments are required: cmd");
