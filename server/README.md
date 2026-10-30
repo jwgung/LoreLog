@@ -4,7 +4,7 @@
 
 - 청사진: 사서(수집·색인)와 비서(능동)와 금고(그 사람 것). 문서는 `docs/`에 둔다.
 - 앱(폰)은 이 저장소 루트의 `app/`, 데스크톱 앱과 PC 수집기는 `desktop/`, 서버는 `server/`.
-- 개인 데이터와 비밀값은 이 저장소에 두지 않는다(`.gitignore` 참고). 설정은 `~/.config/vault-sync/`.
+- 개인 데이터와 비밀값은 이 저장소에 두지 않는다(`.gitignore` 참고). 설정은 OS 설정 위치의 `vault-sync/`(리눅스 `~/.config/vault-sync/`, `LIFE_CONF_DIR`로 옮길 수 있다).
 
 ## 구성
 Rust 라이브러리 crate 하나(`life-server`)와 그 위의 실행 파일들이다. 같은 라이브러리를 데스크톱 앱도 쓸 수 있다(서버로도, 데스크톱 앱 안에서도 돈다. `docs/adr/0001-server-in-rust.md`).
@@ -37,9 +37,13 @@ Rust 툴체인(저장소 루트의 `rust-toolchain.toml`)이 필요하다. `depl
 
 ## 테스트
 
-    cargo test -p life-server
+    server/check.sh
+
+테스트, clippy, rustfmt, 그리고 Windows 대상 컴파일(`cargo xwin check`)을 차례로 본다. 이 라이브러리는 데스크톱 앱 안에서도 돌기 때문에(`docs/adr/0002-vault-on-the-users-device.md`) Windows에서 컴파일되지 않으면 실패로 친다. release 빌드는 하지 않으므로 돌고 있는 서비스의 실행 파일을 건드리지 않는다. 테스트만 돌리려면 `cargo test -p life-server`.
 
 가짜 모델과 임시 폴더로 실제 HTTP 서버를 띄워 확인한다. 실제 메일·일정 서버에 닿는 부분(IMAP, CalDAV)은 테스트하지 않는다.
+
+라이브러리는 어느 OS에서든 그대로 돌아야 한다. 기본 위치는 `config::OsDirs`로 OS에서 고르고(리눅스는 예전 그대로 `~/.config/vault-sync`, `~/.local/share/life`, `~/.local/share/vault-sync`), 한 OS의 경로를 코드에 적지 않는다. 1시간마다의 동기화 같은 예약 실행은 라이브러리가 아니라 그것을 띄우는 쪽의 일이다(지금은 `deploy/systemd/life-sync.timer`, 나중에는 데스크톱 앱). 라이브러리 안의 스레드는 요청 하나에 딸린 일회성 작업(하루 정리 만들기, 할 일 뽑기)뿐이다.
 
 ## HTTPS 주소
 `life-ingest`는 기본으로 `127.0.0.1`에 HTTP로 뜬다(`INGEST_CERT`·`INGEST_KEY`에 PEM 파일을 주면 직접 HTTPS). 폰·PC에서 받으려면 `ingest.env`의 `INGEST_BIND`를 이 머신의 tailnet 주소로 바꾸고, 보통은 tailscale serve로 앞에 HTTPS를 붙여 쓴다(한 번만, sudo 필요).

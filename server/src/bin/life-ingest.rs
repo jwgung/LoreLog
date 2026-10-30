@@ -33,7 +33,7 @@ const HELP: &str = r#"life-ingest: collection endpoint that any client (phone, P
 - A record that arrives again (a resend) is stored only once.
 - Records are kept as they are; only _src, _recv and _class are added. _class defaults to personal.
 
-Settings: ~/.config/vault-sync/ingest.env  (KEY=VALUE, mode 600)
+Settings: <config>/ingest.env  (KEY=VALUE, mode 600; <config> is LIFE_CONF_DIR, else Linux ~/.config/vault-sync)
   INGEST_TOKEN=...            required. The value clients send as the Bearer token (at least 16 characters)
   INGEST_BIND=127.0.0.1       address to listen on; for Tailscale use this machine's tailnet address
   INGEST_PORT=8765

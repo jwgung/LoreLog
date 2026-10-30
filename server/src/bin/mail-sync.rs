@@ -17,7 +17,7 @@ Import IMAP mail (inbox and sent folders) into the vault as Mail/ notes. Read-on
 - Notes use the same frontmatter as the existing Mail/ notes created by Mailstone, so hub-sync reads them unchanged.
 - Raw .eml files and attachments are not stored (attachments are listed by name only).
 
-Settings live in ~/.config/vault-sync/ :
+Settings live in the OS config place + vault-sync/ (Linux ~/.config/vault-sync/, or LIFE_CONF_DIR):
   env           secrets (KEY=VALUE, mode 600): IMAP_USER, IMAP_PASSWORD
   sources.toml  what to collect, under [mail]: host, port, account, folders, since
                 (env may also carry IMAP_HOST, IMAP_PORT, MAIL_ACCOUNT, MAIL_FOLDERS, MAIL_SINCE; sources.toml wins)
@@ -61,8 +61,8 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let home = dirs::home_dir().unwrap_or_default();
-    let own: HashSet<String> = std::fs::read_to_string(home.join(".local/share/hub-sync/identity.json"))
+    let identity = dirs::data_local_dir().unwrap_or_default().join("hub-sync/identity.json"); // Linux ~/.local/share
+    let own: HashSet<String> = std::fs::read_to_string(identity)
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
         .and_then(|v| {
