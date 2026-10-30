@@ -18,7 +18,7 @@ async function load() {
   if (host) {
     token = cfg.token || "";
     if (cfg.host_error) msg("이 PC의 서버를 띄우지 못했습니다: " + cfg.host_error, false);
-    await loadHost();
+    else await loadHost().catch((e) => msg("설정을 읽지 못했습니다: " + e, false));
   }
   try {
     const s = await invoke("get_settings");
@@ -96,8 +96,8 @@ async function loadSources() {
     say("mMsg", "모으는 폴더: " + v.mail.folder_labels.join(", "), true);
   }
   if (v.calendars.length) {
-    const u = new URL(v.calendars[0]);
-    $("cServer").value = `${u.protocol}//${u.host}/`;
+    try { const u = new URL(v.calendars[0]); $("cServer").value = `${u.protocol}//${u.host}/`; }
+    catch { $("cServer").value = v.calendars[0]; }
     say("cMsg", `달력 ${v.calendars.length}개를 모읍니다.`, true);
     $("cOff").hidden = false;
   }
@@ -121,10 +121,15 @@ $("mConnect").onclick = async () => {
     say("mMsg", `연결했습니다. 폴더 ${folders.length}개 — 모을 폴더를 고르고 저장하세요.`, true);
   } catch (e) { say("mMsg", String(e), false); }
 };
+// the folders shown belong to the server and account they were read from: change those and connect again
+for (const id of ["mHost", "mPort", "mUser", "mPass"]) {
+  $(id).addEventListener("input", () => { $("mSave").hidden = true; $("mFolders").replaceChildren(); });
+}
 $("mSave").onclick = async () => {
   try {
     await invoke("mail_save", { ...mailForm(), folders: checked($("mFolders")) });
     $("mPass").value = "";
+    $("mPass").placeholder = "저장됨 — 바꾸려면 새로 입력";
     say("mMsg", "저장했습니다. 지금 메일을 가져옵니다.", true);
     setTimeout(loadSync, 1000);
   } catch (e) { say("mMsg", String(e), false); }
@@ -135,7 +140,7 @@ $("cFind").onclick = async () => {
   say("cMsg", "달력을 찾는 중…", true);
   try {
     const cals = await invoke("calendar_list", { server: $("cServer").value.trim() });
-    checks($("cList"), cals.map((c) => ({ value: c.url, label: c.name, chosen: c.chosen })));
+    checks($("cList"), cals.map((c) => ({ value: c.url, label: `${c.name} (${c.components})`, chosen: c.chosen })));
     $("cSave").hidden = false;
     say("cMsg", `달력 ${cals.length}개 — 모을 달력을 고르고 저장하세요.`, true);
   } catch (e) { say("cMsg", String(e), false); }

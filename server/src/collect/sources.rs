@@ -8,10 +8,9 @@ use super::{imapc, settings, setup};
 use crate::config::{Paths, read_env_file};
 use crate::fsutil::{set_mode, write_private_atomic};
 
-const SOURCES_HEADER: &str = "# What to collect. No passwords or tokens here (they live in env). Safe to commit.\n# `life add mail` and `life add calendar` rewrite this file, so comments are not preserved.\n\n";
+const SOURCES_HEADER: &str = "# What to collect. No passwords or tokens here (they live in env). Safe to commit.\n# `life add mail`, `life add calendar` and the desktop app's settings rewrite this file, so comments are not preserved.\n\n";
 
-/// A mail account to save. `password: None` keeps the stored one.
-#[derive(Clone)]
+/// A mail account to save. `password: None` keeps the stored one (only for the same server).
 pub struct MailSetup {
     pub host: String,
     pub port: u16,
@@ -53,6 +52,8 @@ pub struct Folder {
 pub struct Calendar {
     pub name: String,
     pub url: String,
+    /// what it can hold, e.g. "VEVENT,VTODO"
+    pub components: String,
     pub chosen: bool,
 }
 
@@ -88,23 +89,27 @@ pub fn view(paths: &Paths) -> SourcesView {
     SourcesView { mail, calendars: strings(&table(&src, "calendar"), "urls") }
 }
 
-pub fn write_sources(paths: &Paths, src: &toml::Table) -> std::io::Result<()> {
+fn write_sources(paths: &Paths, src: &toml::Table) -> std::io::Result<()> {
     let text = format!("{SOURCES_HEADER}{}", toml::to_string(src).unwrap_or_default());
     write_private_atomic(&settings::sources_file(paths), text.as_bytes())
 }
 
-pub fn write_env(paths: &Paths, env: &std::collections::BTreeMap<String, String>) -> std::io::Result<()> {
+fn write_env(paths: &Paths, env: &std::collections::BTreeMap<String, String>) -> std::io::Result<()> {
     let text: String = env.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
     write_private_atomic(&settings::env_file(paths), text.as_bytes())?;
     set_mode(&paths.conf, 0o700);
     Ok(())
 }
 
-/// The password to use: the given one, else the stored one. Err when there is neither.
-fn password(paths: &Paths, given: &Option<String>) -> Result<String, String> {
-    let stored = || read_env_file(&settings::env_file(paths)).get("IMAP_PASSWORD").cloned().unwrap_or_default();
-    let pw = given.clone().filter(|p| !p.is_empty()).unwrap_or_else(stored);
-    if pw.is_empty() { Err("비밀번호를 넣어 주세요".into()) } else { Ok(pw) }
+/// The password to use: the given one, else the stored one when the server is the one it was stored for (a stored
+/// password never goes to another server). Err when there is none to use.
+fn password(paths: &Paths, host: &str, port: u16, given: &Option<String>) -> Result<String, String> {
+    if let Some(p) = given.clone().filter(|p| !p.is_empty()) {
+        return Ok(p);
+    }
+    let same = view(paths).mail.is_some_and(|m| m.host.eq_ignore_ascii_case(host.trim()) && m.port == port);
+    let stored = read_env_file(&settings::env_file(paths)).get("IMAP_PASSWORD").cloned().unwrap_or_default();
+    if same && !stored.is_empty() { Ok(stored) } else { Err("비밀번호를 넣어 주세요".into()) }
 }
 
 /// Log in and list the folders that can hold mail; the configured ones (else INBOX and the sent folder) are chosen.
@@ -116,7 +121,7 @@ pub fn mail_folders(
     user: &str,
     pw: &Option<String>,
 ) -> Result<Vec<Folder>, String> {
-    let pw = password(paths, pw)?;
+    let pw = password(paths, host, port, pw)?;
     let mut s = imapc::connect(host.trim(), port, user.trim(), &pw).map_err(|k| format!("연결하지 못했습니다: {k}"))?;
     let names = s.list(None, Some("*"));
     let _ = s.logout();
@@ -159,7 +164,10 @@ pub fn save_mail(paths: &Paths, m: &MailSetup) -> Result<(), String> {
     if m.folders.is_empty() {
         return Err("모을 폴더를 하나 이상 골라 주세요".into());
     }
-    let pw = password(paths, &m.password)?;
+    let pw = password(paths, host, m.port, &m.password)?;
+    if ![host, user, pw.as_str()].iter().all(|v| crate::config::env_value_ok(v)) {
+        return Err("줄바꿈 같은 제어 문자는 넣을 수 없습니다".into());
+    }
     let mut env = read_env_file(&settings::env_file(paths));
     env.insert("IMAP_USER".into(), user.to_string());
     env.insert("IMAP_PASSWORD".into(), pw);
@@ -193,13 +201,15 @@ pub fn calendars(paths: &Paths, server: &str) -> Result<Vec<Calendar>, String> {
     let acct = calendar_account(paths)?;
     let cals = calendar::list_calendars(server.trim(), &acct)?;
     let configured = view(paths).calendars;
-    let rows: Vec<(String, String)> =
-        cals.into_iter().filter(|c| c.2.contains("VEVENT")).map(|(name, url, _)| (name, url)).collect();
+    let rows: Vec<(String, String, String)> = cals.into_iter().filter(|c| c.2.contains("VEVENT")).collect();
     if rows.is_empty() {
         return Err("일정을 담는 달력(VEVENT)을 찾지 못했습니다".into());
     }
-    let any = rows.iter().any(|(_, u)| configured.contains(u));
-    Ok(rows.into_iter().map(|(name, url)| Calendar { chosen: !any || configured.contains(&url), name, url }).collect())
+    let any = rows.iter().any(|(_, u, _)| configured.contains(u));
+    Ok(rows
+        .into_iter()
+        .map(|(name, url, components)| Calendar { chosen: !any || configured.contains(&url), name, url, components })
+        .collect())
 }
 
 /// Save the calendars to collect (https addresses). An empty list stops collecting calendars.

@@ -168,6 +168,15 @@ fn write_private(path: &PathBuf, text: &str) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
+/// Forget the token (switching to another server, which has its own).
+pub fn clear_token() -> Result<(), String> {
+    match std::fs::remove_file(token_path()) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Write the settings (config.toml) and, if set, the token (its own 0600 file). The token is never written into
 /// config.toml.
 pub fn save(cfg: &Config) -> Result<(), String> {

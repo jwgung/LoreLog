@@ -84,23 +84,29 @@ fn start_hosting(s: &HostSlot, stop: &Arc<AtomicBool>) -> Result<(), String> {
 /// elsewhere; the screen then asks for its address and token). Switching later does not move any data.
 #[tauri::command]
 fn choose_mode(mode: Mode, slot: tauri::State<HostSlot>, stop: tauri::State<Stop>) -> Result<(), String> {
-    let mut cfg = config::load()?;
-    match mode {
-        Mode::Host => start_hosting(&slot, &stop.0)?, // the choice is kept only once the server runs
-        Mode::Connect => {
-            // the vault stays where it is; this app stops serving it and asks for another server's address
-            let mut held = self::slot(&slot);
-            if let Ok(Some(h)) = &*held {
-                h.stop();
-            }
-            *held = Ok(None);
-            if cfg.mode == Some(Mode::Host) {
-                cfg = config::Config { url: String::new(), ..config::load()? };
-            }
-        }
+    if mode == Mode::Host {
+        start_hosting(&slot, &stop.0)?; // the choice is kept only once the server runs (it wrote url and token)
+        let mut cfg = config::load()?;
+        cfg.mode = Some(Mode::Host);
+        return config::save(&cfg);
     }
-    cfg.mode = Some(mode);
-    config::save(&cfg)
+    // Connect: the vault stays where it is; this app stops serving it and asks for another server's address and
+    // token (its own token is not offered to that server)
+    let mut cfg = config::load()?;
+    let was_host = cfg.mode == Some(Mode::Host);
+    cfg.mode = Some(Mode::Connect);
+    if was_host {
+        cfg.url.clear();
+        cfg.token.clear();
+        config::clear_token()?;
+    }
+    config::save(&cfg)?;
+    let mut held = self::slot(&slot);
+    if let Ok(Some(h)) = &*held {
+        h.stop();
+    }
+    *held = Ok(None);
+    Ok(())
 }
 
 /// The vault's paths when this app runs the server, else an error for the settings screen.

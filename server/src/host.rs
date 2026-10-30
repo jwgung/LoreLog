@@ -238,9 +238,12 @@ pub fn save_models(paths: &Paths, m: &Models) -> Result<(), String> {
             return Err(format!("{what} 주소는 http:// 또는 https:// 로 시작해야 합니다"));
         }
     }
+    let values = [&m.chat_url, &m.chat_model, &m.asr_url, &m.asr_model];
+    if !values.iter().all(|v| crate::config::env_value_ok(v)) {
+        return Err("줄바꿈 같은 제어 문자는 넣을 수 없습니다".into());
+    }
     let file = ingest_env(paths);
     let mut cfg = read_env_file(&file);
-    let values = [&m.chat_url, &m.chat_model, &m.asr_url, &m.asr_model];
     for (k, v) in MODEL_KEYS.iter().zip(values) {
         match v.trim() {
             "" => cfg.remove(*k),

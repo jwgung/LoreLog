@@ -7,7 +7,7 @@ use std::io::{BufRead, IsTerminal, Write};
 use std::process::ExitCode;
 
 use life_server::collect::{settings, setup, sources, sync};
-use life_server::config::Paths;
+use life_server::config::{Paths, read_env_file};
 
 fn help(paths: &Paths) -> String {
     format!(
@@ -90,10 +90,10 @@ fn choose(items: &[String], labels: &[String], defaults: &[String], what: &str) 
 fn add_mail(paths: &Paths) -> Result<(), ExitCode> {
     need_tty()?;
     let cur = sources::view(paths).mail;
-    let (host0, port0, user0) = cur
-        .as_ref()
-        .map(|m| (m.host.clone(), m.port.to_string(), m.user.clone()))
-        .unwrap_or_else(|| (String::new(), "993".into(), String::new()));
+    let (host0, port0) =
+        cur.as_ref().map(|m| (m.host.clone(), m.port.to_string())).unwrap_or_else(|| (String::new(), "993".into()));
+    let env = read_env_file(&settings::env_file(paths));
+    let user0 = env.get("IMAP_USER").cloned().unwrap_or_default();
     let host = ask("IMAP server", &host0);
     let Ok(port) = ask("Port", &port0).parse::<u16>() else {
         eprintln!("The port is a number.");
@@ -102,12 +102,13 @@ fn add_mail(paths: &Paths) -> Result<(), ExitCode> {
     let user = ask("Account", &user0);
     let typed = rpassword::prompt_password("Password (hidden; Enter keeps the current one): ").unwrap_or_default();
     let password = (!typed.is_empty()).then_some(typed);
-    if host.is_empty() || user.is_empty() {
+    let same_server = cur.as_ref().is_some_and(|m| m.host == host && m.port == port && m.has_password);
+    if host.is_empty() || user.is_empty() || (password.is_none() && !same_server) {
         eprintln!("Server, account and password are all required.");
         return Err(ExitCode::from(2));
     }
     let folders = sources::mail_folders(paths, &host, port, &user, &password).map_err(|e| {
-        eprintln!("{e}. Nothing was saved.");
+        eprintln!("Connection failed: {e}. Nothing was saved.");
         ExitCode::FAILURE
     })?;
     println!("Connected. {} folders:", folders.len());
@@ -135,6 +136,11 @@ fn add_mail(paths: &Paths) -> Result<(), ExitCode> {
 
 fn add_calendar(paths: &Paths) -> Result<(), ExitCode> {
     need_tty()?;
+    let env = read_env_file(&settings::env_file(paths));
+    if env.get("CALDAV_USER").or_else(|| env.get("IMAP_USER")).is_none_or(|u| u.is_empty()) {
+        eprintln!("Run `life add mail` first (calendars use the same account).");
+        return Err(ExitCode::from(2));
+    }
     let existing = sources::view(paths).calendars.first().cloned().unwrap_or_default();
     let base = url::Url::parse(&existing)
         .map(|u| format!("{}://{}/", u.scheme(), u.host_str().unwrap_or("")))
@@ -149,7 +155,7 @@ fn add_calendar(paths: &Paths) -> Result<(), ExitCode> {
         ExitCode::FAILURE
     })?;
     let urls: Vec<String> = cals.iter().map(|c| c.url.clone()).collect();
-    let labels: Vec<String> = cals.iter().map(|c| c.name.clone()).collect();
+    let labels: Vec<String> = cals.iter().map(|c| format!("{}  ({})", c.name, c.components)).collect();
     let defaults: Vec<String> = cals.iter().filter(|c| c.chosen).map(|c| c.url.clone()).collect();
     let chosen = choose(&urls, &labels, &defaults, "Calendars to collect")?;
     if chosen.is_empty() {

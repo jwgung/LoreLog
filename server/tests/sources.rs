@@ -61,6 +61,28 @@ fn no_password_keeps_the_stored_one_and_none_at_all_is_refused() {
     let env = read_env_file(&p.conf.join("env"));
     assert_eq!(env.get("IMAP_PASSWORD").map(String::as_str), Some("pw-1"));
     assert_eq!(sources::view(&p).mail.unwrap().folders, ["INBOX"]);
+    let mut elsewhere = mail(None);
+    elsewhere.host = "imap.other".into();
+    assert!(sources::save_mail(&p, &elsewhere).is_err(), "the stored password is not given to another server");
+    let mut other_port = mail(None);
+    other_port.port = 143;
+    assert!(sources::save_mail(&p, &other_port).is_err());
+}
+
+#[test]
+fn a_line_break_cannot_sneak_in_another_setting() {
+    let (_d, p) = paths();
+    let mut m = mail(Some("pw\nIMAP_HOST=evil"));
+    assert!(sources::save_mail(&p, &m).is_err());
+    m.password = Some("pw".into());
+    m.user = "me\rx".into();
+    assert!(sources::save_mail(&p, &m).is_err());
+    let bad = Models {
+        chat_url: "http://h/v1".into(),
+        chat_model: "m\nLIFE_LLM_URL=http://evil".into(),
+        ..Models::default()
+    };
+    assert!(host::save_models(&p, &bad).is_err());
 }
 
 #[test]

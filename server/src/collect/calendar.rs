@@ -356,11 +356,19 @@ fn shown(url: &str) -> String {
         .unwrap_or_else(|_| "(not a URL)".into())
 }
 
-/// CalDAV discovery: principal -> calendar home -> calendars. -> [(name, url, components)]
+/// `href` (as a CalDAV server returns it) against `at`, if the result is on `base`'s server (scheme, host, port).
+/// The account's password goes with every request, so an address the server names elsewhere is never followed.
+pub fn same_server(base: &str, at: &str, href: &str) -> Option<String> {
+    let origin = |u: &url::Url| u.origin().ascii_serialization();
+    let b = url::Url::parse(base).ok()?;
+    let joined = url::Url::parse(at).ok()?.join(href).ok()?;
+    (origin(&joined) == origin(&b)).then(|| joined.to_string())
+}
+
+/// CalDAV discovery: principal -> calendar home -> calendars, all on `base`'s server. -> [(name, url, components)]
 pub fn list_calendars(base: &str, acct: &Account) -> Result<Vec<(String, String, String)>, String> {
-    let join = |b: &str, h: &str| {
-        url::Url::parse(b).and_then(|u| u.join(h)).map(|u| u.to_string()).unwrap_or_else(|_| h.to_string())
-    };
+    check_url(base)?;
+    let join = |b: &str, h: &str| same_server(base, b, h);
     let step = |what: &str, url: &str, props: &str, depth: &str| -> Option<String> {
         match propfind(url, acct, props, depth) {
             Ok(x) => Some(x),
@@ -376,21 +384,22 @@ pub fn list_calendars(base: &str, acct: &Account) -> Result<Vec<(String, String,
         o.descendants().find(|n| n.has_tag_name((DAV, "href"))).and_then(|n| n.text()).map(str::to_string)
     };
     let mut home = None;
-    for start in [base.to_string(), join(base, "/.well-known/caldav"), join(base, "/")] {
+    let starts = [Some(base.to_string()), join(base, "/.well-known/caldav"), join(base, "/")];
+    for start in starts.into_iter().flatten() {
         let Some(xml) = step("discover", &start, "<d:current-user-principal/><c:calendar-home-set/>", "0") else {
             continue;
         };
         let mut at = start.clone();
         let mut h = find(&xml, CALDAV, "calendar-home-set");
         if h.is_none()
-            && let Some(p) = find(&xml, DAV, "current-user-principal")
+            && let Some(p) = find(&xml, DAV, "current-user-principal").and_then(|p| join(&start, &p))
         {
-            at = join(&start, &p);
+            at = p;
             h = step("principal", &at, "<c:calendar-home-set/>", "0")
                 .and_then(|x| find(&x, CALDAV, "calendar-home-set"));
         }
-        if let Some(h) = h {
-            home = Some(join(&at, &h));
+        if let Some(h) = h.and_then(|h| join(&at, &h)) {
+            home = Some(h);
             break;
         }
     }
@@ -418,8 +427,8 @@ pub fn list_calendars(base: &str, acct: &Account) -> Result<Vec<(String, String,
             .and_then(|n| n.text())
             .unwrap_or("(unnamed)")
             .to_string();
-        let href = text_of(r, DAV, "href", false);
-        out.push((name, join(&home, &href), if comps.is_empty() { "?".into() } else { comps.join(",") }));
+        let Some(url) = join(&home, &text_of(r, DAV, "href", false)) else { continue }; // another server's: not ours
+        out.push((name, url, if comps.is_empty() { "?".into() } else { comps.join(",") }));
     }
     Ok(out)
 }
@@ -479,6 +488,17 @@ pub fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discovery_follows_only_addresses_on_the_same_server() {
+        let base = "https://cal.example/dav/";
+        assert_eq!(same_server(base, base, "/principals/me/").as_deref(), Some("https://cal.example/principals/me/"));
+        assert_eq!(same_server(base, base, "home/").as_deref(), Some("https://cal.example/dav/home/"));
+        assert_eq!(same_server(base, base, "https://evil.example/steal/"), None, "another host");
+        assert_eq!(same_server(base, base, "http://cal.example/x/"), None, "the same host without TLS");
+        assert_eq!(same_server(base, base, "https://cal.example:8443/x/"), None, "another port");
+        assert!(list_calendars("http://cal.example/", &Account { user: "u".into(), password: "p".into() }).is_err());
+    }
 
     #[test]
     fn an_event_is_parsed_and_rendered_like_the_calendar_plugin_notes() {
