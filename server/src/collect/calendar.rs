@@ -460,7 +460,7 @@ pub fn apply(
                     continue;
                 }
                 if !dry {
-                    fs::write(path, &note)?;
+                    crate::fsutil::write_private_atomic(path, note.as_bytes())?; // 0600, like every record
                 }
                 counts.updated += 1;
             } else {
@@ -472,7 +472,7 @@ pub fn apply(
                 }
                 if !dry {
                     fs::create_dir_all(f.parent().unwrap_or(vault))?;
-                    fs::write(&f, &note)?;
+                    crate::fsutil::write_private_atomic(&f, note.as_bytes())?;
                     known.insert(key, (f, etag.clone()));
                 }
                 counts.created += 1;

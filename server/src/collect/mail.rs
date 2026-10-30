@@ -478,7 +478,7 @@ pub fn write_note(vault: &Path, rel: &str, note: &str) -> std::io::Result<PathBu
         n += 1;
     }
     fs::create_dir_all(f.parent().unwrap_or(vault))?;
-    fs::write(&f, note)?;
+    crate::fsutil::write_private_atomic(&f, note.as_bytes())?; // a mail is the user's own: 0600, like every record
     Ok(f)
 }
 
