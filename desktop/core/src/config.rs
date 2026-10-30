@@ -36,7 +36,7 @@ pub enum Mode {
     Connect,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// Where the vault lives; None until the user chooses on the first run.
@@ -69,6 +69,18 @@ pub struct Config {
     pub hide_title_apps: Vec<String>,
     /// A title containing one of these (case-insensitive) is replaced too: private browsing windows.
     pub hide_title_contains: Vec<String>,
+}
+
+impl std::fmt::Debug for Config {
+    /// Everything but the token.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("mode", &self.mode)
+            .field("url", &self.url)
+            .field("token", &"<hidden>")
+            .field("watch_dirs", &self.watch_dirs)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for Config {
@@ -136,15 +148,23 @@ pub fn load() -> Result<Config, String> {
     Ok(cfg)
 }
 
+/// Write through a temp file that is 0600 from the moment it exists (the token is never readable by others, not even
+/// briefly), then rename it over the old one.
 fn write_private(path: &PathBuf, text: &str) -> Result<(), String> {
+    use std::io::Write;
     std::fs::create_dir_all(home()).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
+    let _ = std::fs::remove_file(&tmp); // a leftover from an interrupted write
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
     }
+    let mut f = o.open(&tmp).map_err(|e| e.to_string())?;
+    f.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+    drop(f);
     std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 

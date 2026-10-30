@@ -19,6 +19,12 @@ use serde::Serialize;
 const SYNC_EVERY: Duration = Duration::from_secs(3600);
 const TAILNET_RETRY: Duration = Duration::from_secs(30);
 const LOG_MAX: u64 = 5 * 1024 * 1024;
+/// The library's log sink keeps only targets under `life_server` (see life_server::logging).
+const LOG_TARGET: &str = "life_server::desktop";
+
+fn locked<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// Where the vault is: the server's places on this OS; notes in the user's chosen folder, else the app's own.
 pub fn paths(cfg: &Config) -> Paths {
@@ -42,10 +48,18 @@ fn log_to_file(data: &Path) {
     });
 }
 
-/// This PC's tailnet addresses, if Tailscale is up.
+/// This PC's tailnet addresses, if Tailscale is up: tailnet-range addresses on the Tailscale interface only
+/// (`tailscale0` on Linux, the "Tailscale" adapter on Windows). 100.64.0.0/10 is also carrier-grade NAT, so an address
+/// in that range on another interface is not the tailnet and is never listened on.
 fn tailnet_addrs() -> Vec<IpAddr> {
     let mut out: Vec<IpAddr> = if_addrs::get_if_addrs()
-        .map(|ifs| ifs.into_iter().map(|i| i.ip()).filter(|ip| host::is_tailnet_ip(*ip)).collect())
+        .map(|ifs| {
+            ifs.into_iter()
+                .filter(|i| i.name.to_lowercase().contains("tailscale"))
+                .map(|i| i.ip())
+                .filter(|ip| host::is_tailnet_ip(*ip))
+                .collect()
+        })
         .unwrap_or_default();
     out.sort();
     out.dedup();
@@ -54,7 +68,14 @@ fn tailnet_addrs() -> Vec<IpAddr> {
 
 /// This PC's name on the tailnet (`pc.tailnet.ts.net`), asked from the tailscale command if it is there.
 fn tailnet_name() -> Option<String> {
-    let mut cmd = std::process::Command::new("tailscale");
+    // the installed command first (a `tailscale` earlier on PATH is not asked), then PATH
+    let installed = if cfg!(windows) {
+        std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("Tailscale").join("tailscale.exe"))
+    } else {
+        None
+    };
+    let program = installed.filter(|p| p.is_file()).unwrap_or_else(|| PathBuf::from("tailscale"));
+    let mut cmd = std::process::Command::new(program);
     cmd.args(["status", "--json"]);
     #[cfg(windows)]
     {
@@ -133,16 +154,17 @@ impl Hosting {
     fn keep_tailnet(&self, stop: Arc<AtomicBool>) {
         let (rt, app, port, running) = (self.rt.handle().clone(), self.app.clone(), self.port, self.running.clone());
         std::thread::spawn(move || {
+            // an address is tried once: one that cannot be bound (port taken, refused) is reported, not retried
             let mut tried: Vec<IpAddr> = Vec::new();
             while !stop.load(Ordering::SeqCst) {
                 let fresh: Vec<IpAddr> = tailnet_addrs().into_iter().filter(|a| !tried.contains(a)).collect();
                 if !fresh.is_empty() {
                     let r = host::start(&rt, app.clone(), port, &fresh);
                     for (ip, why) in r.failed() {
-                        log::warn!(target: "life_server::desktop", "cannot listen on {ip}:{port}: {why}");
+                        log::warn!(target: LOG_TARGET, "cannot listen on {ip}:{port}: {why}");
                     }
-                    tried.extend(r.listening().iter().map(|a| a.ip()));
-                    running.lock().unwrap_or_else(|e| e.into_inner()).push(r);
+                    tried.extend(fresh);
+                    locked(&running).push(r);
                 }
                 sleep_unless(&stop, TAILNET_RETRY);
             }
@@ -155,13 +177,13 @@ impl Hosting {
         std::thread::spawn(move || {
             loop {
                 syncing.store(true, Ordering::SeqCst);
-                let r = sync::sync(&paths, false, &mut |job, outcome, lines| {
+                // nothing configured yet is fine: the user adds mail or a calendar in the settings
+                let _ = sync::sync(&paths, false, &mut |job, outcome, lines| {
                     if outcome != sync::Outcome::Ok {
-                        log::warn!(target: "life_server::desktop", "{}: {}", job.name(), sync::detail(outcome, lines));
+                        log::warn!(target: LOG_TARGET, "{}: {}", job.name(), sync::detail(outcome, lines));
                     }
                 });
                 syncing.store(false, Ordering::SeqCst);
-                let _ = r; // nothing configured yet is fine: the user adds mail or a calendar in the settings
                 let until = Instant::now() + SYNC_EVERY;
                 loop {
                     if stop.load(Ordering::SeqCst) {
@@ -197,7 +219,7 @@ impl Hosting {
     }
 
     pub fn info(&self) -> Info {
-        let running = self.running.lock().unwrap_or_else(|e| e.into_inner());
+        let running = locked(&self.running);
         let listening: Vec<String> = running.iter().flat_map(|r| r.listening().iter().map(|a| a.to_string())).collect();
         let failed = running.iter().flat_map(|r| r.failed().iter().map(|(ip, w)| format!("{ip}: {w}"))).collect();
         let on_tailnet = running.iter().flat_map(|r| r.listening()).find(|a| host::is_tailnet_ip(a.ip())).copied();
@@ -216,7 +238,7 @@ impl Hosting {
 
     /// Stop listening (requests in flight finish). The sync and tailnet threads end with the app's stop flag.
     pub fn stop(&self) {
-        for r in self.running.lock().unwrap_or_else(|e| e.into_inner()).iter() {
+        for r in locked(&self.running).iter() {
             r.stop();
         }
     }

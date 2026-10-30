@@ -46,18 +46,6 @@ pub struct App {
 }
 
 impl App {
-    /// An app that talks to the model and speech servers named in the environment.
-    pub fn new(paths: Paths, token: &str, cls: &str, max_bytes: usize) -> App {
-        App::with(
-            paths,
-            token,
-            cls,
-            max_bytes,
-            Arc::new(crate::llm::Http::from_env()),
-            Arc::new(crate::llm::HttpSpeech::from_env()),
-        )
-    }
-
     pub fn with(
         paths: Paths,
         token: &str,

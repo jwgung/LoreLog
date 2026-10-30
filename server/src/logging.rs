@@ -11,6 +11,8 @@ impl log::Log for Sink {
     }
 
     fn log(&self, r: &log::Record) {
+        // only this library's notes (other crates in the same program log too); a host adding its own notes uses a
+        // target under `life_server` (e.g. `life_server::desktop`)
         if self.enabled(r.metadata()) && r.target().starts_with("life_server") {
             (self.0)(&r.args().to_string());
         }

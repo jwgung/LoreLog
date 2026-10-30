@@ -40,9 +40,13 @@ fn ingest_settings_have_the_old_defaults_and_refuse_a_short_token() {
 #[test]
 fn model_addresses_come_from_the_file_and_the_environment_wins() {
     let file = map(&[("LIFE_LLM_URL", "http://file/v1"), ("LIFE_LLM_MODEL", "m1")]);
-    let env = map(&[("LIFE_LLM_MODEL", "m2"), ("LIFE_ASR_URL", "")]);
+    let env = map(&[("LIFE_LLM_MODEL", "m2"), ("LIFE_ASR_URL", ""), ("LIFE_LLM_URL", "")]);
     let m = Models::from_maps(&file, &env);
-    assert_eq!((m.chat_url.as_str(), m.chat_model.as_str()), ("http://file/v1", "m2"));
+    assert_eq!(
+        (m.chat_url.as_str(), m.chat_model.as_str()),
+        ("http://file/v1", "m2"),
+        "an empty variable hides nothing"
+    );
     assert_eq!((m.asr_url.as_str(), m.asr_model.as_str()), ("", ""), "an empty variable is not a setting");
 }
 

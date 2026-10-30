@@ -48,9 +48,10 @@ Omni 데스크톱 클라이언트(`dev` 브랜치의 `pc_activity`)를 읽고 �
 
 ## 금고를 어디에 두나 (처음 켤 때)
 처음 켜면 고른다(`config.toml`의 `mode`, 결정은 `docs/adr/0002-vault-on-the-users-device.md`).
-- **이 PC에 두기**(`host`): 앱이 서버 라이브러리(`life-server`)를 품는다(`shell/src-tauri/src/host.rs`). 데이터와 설정은 서버가 이 OS에서 쓰는 자리에 둔다(Windows `%LOCALAPPDATA%\life`, `%APPDATA%\vault-sync`). 그래서 같은 PC의 `life` 명령줄 도구도 같은 금고를 본다. 메일·일정 노트는 `config.toml`의 `vault_dir`(예: Obsidian 볼트)에, 비어 있으면 `%LOCALAPPDATA%\life\notes`에 쓴다.
+- **이 PC에 두기**(`host`): 앱이 서버 라이브러리(`life-server`)를 품는다(`shell/src-tauri/src/host.rs`). 데이터와 설정은 서버가 이 OS에서 쓰는 자리에 둔다(Windows `%LOCALAPPDATA%\life`, `%APPDATA%\vault-sync`). 그래서 같은 PC의 `life` 명령줄 도구도 같은 금고를 본다(명령줄의 `LIFE_*_DIR` 같은 위치 바꾸기는 앱이 따르지 않는다). 메일·일정 노트는 `config.toml`의 `vault_dir`(예: Obsidian 볼트)에, 비어 있으면 `%LOCALAPPDATA%\life\notes`에 쓴다.
   - 받기: loopback(`127.0.0.1:<포트>`, 이 앱의 화면과 PC 수집기)과 tailnet 주소(폰·다른 PC). 포트는 `ingest.env`의 `INGEST_PORT`(기본 8765), 토큰은 처음 켤 때 `ingest.env`에 만든다. Tailscale이 앱보다 늦게 올라와도 30초마다 다시 보고 tailnet 주소에서도 받기 시작한다. Windows는 처음 tailnet 주소로 받을 때 방화벽 허용을 묻는다.
-  - 다른 기기에 넣을 주소는 `http://<PC의 tailnet 이름>:<포트>`. tailnet 안의 HTTP는 WireGuard로 이미 암호화된다. HTTPS를 원하면 사용자가 `tailscale serve`로 붙인다.
+  - 다른 기기에 넣을 주소는 `http://<PC의 tailnet 이름>:<포트>`. tailnet 안의 HTTP는 WireGuard로 이미 암호화된다. HTTPS를 원하면 사용자가 `tailscale serve`로 붙인다. tailnet 안에서는 토큰이 유일한 문이므로, 다른 사람과 tailnet을 함께 쓰면 Tailscale ACL로 이 포트에 닿을 기기를 좁힌다. 받는 주소는 Tailscale 인터페이스의 tailnet 주소뿐이다(같은 100.64.0.0/10 대역이라도 다른 인터페이스, 예컨대 통신사 CGNAT는 쓰지 않는다).
+  - 서버를 띄우지 못하면(포트를 다른 프로그램이 쓰는 등) 처음 화면에 그 이유를 보여 준다. 금고를 이 PC에 둔 동안 설정의 서버 주소는 바꿀 수 없다.
   - 동기화: 켤 때 한 번, 그 뒤 1시간마다 메일·첨부·일정을 가져오고 사서 색인을 갱신한다(`life sync`와 같은 함수). 결과는 `life status`와 같은 `status.json`.
   - 모델: `ingest.env`의 `LIFE_LLM_URL`·`LIFE_LLM_MODEL`·`LIFE_ASR_URL`·`LIFE_ASR_MODEL`. 비어 있으면 대화·음성이 실패한다(설정 화면은 다음 단계).
   - 서버의 기록(받은 줄, 실패, 사서가 건너뛴 파일)은 `%LOCALAPPDATA%\life\desktop.log`.

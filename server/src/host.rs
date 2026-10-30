@@ -90,7 +90,8 @@ impl Models {
     }
 
     pub fn from_maps(file: &BTreeMap<String, String>, env: &BTreeMap<String, String>) -> Models {
-        let get = |k: &str| env.get(k).or_else(|| file.get(k)).filter(|v| !v.is_empty()).cloned().unwrap_or_default();
+        let set = |m: &BTreeMap<String, String>, k: &str| m.get(k).filter(|v| !v.is_empty()).cloned();
+        let get = |k: &str| set(env, k).or_else(|| set(file, k)).unwrap_or_default();
         Models {
             chat_url: get("LIFE_LLM_URL"),
             chat_model: get("LIFE_LLM_MODEL"),
