@@ -672,6 +672,13 @@ impl Librarian {
         Ok(out)
     }
 
+    /// The thread an indexed file belongs to (a mail's `mail:<id>`); None for a file not indexed or not in a thread.
+    pub fn thread_of(&self, file: &str) -> Option<String> {
+        self.db
+            .query_row("select thread from docs where file = ? and thread is not null limit 1", [file], |r| r.get(0))
+            .ok()
+    }
+
     /// How much is indexed; `outdated` for an index of another version or one never filled (nothing is counted then:
     /// its tables may not be these).
     pub fn stats(&self) -> Value {

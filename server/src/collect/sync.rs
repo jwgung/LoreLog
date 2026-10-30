@@ -441,6 +441,10 @@ pub fn librarian(paths: &Paths, rebuild: bool, out: Out) -> Outcome {
         let mut lib = Librarian::open(paths, None, Duration::from_secs(30))?;
         let t = Instant::now();
         let r = lib.update(rebuild)?;
+        let today = Local::now().format("%Y-%m-%d").to_string();
+        if let Err(e) = crate::librarian::asks::prune(paths, &today, crate::librarian::asks::KEEP_DAYS) {
+            log::warn!("dropping old questions failed: {:?}", e.kind()); // the index is up to date either way
+        }
         let skipped =
             if r.skipped > 0 { format!(", skipped {} (file names on stderr)", r.skipped) } else { String::new() };
         Ok(format!(

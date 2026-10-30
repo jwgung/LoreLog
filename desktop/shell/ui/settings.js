@@ -44,6 +44,8 @@ async function loadHost() {
     $("hostNote").textContent = "받는 곳: " + info.listening.join(", ") + failed + " · 노트: " + info.notes_dir;
   }
   await Promise.all([loadSources(), loadModels(), loadSync()]);
+  try { $("asks").checked = await invoke("asks_get"); }
+  catch (e) { $("asks").disabled = true; $("asksMsg").textContent = "설정을 읽지 못했습니다: " + e; }
 }
 
 $("showToken").onclick = () => {
@@ -199,6 +201,12 @@ async function loadSync() {
 $("syncNow").onclick = async () => {
   try { await invoke("sync_now"); say("syncMsg", "동기화하는 중…", true); setTimeout(loadSync, 1500); }
   catch (e) { say("syncMsg", String(e), false); }
+};
+
+$("asks").onchange = async () => {
+  const on = $("asks").checked;
+  try { await invoke("asks_set", { on }); $("asksMsg").textContent = on ? "질문을 남깁니다." : "질문을 남기지 않습니다. 이미 남은 것은 90일이 지나면 지워집니다."; }
+  catch (e) { $("asks").checked = !on; $("asksMsg").textContent = String(e); }
 };
 
 // ---------- connecting to a server elsewhere ----------

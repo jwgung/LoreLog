@@ -128,17 +128,14 @@ impl Models {
 /// The other settings in the file are kept.
 pub fn ensure_token(paths: &Paths) -> std::io::Result<String> {
     let file = ingest_env(paths);
-    let mut cfg = read_env_file(&file);
+    let cfg = read_env_file(&file);
     if let Some(t) = cfg.get("INGEST_TOKEN").filter(|t| t.chars().count() >= MIN_TOKEN) {
         return Ok(t.clone());
     }
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).map_err(|e| std::io::Error::other(format!("no randomness: {e}")))?;
     let token = hex::encode(bytes);
-    cfg.insert("INGEST_TOKEN".into(), token.clone());
-    let text: String = cfg.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
-    crate::fsutil::ensure_private_dir(&paths.conf)?;
-    crate::fsutil::write_private_atomic(&file, text.as_bytes())?;
+    crate::config::set_env_keys(&file, &[("INGEST_TOKEN", Some(&token))]).map_err(std::io::Error::other)?;
     Ok(token)
 }
 
@@ -239,21 +236,9 @@ pub fn save_models(paths: &Paths, m: &Models) -> Result<(), String> {
         }
     }
     let values = [&m.chat_url, &m.chat_model, &m.asr_url, &m.asr_model];
-    if !values.iter().all(|v| crate::config::env_value_ok(v)) {
-        return Err("줄바꿈 같은 제어 문자는 넣을 수 없습니다".into());
-    }
-    let file = ingest_env(paths);
-    let mut cfg = read_env_file(&file);
-    for (k, v) in MODEL_KEYS.iter().zip(values) {
-        match v.trim() {
-            "" => cfg.remove(*k),
-            v => cfg.insert(k.to_string(), v.to_string()),
-        };
-    }
-    let text: String = cfg.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
-    let fail = |e: std::io::Error| format!("저장하지 못했습니다: {:?}", e.kind());
-    crate::fsutil::ensure_private_dir(&paths.conf).map_err(fail)?;
-    crate::fsutil::write_private_atomic(&file, text.as_bytes()).map_err(fail)
+    let keys: Vec<(&str, Option<&str>)> =
+        MODEL_KEYS.iter().zip(values).map(|(k, v)| (*k, Some(v.trim()).filter(|v| !v.is_empty()))).collect();
+    crate::config::set_env_keys(&ingest_env(paths), &keys)
 }
 
 /// The chat and speech models of a running server, changeable without restarting it (the settings screen saves new
