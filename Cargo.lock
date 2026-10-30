@@ -2246,6 +2246,7 @@ dependencies = [
  "chrono",
  "dirs",
  "hex",
+ "indexmap 2.14.2",
  "percent-encoding",
  "regex",
  "rustls",

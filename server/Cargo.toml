@@ -17,6 +17,7 @@ axum-server = { version = "0.8.0", features = ["tls-rustls"] }
 chrono = "0.4.45"
 dirs = "7.0.0"
 hex = "0.4.3"
+indexmap = "2.14.2"
 percent-encoding = "2.3.2"
 regex = "1.13.1"
 rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs"] }
