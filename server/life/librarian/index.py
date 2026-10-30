@@ -9,7 +9,8 @@ matches on top.
 
 Only what changed is read again. Phone files are the exception that needs care: whether a day's voice is the user's
 depends on conversation states that can arrive in another day's file. The index keeps every conversation state it has
-read (table convs); when a state changes, the days that conversation spans are read again, and nothing else (a span
+read (table convs, until its file is removed; a phone file that cannot be read again keeps the states last read from it,
+since the raw files only grow); when a state changes, the days that conversation spans are read again, and nothing else (a span
 longer than records.MAX_CONVERSATION_DAYS cannot be believed, so then every phone file is read again). When the
 allowed senders change, every phone file is read again.
 
@@ -221,12 +222,14 @@ class Librarian:
             dirty |= {path for path, (kind, _) in found.items() if kind == "lorelog"}
         return dirty, removed
 
-    def _update_phone(self, found, dirty, removed, allow):
+    def _update_phone(self, found, dirty, allow):
         """Read the changed phone files once, keep their conversation states, read again the days whose
         conversations changed, and index them all. -> (indexed, skipped)"""
         phone_paths = {path for path, (kind, _) in found.items() if kind == "lorelog"}
         todo = {path for path in dirty if path in phone_paths}
-        gone = [path for path in removed if path.endswith(".ndjson") and "/raw/lorelog/" in path]
+        # files whose conversation states are kept but that are gone (also one skipped before it went, which has no
+        # files row any more and so is not among `removed`)
+        gone = [path for (path,) in self.db.execute("select distinct file from convs") if path not in phone_paths]
         if not todo and not gone:
             return 0, 0
         before = self._convs()
@@ -239,8 +242,9 @@ class Librarian:
                 try:
                     read[path] = (_stamp(p), read_records(p))
                 except Exception as e:  # noqa: BLE001 - one unreadable file must not stop the rest
+                    # its conversation states stay as last read: the raw files only grow, so they are still the best
+                    # we know, and dropping them could bring back an older state (a voice the user took back)
                     self._skip(path, p, e)
-                    self.db.execute("delete from convs where file = ?", (path,))
                     skipped += 1
                     continue
                 self.db.execute("delete from convs where file = ?", (path,))
@@ -274,8 +278,7 @@ class Librarian:
             try:
                 new = records.lorelog_docs(_day_file(path), lines, after, allow)
             except Exception as e:  # noqa: BLE001 - one file that cannot be understood must not stop the rest
-                self._skip(path, found[path][1], e)
-                self.db.execute("delete from convs where file = ?", (path,))
+                self._skip(path, found[path][1], e)  # its conversation states, just read, stay
                 skipped += 1
                 continue
             self._keep(path, "lorelog", stamp, new)
@@ -300,7 +303,7 @@ class Librarian:
             for path in removed:
                 self._forget(path)
                 self.db.execute("delete from files where path = ?", (path,))
-            indexed, skipped = self._update_phone(found, dirty, removed, allow)
+            indexed, skipped = self._update_phone(found, dirty, allow)
             for path in sorted(dirty):
                 kind, p = found[path]
                 if kind == "lorelog":

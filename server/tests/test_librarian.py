@@ -208,6 +208,42 @@ class Search(unittest.TestCase):
         self.assertEqual(self.find("나중확인대화하마"), [])
 
     @unittest.skipIf(os.name != "posix" or os.geteuid() == 0, "needs file permissions that bind the test user")
+    def test_a_later_conversation_state_that_cannot_be_read_again_is_not_forgotten(self):
+        lorelog("2024-06-01", [{"type": "voice", "ts": ms(2024, 6, 1, 9), "text": "비밀회의코끼리"},
+                               {"type": "conversation", "id": "lib-later", "start_ms": ms(2024, 6, 1, 8),
+                                "end_ms": ms(2024, 6, 1, 10), "participants": "팀", "status": "tagged"}])
+        lorelog("2024-06-02", [{"type": "conversation", "id": "lib-later", "start_ms": ms(2024, 6, 1, 8),
+                                "end_ms": ms(2024, 6, 1, 10), "participants": "팀", "status": "ambient"}])
+        self.lib.update()
+        self.assertEqual(self.find("비밀회의코끼리"), [])
+        path = DATA / "raw/lorelog" / "2024-06-02.ndjson"
+        senders.save_allow(senders.load_allow() | {"카카오톡: 다시읽기용"})  # every phone file is read again
+        path.chmod(0)
+        try:
+            self.assertGreater(self.lib.update()["skipped"], 0)
+            self.assertEqual(self.find("비밀회의코끼리"), [], "the last state read still holds: the voice stays out")
+        finally:
+            path.chmod(0o600)
+        lorelog("2024-06-03", [{"type": "voice", "ts": ms(2024, 6, 3, 9), "text": "고아상태코뿔소"},
+                               {"type": "conversation", "id": "lib-later2", "start_ms": ms(2024, 6, 3, 8),
+                                "end_ms": ms(2024, 6, 3, 10), "participants": "팀", "status": "ambient"}])
+        later = DATA / "raw/lorelog" / "2024-06-05.ndjson"
+        lorelog("2024-06-05", [{"type": "conversation", "id": "lib-later2", "start_ms": ms(2024, 6, 3, 8),
+                                "end_ms": ms(2024, 6, 3, 10), "participants": "팀", "status": "tagged"}])
+        self.lib.update()
+        self.assertTrue(self.find("고아상태코뿔소"))
+        senders.save_allow(senders.load_allow() | {"카카오톡: 다시읽기용2"})
+        later.chmod(0)
+        try:
+            self.lib.update()  # 06-05 cannot be read: its tagged state, last read, still holds
+            self.assertTrue(self.find("고아상태코뿔소"))
+        finally:
+            later.chmod(0o600)
+        later.unlink()  # then it is removed: the state it held goes with it, as the diary sees it
+        self.lib.update()
+        self.assertEqual(self.find("고아상태코뿔소"), [], "a removed file's states do not linger in the index")
+
+    @unittest.skipIf(os.name != "posix" or os.geteuid() == 0, "needs file permissions that bind the test user")
     def test_a_phone_file_that_cannot_be_read_after_taking_a_sender_back_is_not_left_searchable(self):
         senders.save_allow({"카카오톡: 철회대상"})
         lorelog("2024-03-16", [{"type": "notification", "pkg": "com.kakao.talk", "label": "카카오톡", "title": "철회대상",
