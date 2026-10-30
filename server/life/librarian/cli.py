@@ -4,9 +4,11 @@ The index is a copy at <data>/librarian.sqlite (mode 600). Only records the diar
 messengers the user allowed, voice in conversations the diary counts as the user's. Deleting the file loses nothing.
 """
 import argparse
+import sys
 import time
 
 from life.librarian import Librarian
+from life.librarian.index import OutdatedIndex
 
 
 def parser():
@@ -30,18 +32,28 @@ def update(lib, reset=False):
     print(f"indexed {r['indexed']} files, removed {r['removed']}{skipped}, {r['docs']} documents ({time.time() - t:.1f}s)")
 
 
+OUTDATED = "the index is from another version and is not searched: run `life-librarian update` first"
+
+
 def search(lib, words, limit):
-    hits = lib.search(" ".join(words), limit=limit)
+    try:
+        hits = lib.search(" ".join(words), limit=limit)
+    except OutdatedIndex:
+        print(OUTDATED, file=sys.stderr)
+        return 1
     if not hits:
         print("nothing found")
     for h in hits:
         span = f"  (thread of {h['count']}, {h['first']}~{h['last']})" if h["count"] > 1 else ""
         print(f"{h['day']}  [{h['kind']}] {h['title']}{span}\n    {h['snippet']}\n    {h['ref']}")
+    return 0
 
 
 def stats(lib):
     s = lib.stats()
     print(f"{s['docs']} documents from {s['files']} files: " + ", ".join(f"{k} {v}" for k, v in sorted(s["by_source"].items())))
+    if s["outdated"]:
+        print(OUTDATED, file=sys.stderr)
 
 
 def main(argv=None):
@@ -51,7 +63,7 @@ def main(argv=None):
             # rebuild empties and fills the index in one transaction: a search meanwhile sees the old index
             update(lib, reset=args.cmd == "rebuild")
         elif args.cmd == "search":
-            search(lib, args.words, args.limit)
+            return search(lib, args.words, args.limit)
         else:
             stats(lib)
     return 0

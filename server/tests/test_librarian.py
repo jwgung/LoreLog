@@ -15,7 +15,7 @@ import _env  # noqa: F401  (sets up the throwaway vault first)
 from life.assistant import senders
 from life.assistant.config import DATA, VAULT
 from life.librarian import Librarian, records, terms
-from life.librarian.index import to_query
+from life.librarian.index import OutdatedIndex, to_query
 
 
 def ms(y, m, d, h=9, mi=0):
@@ -243,16 +243,30 @@ class Search(unittest.TestCase):
         self.lib.update()
         self.assertEqual([h["day"] for h in self.find("숫자날짜올빼미")], ["2024-03-19"])
 
-    def test_an_index_of_another_shape_is_built_again(self):
+    def test_an_index_of_another_shape_is_not_searched_and_is_built_again_in_one_go(self):
         mail("2024-03-18-0900-v.md", "버전", "버전문구다람쥐", "2024-03-18")
         self.lib.update()
         with self.lib.db:
             self.lib.db.execute("update meta set value = 'old' where key = 'schema'")
         self.lib.close()
         self.lib = Librarian(self.lib.path)
-        self.assertEqual(self.find("다람쥐"), [], "the old index is dropped")
+        self.assertGreater(self.lib.db.execute("select count(*) from docs").fetchone()[0], 0,
+                           "opening it does not empty it before it can be filled again")
+        with self.assertRaises(OutdatedIndex, msg="it may hold what the current rules leave out"):
+            self.find("다람쥐")
+        self.assertTrue(self.lib.stats()["outdated"])
         self.lib.update()
+        self.assertFalse(self.lib.stats()["outdated"])
         self.assertTrue(self.find("다람쥐"))
+
+    def test_the_stats_of_an_index_with_other_tables_say_it_is_outdated(self):
+        self.lib.update()
+        with self.lib.db:
+            self.lib.db.execute("drop table docs")
+            self.lib.db.execute("update meta set value = 'old' where key = 'schema'")
+        self.assertTrue(self.lib.stats()["outdated"])
+        self.lib.update()
+        self.assertFalse(self.lib.stats()["outdated"])
 
     def test_a_long_message_is_cut_to_a_bounded_query(self):
         self.lib.update()
@@ -407,6 +421,58 @@ class Search(unittest.TestCase):
         self.lib.update()
         self.assertTrue(self.find("문어"))
         self.assertEqual(self.find("문어", exclude_day="2024-03-13"), [])
+
+    def test_only_the_given_words_of_a_day_can_be_left_out(self):
+        day = "2024-03-14"
+        mail("2024-03-14-0900-src.md", "출처별", "출처별제외낙타 메일", day)
+        write(DATA / "raw/diary" / f"{day}.ndjson", "\n".join(json.dumps(r, ensure_ascii=False) for r in [
+            {"type": "chat", "ts": ms(2024, 3, 14, 21), "date": day, "role": "user", "text": "출처별제외낙타 말"},
+            {"type": "reflection", "date": day, "reflection": "출처별제외낙타 회고"},
+        ]) + "\n")
+        self.lib.update()
+        hits = self.find("낙타", exclude_day=day, exclude_words=["출처별제외낙타 말"])
+        self.assertEqual(sorted(h["kind"] for h in hits), ["받은 메일", "회고"])
+
+    def test_an_update_reads_the_files_and_the_allowed_senders_under_the_write_lock(self):
+        seen = []
+        real_sources, real_allowed = records.sources, records.allowed
+
+        def sources():
+            seen.append(("sources", self.lib.db.in_transaction))
+            return real_sources()
+
+        def allowed():
+            seen.append(("allowed", self.lib.db.in_transaction))
+            return real_allowed()
+        records.sources, records.allowed = sources, allowed
+        try:
+            self.lib.update()
+        finally:
+            records.sources, records.allowed = real_sources, real_allowed
+        self.assertEqual(seen, [("sources", True), ("allowed", True)])
+
+    def test_a_search_is_not_broken_by_an_update_that_lands_meanwhile(self):
+        path = mail("2024-03-15-1000-b.md", "도중 둘", "검색도중바뀜코알라 둘", "2024-03-15")
+        mail("2024-03-15-0900-a.md", "도중 하나", "검색도중바뀜코알라 하나", "2024-03-15")
+        self.lib.update()
+        other = Librarian(self.lib.path)
+        self.addCleanup(other.close)
+        import life.librarian.index as index
+        real, done = index.snippet, []
+
+        def snippet(text, q):  # another process removes both mails while the first hit is being made
+            if not done:
+                done.append(1)
+                path.unlink()
+                (VAULT / "Mail" / "2024" / "2024-03-15-0900-a.md").unlink()
+                other.update()
+            return real(text, q)
+        index.snippet = snippet
+        try:
+            hits = self.find("코알라")
+        finally:
+            index.snippet = real
+        self.assertEqual(len(hits), 2, "the search sees the index as it was when it started")
 
     def test_the_index_file_is_private(self):
         self.lib.update()

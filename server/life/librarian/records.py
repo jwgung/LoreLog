@@ -204,6 +204,12 @@ def _word(kind, day, text):
     return {"source": "word", "kind": kind, "day": day, "title": kind, "text": text}
 
 
+def word_text(said):
+    """The text of the document a line the user said in the chat becomes (a correction reads "wrong → right")."""
+    pair = split_correction(said)
+    return f"{pair[0]} → {pair[1]}" if pair else said
+
+
 def word_docs(path):
     """What the user said: chat lines, reflections, corrections. A chat line is also saved as a reflection record;
     the same words are indexed once."""
@@ -215,7 +221,7 @@ def word_docs(path):
             pair = split_correction(d["text"])
             if pair:
                 said.add(pair[1].strip())
-                out.append(_word("정정", day, f"{pair[0]} → {pair[1]}"))
+                out.append(_word("정정", day, word_text(d["text"])))
             else:
                 said.add(d["text"].strip())
                 out.append(_word("대화에서 한 말", day, d["text"]))

@@ -13,10 +13,13 @@ read (table convs); when a state changes, the days that conversation spans are r
 longer than records.MAX_CONVERSATION_DAYS cannot be believed, so then every phone file is read again). When the
 allowed senders change, every phone file is read again.
 
-Every update takes the write lock first (BEGIN IMMEDIATE), so `life sync` and a chat request never work from the same
-stale picture. A file that cannot be read (or holds a record that cannot be understood) is skipped and its old
-documents are dropped, so what the index answers is never older than the rules it was built under; the next update
-tries the file again. The index is a copy built from the records: `reset` empties it, `update` builds it again.
+Every update takes the write lock first (BEGIN IMMEDIATE) and only then lists the files and reads the allowed senders,
+so `life sync` and a chat request never work from the same stale picture. A search reads one snapshot of the index.
+An index of another version is not searched (it may hold what the current rules leave out); the next update empties
+and fills it in one transaction. A file that cannot be read (or holds a record that cannot be understood) is skipped
+and its old documents are dropped, so what the index answers is never older than the rules it was built under; the
+next update tries the file again. The index is a copy built from the records: `reset` empties it, `update` builds it
+again.
 """
 import json
 import os
@@ -56,6 +59,11 @@ TABLES = [
 
 def default_path():
     return DATA / "librarian.sqlite"
+
+
+class OutdatedIndex(RuntimeError):
+    """The index was built by another version (other tables or other rules): it is not searched until update()
+    builds it again, because it may hold what the current rules leave out."""
 
 
 def _pieces(word):
@@ -119,8 +127,8 @@ class Librarian:
             os.close(os.open(self.path, os.O_CREAT | os.O_WRONLY, 0o600))
         self.db = sqlite3.connect(self.path, timeout=timeout)
         self.db.execute("pragma journal_mode=wal")
-        if self._version() != SCHEMA_VERSION:
-            self._rebuild_tables(only_if_old=True)
+        if self._version() is None:  # a new file: make the tables. An index of another version is left as it is
+            self._rebuild_tables(only_if_new=True)  # until update() empties and fills it in one transaction
 
     def close(self):
         self.db.close()
@@ -146,12 +154,12 @@ class Librarian:
             self.db.execute(stmt)
         self.db.execute("insert into meta(key, value) values ('schema', ?)", (SCHEMA_VERSION,))
 
-    def _rebuild_tables(self, only_if_old=False):
+    def _rebuild_tables(self, only_if_new=False):
         """Drop every table and make them again, under the write lock so two processes do not do it at once."""
         self.db.commit()
         self.db.execute("begin immediate")
         try:
-            if only_if_old and self._version() == SCHEMA_VERSION:  # another process did it while we waited
+            if only_if_new and self._version() is not None:  # another process made them while we waited
                 self.db.commit()
                 return
             self._make_tables()
@@ -275,16 +283,18 @@ class Librarian:
         return indexed, skipped
 
     def update(self, reset=False):
-        """Index new and changed files, forget removed ones. With reset, the index is emptied first, in the same
-        transaction, so a search meanwhile sees the old index, never an empty one.
+        """Index new and changed files, forget removed ones. With reset, or when the index is of another version,
+        the index is emptied first, in the same transaction, so a search meanwhile sees the old index, never an empty
+        one. The files and the allowed senders are read under the write lock: an update that committed while this
+        one waited is never overwritten with what was there before it.
         -> {indexed, removed, skipped, docs}"""
-        found = {str(p): (kind, p) for kind, p in records.sources()}
-        allow = records.allowed()  # read once: the documents are made with it and it is what we remember
-        policy = records.policy_stamp(allow)
         self.db.commit()
         self.db.execute("begin immediate")
         try:
-            if reset:
+            found = {str(p): (kind, p) for kind, p in records.sources()}
+            allow = records.allowed()  # read once: the documents are made with it and it is what we remember
+            policy = records.policy_stamp(allow)
+            if reset or self._version() != SCHEMA_VERSION:
                 self._make_tables()
             dirty, removed = self._changes(found, policy)
             for path in removed:
@@ -314,17 +324,36 @@ class Librarian:
     def _thread_span(self, thread):
         return self.db.execute("select count(*), min(day), max(day) from docs where thread = ?", (thread,)).fetchone()
 
-    def search(self, q, limit=10, exclude_day=None):
+    def search(self, q, limit=10, exclude_day=None, exclude_words=None):
         """Documents matching the words of q, best first. The mails of one thread come back as one hit (its
         best-matching mail) with the thread's size and the days it spans, so a long thread does not take every slot;
-        the user's own words take at most MAX_WORD_HITS slots unless nothing else is found.
+        the user's own words take at most MAX_WORD_HITS slots unless nothing else is found. exclude_day leaves out
+        that day's documents; with exclude_words, only that day's words of the user that are among them (lines said in
+        the chat, as the chat log holds them). The search reads one snapshot of the index, so an update that lands
+        meanwhile changes nothing in it. Raises OutdatedIndex for an index of another version.
         -> [{source, kind, day, title, snippet, ref, count, first, last}]"""
         expr = to_query(q or "")
         if not expr:
             return []
+        self.db.commit()
+        self.db.execute("begin")  # one read snapshot (WAL) for every query below
+        try:
+            if self._version() != SCHEMA_VERSION:
+                raise OutdatedIndex(f"index version {self._version()}, expected {SCHEMA_VERSION}: run update")
+            return self._search(expr, q, int(limit), exclude_day, exclude_words)
+        finally:
+            self.db.rollback()  # nothing was written; ends the snapshot
+
+    def _search(self, expr, q, limit, exclude_day, exclude_words):
         sql = "select d.n, d.thread, d.source from fts join docs d on d.n = fts.rowid where fts match ?"
         params = [expr]
-        if exclude_day:
+        if exclude_day and exclude_words is not None:
+            texts = sorted({t for w in exclude_words for t in (w, w.strip(), records.word_text(w))})
+            if texts:  # compared exactly: the documents hold these lines as said, stripped, or as a correction
+                sql += (" and not (d.day = ? and d.source = 'word' and d.text in"
+                        f" ({','.join('?' * len(texts))}))")
+                params += [exclude_day, *texts]
+        elif exclude_day:
             sql += " and d.day != ?"
             params.append(exclude_day)
         sql += " order by fts.rank limit ?"
@@ -334,7 +363,7 @@ class Librarian:
             best.setdefault(thread or f"#{n}", (n, thread, source))
         chosen, spill, words = [], [], 0
         for g in best.values():
-            if len(chosen) >= int(limit):
+            if len(chosen) >= limit:
                 break
             if g[2] == "word":
                 if words >= MAX_WORD_HITS:
@@ -342,7 +371,7 @@ class Librarian:
                     continue
                 words += 1
             chosen.append(g)
-        chosen += spill[:max(0, int(limit) - len(chosen))]
+        chosen += spill[:max(0, limit - len(chosen))]
         out = []
         for n, thread, _ in chosen:
             source, kind, day, title, text, file = self.db.execute(
@@ -353,5 +382,10 @@ class Librarian:
         return out
 
     def stats(self):
+        """How much is indexed; outdated is True for an index of another version (not searched until update, and
+        its tables may not be these, so nothing is counted)."""
+        if self._version() != SCHEMA_VERSION:
+            return {"docs": 0, "by_source": {}, "outdated": True, "files": 0}
         by = dict(self.db.execute("select source, count(*) from docs group by source"))
-        return {"docs": sum(by.values()), "by_source": by, "files": self.db.execute("select count(*) from files").fetchone()[0]}
+        return {"docs": sum(by.values()), "by_source": by, "outdated": False,
+                "files": self.db.execute("select count(*) from files").fetchone()[0]}

@@ -3,6 +3,7 @@ import contextlib
 import importlib.machinery
 import importlib.util
 import io
+import sqlite3
 import unittest
 from pathlib import Path
 
@@ -50,6 +51,25 @@ class Cli(unittest.TestCase):
             with self.assertRaises(SystemExit) as cm, contextlib.redirect_stderr(io.StringIO()):
                 cli.main(argv)
             self.assertEqual(cm.exception.code, 2, argv)
+
+    def test_an_index_of_another_version_is_not_searched_and_says_so(self):
+        run("update")
+        db = sqlite3.connect(default_path())
+        with db:
+            db.execute("update meta set value = 'old' where key = 'schema'")
+        db.close()
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code, out = run("search", "도롱뇽")
+        self.assertEqual(code, 1)
+        self.assertNotIn("명령줄 확인", out)
+        self.assertIn("life-librarian update", err.getvalue())
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            run("stats")
+        self.assertIn("another version", err.getvalue())
+        run("update")
+        self.assertIn("명령줄 확인", run("search", "도롱뇽")[1])
 
 
 class SyncRunsTheLibrarianLast(unittest.TestCase):
