@@ -29,7 +29,7 @@ Rust 라이브러리 crate 하나(`life-server`)와 그 위의 실행 파일들�
 - 사용자가 지난 일을 묻거나 이야기하면 비서가 검색어를 골라 사서에게 묻고, 찾은 기록(오늘 메일 본문 포함, 이미 대화에 들어간 줄은 뺀다)을 사용자의 말 앞에 인용 자료로 붙인다. 대화 기록에는 남기지 않는다. 사용자의 말은 결과 중 최대 2개다. 색인 갱신에 실패하면 이전 색인에서 찾고 최신이 아닐 수 있다고 알린다. 정정할 때와 기분만 말할 때는 묻지 않는다.
 
 ## 설치
-Rust 툴체인(저장소 루트의 `rust-toolchain.toml`)이 필요하다. `deploy/install.sh`가 release로 빌드하고, 실행 파일을 `~/.local/bin/`에 심볼릭 링크로 걸고, `deploy/systemd/`의 유닛을 `~/.config/systemd/user/`에 둔다(바뀌는 파일은 `~/.local/share/life-install-backup/`에 백업).
+Rust 툴체인(저장소 루트의 `rust-toolchain.toml`)이 필요하다. `deploy/install.sh`가 release로 빌드해 실행 파일을 `~/.local/lib/life/bin/`에 복사하고 `~/.local/bin/`에서 링크로 가리키게 하며, `deploy/systemd/`의 유닛을 `~/.config/systemd/user/`에 둔다(이전 실행 파일과 바뀌는 유닛은 `~/.local/share/life-install-backup/`에 백업). 복사해서 두므로, 나중에 어느 체크아웃에서 빌드해도 돌고 있는 서비스는 바뀌지 않는다. 바꾸려면 install.sh를 다시 돌린다.
 
     server/deploy/install.sh
     systemctl --user enable --now life-ingest life-sync.timer   # 처음 한 번

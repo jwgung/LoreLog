@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Build the server (release) and link its binaries into ~/.local/bin, so the systemd units (and your shell) run the
-# code of this checkout. An existing regular file there is moved to a backup folder first; links are re-pointed
-# idempotently. The systemd units in deploy/systemd are copied to ~/.config/systemd/user (the old ones backed up).
+# Build the server (release) and install its binaries: copied into ~/.local/lib/life/bin (so a later build in any
+# checkout does not change what runs) and linked from ~/.local/bin, where the systemd units (and your shell) find them.
+# An existing regular file in ~/.local/bin is moved to a backup folder first; links are re-pointed idempotently. The
+# previous binaries and the systemd units that change are backed up too.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 dest="${HOME}/.local/bin"
+lib="${HOME}/.local/lib/life/bin"
 units="${HOME}/.config/systemd/user"
 backup="${HOME}/.local/share/life-install-backup/$(date +%Y%m%d-%H%M%S)"
 bins=(life life-ingest life-diary life-librarian mail-sync mail-files calendar-sync)
@@ -14,10 +16,15 @@ cd "$repo"
 cargo build --release -p life-server --bins
 target="$(cargo metadata --format-version 1 --no-deps | grep -o '"target_directory":"[^"]*"' | cut -d'"' -f4)"
 target="${target:-$repo/target}"
-mkdir -p "$dest" "$units"
+mkdir -p "$dest" "$units" "$lib"
 
 for name in "${bins[@]}"; do
-    src="$target/release/$name"
+    if [ -f "$lib/$name" ]; then
+        mkdir -p "$backup/bin"
+        cp -p "$lib/$name" "$backup/bin/$name"
+    fi
+    install -m 0755 "$target/release/$name" "$lib/$name.new" && mv -f "$lib/$name.new" "$lib/$name"
+    src="$lib/$name"
     target_link="$dest/$name"
     if [ -e "$target_link" ] && [ ! -L "$target_link" ]; then
         mkdir -p "$backup"
