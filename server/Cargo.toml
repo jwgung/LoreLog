@@ -18,10 +18,12 @@ base64 = "0.23.1"
 chrono = "0.4.45"
 chrono-tz = "0.10.4"
 dirs = "7.0.0"
+encoding_rs = "0.8.42"
 hex = "0.4.3"
+html-escape = "0.3.0"
 imap = { version = "3.0.0-alpha.15", default-features = false, features = ["rustls-tls"] }
 indexmap = "2.14.2"
-mail-parser = "0.11.9"
+mail-parser = { version = "0.11.9", features = ["full_encoding"] }
 percent-encoding = "2.3.2"
 regex = "1.13.1"
 roxmltree = "0.21.2"
