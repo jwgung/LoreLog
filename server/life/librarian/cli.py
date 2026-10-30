@@ -4,11 +4,9 @@ The index is a copy at <data>/librarian.sqlite (mode 600). Only records the diar
 messengers the user allowed, voice in conversations the diary counts as the user's. Deleting the file loses nothing.
 """
 import argparse
-import sys
 import time
 
 from life.librarian import Librarian
-from life.librarian.index import default_path
 
 
 def parser():
@@ -25,9 +23,9 @@ def parser():
     return p
 
 
-def update(lib):
+def update(lib, reset=False):
     t = time.time()
-    r = lib.update()
+    r = lib.update(reset=reset)
     skipped = f", skipped {r['skipped']} (see above)" if r["skipped"] else ""
     print(f"indexed {r['indexed']} files, removed {r['removed']}{skipped}, {r['docs']} documents ({time.time() - t:.1f}s)")
 
@@ -48,13 +46,10 @@ def stats(lib):
 
 def main(argv=None):
     args = parser().parse_args(argv)
-    if args.cmd == "rebuild":
-        path = default_path()
-        for p in (path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")):
-            p.unlink(missing_ok=True)
     with Librarian() as lib:
         if args.cmd in ("update", "rebuild"):
-            update(lib)
+            # rebuild empties and fills the index in one transaction: a search meanwhile sees the old index
+            update(lib, reset=args.cmd == "rebuild")
         elif args.cmd == "search":
             search(lib, args.words, args.limit)
         else:

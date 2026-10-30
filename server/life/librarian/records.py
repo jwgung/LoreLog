@@ -14,14 +14,18 @@ sender, recipients and attachment names, an event's attendees) and `thread` (the
 References header, else In-Reply-To, else its own id; replies of one thread come back as one hit, mails that only share
 a subject do not). Traces (phone, PC) become one document per day and kind so the index does not grow by a line per app
 switch; mail, events and words are one document each.
+
+Phone files are read by the index itself (index.py), once per change: the same records give the conversation states
+it keeps and the documents, so the two never come from different moments.
 """
 import collections
+import datetime as dt
 import hashlib
 import json
 import re
 
 from life.assistant.config import DATA, NOISE_PKGS, VAULT
-from life.assistant.context import confirmed_voice_label, load_conversations, local
+from life.assistant.context import confirmed_voice_label, local, read_records
 from life.assistant.diaryfile import split_correction
 from life.assistant.senders import is_allowed, load_allow
 
@@ -40,14 +44,36 @@ def sources():
     return sorted(out, key=lambda kp: str(kp[1]))
 
 
-def policy_stamp():
+def allowed():
+    """The senders the user allowed, read once per update: the documents and the remembered policy both use it."""
+    return load_allow()
+
+
+def policy_stamp(allow):
     """Fingerprint of the rules that decide what phone records may be indexed (the allowed senders)."""
-    return hashlib.sha256(json.dumps(sorted(load_allow()), ensure_ascii=False).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(sorted(allow), ensure_ascii=False).encode()).hexdigest()
 
 
-def phone_rules():
-    """What the phone rules need, read once per update: (conversations by id, allowed senders)."""
-    return load_conversations(), load_allow()
+MAX_CONVERSATION_DAYS = 31  # a span longer than this is not believed; index.py then reads every phone file again
+
+
+def conversation_days(c):
+    """The days a conversation spans (the voice it can contain lies on these days); [] without a usable span,
+    None when its days cannot be listed: longer than MAX_CONVERSATION_DAYS, or times that are numbers but no date
+    (the diary's voice rule compares the numbers, so such a conversation can still hold voice on any day)."""
+    try:
+        start, end = int(c["start_ms"]), int(c["end_ms"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return []
+    try:
+        first, last = local(start).date(), local(end).date()
+    except (ValueError, OverflowError, OSError):
+        return None
+    if last < first:
+        return [first.isoformat()]
+    if (last - first).days >= MAX_CONVERSATION_DAYS:
+        return None
+    return [(first + dt.timedelta(days=i)).isoformat() for i in range((last - first).days + 1)]
 
 
 def split_front(text):
@@ -68,14 +94,12 @@ def day_of(value, fallback_name):
     return m.group(0) if m else ""
 
 
-def docs(kind, path, rules):
-    """The documents one file gives the index. `rules` is phone_rules() (only phone files use it)."""
+def docs(kind, path):
+    """The documents a mail, event, PC or words file gives the index (phone files go through lorelog_docs)."""
     if kind == "mail":
         return mail_docs(path)
     if kind == "event":
         return event_docs(path)
-    if kind == "lorelog":
-        return lorelog_docs(path, *rules)
     if kind == "pc":
         return pc_docs(path)
     return word_docs(path)
@@ -120,13 +144,7 @@ def event_docs(path):
 
 
 def _lines(path):
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            d = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(d, dict):
-            yield d
+    return read_records(path)
 
 
 def _hm(ts):
@@ -141,28 +159,34 @@ def _trace_docs(day, groups):
             for kind, lines in groups.items() if lines]
 
 
-def lorelog_docs(path, convs, allow):
+def _lorelog_line(d, groups, apps, convs, allow):
+    t = d.get("type")
+    if t == "notification" and d.get("pkg") not in NOISE_PKGS and is_allowed(allow, d.get("label"), d.get("title")):
+        groups["메신저"].append(f"{_hm(d.get('ts'))} {d.get('label')}: {d.get('title')} — {d.get('text', '')}".rstrip(" —"))
+    elif t == "comm":
+        groups["통화/문자"].append(f"{_hm(d.get('ts'))} {d.get('kind')}/{d.get('direction')} "
+                                 f"{d.get('party_name') or d.get('party') or ''} {d.get('content', '')}".strip())
+    elif t == "voice" and d.get("text"):
+        who = confirmed_voice_label(convs, int(d["ts"]))
+        if who is not None:
+            groups["대화"].append(f"{_hm(d.get('ts'))} (with {who}) {d['text']}")
+    elif t == "app" and d.get("pkg") not in NOISE_PKGS and d.get("label"):
+        apps[d["label"]] += 1
+
+
+def lorelog_docs(day, lines, convs, allow):
+    """The documents of one day's phone records, given the conversation states and the allowed senders.
+    A line whose values have the wrong shape (a list for a name, a time too large to be one) is left out alone."""
     groups = {"메신저": [], "통화/문자": [], "대화": [], "앱": []}
     apps = collections.Counter()
-    for d in _lines(path):
-        t = d.get("type")
-        if t == "notification" and d.get("pkg") not in NOISE_PKGS and is_allowed(allow, d.get("label"), d.get("title")):
-            groups["메신저"].append(f"{_hm(d.get('ts'))} {d.get('label')}: {d.get('title')} — {d.get('text', '')}".rstrip(" —"))
-        elif t == "comm":
-            groups["통화/문자"].append(f"{_hm(d.get('ts'))} {d.get('kind')}/{d.get('direction')} "
-                                     f"{d.get('party_name') or d.get('party') or ''} {d.get('content', '')}".strip())
-        elif t == "voice" and d.get("text"):
-            try:
-                who = confirmed_voice_label(convs, int(d["ts"]))
-            except (KeyError, TypeError, ValueError):
-                who = None
-            if who is not None:
-                groups["대화"].append(f"{_hm(d.get('ts'))} (with {who}) {d['text']}")
-        elif t == "app" and d.get("pkg") not in NOISE_PKGS and d.get("label"):
-            apps[d["label"]] += 1
+    for d in lines:
+        try:
+            _lorelog_line(d, groups, apps, convs, allow)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
     if apps:
         groups["앱"].append(", ".join(f"{k} x{v}" for k, v in apps.most_common()))
-    return _trace_docs(path.stem, groups)
+    return _trace_docs(day, groups)
 
 
 def pc_docs(path):

@@ -50,6 +50,16 @@ class Senders(unittest.TestCase):
 
 
 class Lorelog(unittest.TestCase):
+    def test_a_broken_line_in_a_phone_file_does_not_hide_the_conversations(self):
+        path = DATA / "raw/lorelog" / "2026-09-01.ndjson"
+        good = json.dumps({"type": "conversation", "id": "ctx-ok", "start_ms": "1", "end_ms": "2", "status": "tagged"})
+        path.write_bytes(b"\xea\xb0 broken\n[1]\n" + json.dumps({"type": "conversation", "status": "x"}).encode() + b"\n" + good.encode() + b"\n")
+        try:
+            convs = context.load_conversations()
+            self.assertIn("ctx-ok", convs)
+            self.assertEqual(context.confirmed_voice_label({"bad": {"status": "tagged"}, **convs}, 1), "?")
+        finally:
+            path.unlink()
     def test_only_allowed_notifications_and_confirmed_voice(self):
         day = "2026-10-21"
         recs = [

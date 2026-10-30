@@ -14,7 +14,7 @@ from pathlib import Path
 import _env  # noqa: F401  (sets up the throwaway vault first)
 from life.assistant import senders
 from life.assistant.config import DATA, VAULT
-from life.librarian import Librarian, terms
+from life.librarian import Librarian, records, terms
 from life.librarian.index import to_query
 
 
@@ -258,6 +258,134 @@ class Search(unittest.TestCase):
         self.lib.update()
         words = " ".join(f"단어{i}" for i in range(200))
         self.assertLessEqual(to_query(words).count(" OR ") + 1, 16)
+
+    def test_a_broken_line_in_a_phone_file_does_not_stop_the_index(self):
+        senders.save_allow({"카카오톡: 깨진줄동료"})
+        path = DATA / "raw/lorelog" / "2024-03-20.ndjson"
+        rec = {"type": "notification", "pkg": "com.kakao.talk", "label": "카카오톡", "title": "깨진줄동료",
+               "text": "깨진줄옆문구수리부엉이", "ts": ms(2024, 3, 20, 9)}
+        path.write_bytes(b"\xea\xb0 cut off\n[1]\n" + json.dumps(rec, ensure_ascii=False).encode() + b"\n")
+        mail("2024-03-20-0900-fine.md", "멀쩡", "옆메일문구너구리개", "2024-03-20")
+        r = self.lib.update()
+        self.assertEqual(r["skipped"], 0)
+        self.assertTrue(self.find("수리부엉이"), "the good lines of the file are indexed")
+        self.assertTrue(self.find("너구리개"), "and the other files too")
+
+    def test_a_new_line_in_one_phone_file_reads_only_that_file(self):
+        senders.save_allow({"카카오톡: 증분동료"})
+        for d in (21, 22, 23):
+            lorelog(f"2024-03-{d}", [{"type": "notification", "pkg": "com.kakao.talk", "label": "카카오톡", "title": "증분동료",
+                                     "text": f"증분문구{d}", "ts": ms(2024, 3, d, 9)}])
+        self.lib.update()
+        path = DATA / "raw/lorelog" / "2024-03-23.ndjson"
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"type": "notification", "pkg": "com.kakao.talk", "label": "카카오톡", "title": "증분동료",
+                                 "text": "새로온증분고양이", "ts": ms(2024, 3, 23, 10)}, ensure_ascii=False) + "\n")
+        self.assertEqual(self.lib.update()["indexed"], 1, "only the phone file that changed is read again")
+        self.assertTrue(self.find("새로온증분고양이"))
+
+    def test_the_allowed_senders_used_and_the_ones_remembered_are_the_same(self):
+        # the allow list changes while an update runs: what was indexed must match what is remembered,
+        # so the next update still sees the change
+        lorelog("2024-03-24", [{"type": "notification", "pkg": "com.kakao.talk", "label": "카카오톡", "title": "경합상대",
+                                "text": "경합문구두루미", "ts": ms(2024, 3, 24, 9)}])
+        answers = iter([{"카카오톡: 경합상대"}] + [set()] * 20)
+        real = records.load_allow
+        records.load_allow = lambda: next(answers)
+        try:
+            self.lib.update()
+            self.assertTrue(self.find("두루미"), "indexed under the list read at the start")
+            self.lib.update()
+            self.assertEqual(self.find("두루미"), [], "the sender taken back is dropped at the next update")
+        finally:
+            records.load_allow = real
+
+    def test_a_query_word_with_a_particle_still_finds_the_word(self):
+        mail("2024-03-25-0900-p.md", "조사", "견적서 보냄 그리고 여수항만 일정", "2024-03-25")
+        self.lib.update()
+        for q in ("견적서는", "여수항만에서", "견적서를"):
+            self.assertTrue([h for h in self.find(q) if h["title"] == "조사"], q)
+
+    def test_an_english_word_finds_longer_forms_of_it(self):
+        mail("2024-03-26-0900-e.md", "brokerz", "two Brokers and a brokerage", "2024-03-26")
+        self.lib.update()
+        self.assertTrue([h for h in self.find("broker") if h["title"] == "brokerz"])
+
+    def test_the_users_own_past_questions_do_not_crowd_out_the_records(self):
+        for d in range(1, 6):
+            write(DATA / "raw/diary" / f"2024-02-0{d}.ndjson", json.dumps(
+                {"type": "chat", "ts": ms(2024, 2, d, 21), "date": f"2024-02-0{d}", "role": "user", "text": "펠리컨견적 언제 왔지?"},
+                ensure_ascii=False) + "\n")
+        mail("2024-01-15-0900-pel.md", "펠리컨 건", "펠리컨견적 송부드립니다", "2024-01-15")
+        self.lib.update()
+        hits = self.find("펠리컨견적", limit=3)
+        self.assertIn("mail", {h["source"] for h in hits}, "the record itself is among the top hits")
+        self.assertLessEqual(sum(h["source"] == "word" for h in hits), 2)
+        self.assertTrue([h for h in hits if h["source"] == "word"], "what the user said is still findable")
+
+    def test_a_reset_empties_the_index_without_removing_the_file(self):
+        mail("2024-03-27-0900-r.md", "리셋", "리셋문구해달", "2024-03-27")
+        self.lib.update()
+        inode = self.lib.path.stat().st_ino
+        self.lib.reset()
+        self.assertEqual(self.find("해달"), [])
+        self.assertEqual(self.lib.path.stat().st_ino, inode)
+        self.lib.update()
+        self.assertTrue(self.find("해달"))
+
+    def test_a_phone_line_with_values_of_the_wrong_shape_does_not_stop_the_index(self):
+        senders.save_allow({"카카오톡: 모양동료"})
+        lorelog("2024-03-28", [
+            {"type": "app", "label": ["목록"], "pkg": "y"},
+            {"type": "voice", "text": "무한시각", "ts": 1e400},
+            {"type": "conversation", "id": "lib-inf", "start_ms": 1, "end_ms": 1e400, "status": "tagged"},
+            {"type": "notification", "pkg": "com.kakao.talk", "label": "카카오톡", "title": "모양동료",
+             "text": "모양틀린줄옆문구가마우지", "ts": ms(2024, 3, 28, 9)},
+        ])
+        mail("2024-03-28-0900-shape.md", "모양", "모양옆메일물총새", "2024-03-28")
+        self.lib.update()
+        self.assertTrue(self.find("가마우지"), "the good lines of the day are still indexed")
+        self.assertTrue(self.find("물총새"), "and the rest of the update went through")
+        lorelog("2024-03-29", [{"type": "voice", "ts": ms(2024, 3, 29, 9), "text": "다음날음성저어새"},
+                               {"type": "conversation", "id": "lib-ok", "start_ms": ms(2024, 3, 29, 8),
+                                "end_ms": ms(2024, 3, 29, 10), "participants": "팀", "status": "tagged"}])
+        self.lib.update()
+        self.assertTrue(self.find("저어새"), "a broken conversation kept from before does not stop other days")
+
+    def test_a_conversation_over_several_days_is_decided_again_on_every_day(self):
+        lorelog("2024-04-12", [{"type": "voice", "ts": ms(2024, 4, 12, 9), "text": "사흘째음성황새"}])
+        lorelog("2024-04-10", [{"type": "conversation", "id": "lib-long", "start_ms": ms(2024, 4, 10, 9),
+                                "end_ms": ms(2024, 4, 13, 9), "participants": "?", "status": "pending"}])
+        self.lib.update()
+        self.assertEqual(self.find("황새"), [])
+        lorelog("2024-04-14", [{"type": "conversation", "id": "lib-long", "start_ms": ms(2024, 4, 10, 9),
+                                "end_ms": ms(2024, 4, 13, 9), "participants": "팀", "status": "tagged"}])
+        self.lib.update()
+        self.assertEqual([h["day"] for h in self.find("황새")], ["2024-04-12"])
+
+    def test_a_conversation_whose_end_is_no_date_is_decided_again_on_every_day(self):
+        lorelog("2024-05-03", [{"type": "voice", "ts": ms(2024, 5, 3, 9), "text": "끝없는대화음성두루미"}])
+        lorelog("2024-05-01", [{"type": "conversation", "id": "lib-nodate", "start_ms": ms(2024, 5, 1, 9),
+                                "end_ms": 10 ** 17, "participants": "팀", "status": "tagged"}])
+        self.lib.update()
+        self.assertTrue(self.find("두루미"))
+        lorelog("2024-05-04", [{"type": "conversation", "id": "lib-nodate", "start_ms": ms(2024, 5, 1, 9),
+                                "end_ms": 10 ** 17, "participants": "팀", "status": "skipped"}])
+        self.lib.update()
+        self.assertEqual(self.find("두루미"), [], "voice the user withdrew does not stay in the index")
+
+    def test_a_long_query_keeps_its_last_words(self):
+        words = "지난달에 부산에서 거래처랑 만난 사람이 보낸 견적서는 메일로 언제 왔는지 회의록에도 있었나요 트렌드마이너"
+        q = to_query(words)
+        self.assertIn('"회의 의록"', q)
+        self.assertIn('"트렌 렌드 드마 마이 이너"', q)
+
+    def test_a_rebuild_never_shows_an_empty_index(self):
+        mail("2024-03-30-0900-rb.md", "재구축", "재구축문구따오기", "2024-03-30")
+        self.lib.update()
+        r = self.lib.update(reset=True)
+        self.assertGreater(r["indexed"], 0)
+        self.assertTrue(self.find("따오기"))
 
     def test_records_that_disagree_come_back_together(self):
         senders.save_allow({"카카오톡: 거래처담당"})
