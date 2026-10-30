@@ -19,6 +19,7 @@ use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
+use tauri_plugin_autostart::ManagerExt;
 
 #[derive(Serialize)]
 struct Settings {
@@ -169,15 +170,41 @@ fn show_main(app: &AppHandle) {
     }
 }
 
+/// The argument the OS starts the app with at login: it then stays in the tray instead of opening its window.
+const AUTOSTART_ARG: &str = "--autostart";
+
+/// Does the app start when the user logs in? The OS keeps the answer (Windows: the Run key; macOS: a launch agent;
+/// Linux: an autostart entry), so it is read from there, not from our config.
+#[tauri::command]
+fn get_autostart(app: AppHandle) -> Result<bool, String> {
+    app.autolaunch().is_enabled().map_err(|e| format!("시작 프로그램 설정을 읽지 못했습니다: {e}"))
+}
+
+/// Turn starting at login on or off. Off by default: the user chooses.
+#[tauri::command]
+fn set_autostart(app: AppHandle, on: bool) -> Result<bool, String> {
+    let m = app.autolaunch();
+    let r = if on { m.enable() } else { m.disable() };
+    r.map_err(|e| format!("시작 프로그램 설정을 바꾸지 못했습니다: {e}"))?;
+    m.is_enabled().map_err(|e| format!("시작 프로그램 설정을 읽지 못했습니다: {e}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let started_at_login = std::env::args().any(|a| a == AUTOSTART_ARG);
     let stop = Arc::new(AtomicBool::new(false));
     let stop_for_exit = stop.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app);
         }))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![AUTOSTART_ARG]),
+        ))
         .invoke_handler(tauri::generate_handler![
+            get_autostart,
+            set_autostart,
             get_settings,
             server_config,
             save_settings,
@@ -186,6 +213,9 @@ pub fn run() {
         ])
         .setup(move |app| {
             build_tray(app.handle())?;
+            if started_at_login && let Some(w) = app.get_webview_window("main") {
+                let _ = w.hide(); // started at login: collect in the tray, open when the user asks
+            }
             // the window loads index.html (the assistant), which reads server_config and shows setup or chat itself
             start_collector(stop.clone());
             Ok(())

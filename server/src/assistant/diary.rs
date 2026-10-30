@@ -102,7 +102,7 @@ fn note_path(paths: &Paths, day: &str) -> std::path::PathBuf {
 }
 
 fn read_text(path: &std::path::Path) -> String {
-    fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
+    crate::note::read(path).unwrap_or_default()
 }
 
 /// The day as the app shows it. `stale` when the phone records or the allowed senders changed after the draft.

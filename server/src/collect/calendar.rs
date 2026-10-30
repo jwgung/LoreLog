@@ -17,6 +17,7 @@ use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone};
 use regex::Regex;
 
 use crate::assistant::util::files_like;
+use crate::errors::kind;
 
 pub const DAV: &str = "DAV:";
 pub const CALDAV: &str = "urn:ietf:params:xml:ns:caldav";
@@ -193,11 +194,8 @@ pub fn etag_key(v: &str) -> String {
 pub fn existing_events(vault: &std::path::Path) -> HashMap<(String, String), (PathBuf, String)> {
     let mut out = HashMap::new();
     for p in files_like(&vault.join("Events"), "", ".md") {
-        let text = fs::read(&p).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
-        let head: String = text.chars().take(2500).collect();
-        let get = |k: &str| {
-            head.lines().find_map(|l| l.strip_prefix(k).and_then(|r| r.strip_prefix(':')).map(|r| r.trim().to_string()))
-        };
+        let head = crate::note::head(&p, 2500);
+        let get = |k: &str| crate::note::field(&head, k).map(str::to_string);
         if let (Some(u), Some(s)) = (get("dav_uid").filter(|v| !v.is_empty()), get("start").filter(|v| !v.is_empty())) {
             out.insert((u, s), (p.clone(), get("dav_etag").unwrap_or_default()));
         }
@@ -271,10 +269,6 @@ fn dav(method: &str, url: &str, acct: &Account, depth: &str, body: String, timeo
         Err(ureq::Error::StatusCode(c)) => Err(DavError::Status(c)),
         Err(e) => Err(DavError::Other(kind(&e))),
     }
-}
-
-fn kind(e: &ureq::Error) -> String {
-    format!("{e:?}").split(['(', ' ', '{']).next().unwrap_or("error").to_string()
 }
 
 /// REPORT calendar-query for the window, expanding recurrences when asked.
@@ -460,7 +454,7 @@ pub fn apply(
                     continue;
                 }
                 if !dry {
-                    fs::write(path, &note)?;
+                    crate::fsutil::write_private_atomic(path, note.as_bytes())?; // 0600, like every record
                 }
                 counts.updated += 1;
             } else {
@@ -472,7 +466,7 @@ pub fn apply(
                 }
                 if !dry {
                     fs::create_dir_all(f.parent().unwrap_or(vault))?;
-                    fs::write(&f, &note)?;
+                    crate::fsutil::write_private_atomic(&f, note.as_bytes())?;
                     known.insert(key, (f, etag.clone()));
                 }
                 counts.created += 1;

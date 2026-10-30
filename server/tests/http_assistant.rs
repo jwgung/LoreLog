@@ -52,6 +52,28 @@ fn a_todo_is_added_finished_and_listed() {
 }
 
 #[test]
+fn a_proposal_is_listed_apart_and_opens_only_when_accepted() {
+    let s = Server::start();
+    let item = json!({"id": "abc1234567", "title": "견적 보내기", "source": "메일", "due": "", "status": "proposed",
+                      "day": "2026-10-28", "thread": "", "created": 0});
+    std::fs::create_dir_all(s.paths.todo_file().parent().unwrap()).unwrap();
+    std::fs::write(s.paths.todo_file(), json!({"items": [item], "last_extract": 0}).to_string()).unwrap();
+    let (_, view) = s.get("/todos");
+    assert_eq!(
+        (view["proposed"][0]["title"].as_str(), view["open"].as_array().unwrap().len()),
+        (Some("견적 보내기"), 0)
+    );
+    assert_eq!(s.post_json("/todos/abc1234567", &json!({"action": "reopen"})).0, 409);
+    assert_eq!(s.post_json("/todos/abc1234567", &json!({"action": "accept"})), (200, json!({"ok": true})));
+    let (_, view) = s.get("/todos");
+    assert_eq!(
+        (view["proposed"].as_array().unwrap().len(), view["open"][0]["title"].as_str()),
+        (0, Some("견적 보내기"))
+    );
+    assert_eq!(s.post_json("/todos/abc1234567", &json!({"action": "accept"})).0, 409);
+}
+
+#[test]
 fn the_users_words_are_saved_and_an_empty_chat_message_is_refused() {
     let s = Server::start();
     assert_eq!(s.post_json("/diary/2026-02-02", &json!({"reflection": "좋은 하루"})), (200, json!({"saved": true})));

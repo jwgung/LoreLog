@@ -243,6 +243,19 @@ function iconButton(svg, label, onClick) {
 }
 async function actTodo(id, action) { await api(`/todos/${id}`, { action }); await loadTodos(false); }
 
+const ICON_PLUS = '<svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M5 12h14"/></svg>';
+
+// A proposal the assistant found in the records: the user takes it (it becomes a to-do) or dismisses it.
+function proposedRow(t) {
+  const li = el("li", "todo proposed");
+  const body = el("div", "t");
+  body.append(document.createTextNode(t.title));
+  const meta = [t.source, t.due].filter(Boolean).join(" · ");
+  if (meta) body.append(el("div", "src", meta));
+  li.append(body, iconButton(ICON_PLUS, "할 일로 받기", () => actTodo(t.id, "accept")), iconButton(ICON_X, "아니에요", () => actTodo(t.id, "dismiss")));
+  return li;
+}
+
 function todoRow(t, done) {
   const li = el("li", `todo${done ? " done" : ""}`);
   const body = el("div", "t");
@@ -260,9 +273,12 @@ let todoTimer = null;
 async function loadTodos(extract) {
   if (extract) api("/todos/extract", {}).catch(() => {});
   const { data } = await api("/todos");
+  const proposed = data.proposed || [];
+  $("todoProposed").replaceChildren(...proposed.map(proposedRow));
+  $("proposedBox").hidden = proposed.length === 0;
   $("todoOpen").replaceChildren(...(data.open || []).map((t) => todoRow(t, false)));
   $("todoDone").replaceChildren(...(data.done || []).map((t) => todoRow(t, true)));
-  const n = (data.open || []).length;
+  const n = (data.open || []).length + proposed.length;
   $("todoBadge").hidden = n === 0;
   $("todoBadge").textContent = n;
   $("extracting").hidden = !data.extracting;

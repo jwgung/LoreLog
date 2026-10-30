@@ -91,3 +91,111 @@ pub fn lock(name: &str) -> Option<fs::File> {
     let f = fs::OpenOptions::new().create(true).truncate(false).write(true).open(&path).ok()?;
     f.try_lock().ok().map(|_| f)
 }
+
+/// The value after `name` on a command line (`--limit 5` -> "5").
+pub fn arg(args: &[String], name: &str) -> Option<String> {
+    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+}
+
+/// What the mail collectors need to reach the mailbox. `Debug` leaves the password out.
+#[derive(PartialEq)]
+pub struct Imap {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub password: String,
+    /// the name notes and files are filed under
+    pub account: String,
+    pub folders: Vec<String>,
+    /// only mail from this day (YYYY-MM-DD) on
+    pub since: Option<String>,
+}
+
+impl std::fmt::Debug for Imap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Imap")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("user", &self.user)
+            .field("password", &"<hidden>")
+            .field("account", &self.account)
+            .field("folders", &self.folders)
+            .field("since", &self.since)
+            .finish()
+    }
+}
+
+/// The mail settings, `folder` (from `--folder`) replacing the configured folders. Err: the required settings that are
+/// missing or empty.
+pub fn imap(paths: &Paths, folder: Option<String>) -> Result<Imap, Vec<&'static str>> {
+    let cfg = mail(paths);
+    let get = |k: &str| cfg.get(k).filter(|v| !v.is_empty()).cloned();
+    let (Some(host), Some(user), Some(password)) = (get("IMAP_HOST"), get("IMAP_USER"), get("IMAP_PASSWORD")) else {
+        return Err(["IMAP_HOST", "IMAP_USER", "IMAP_PASSWORD"].into_iter().filter(|k| get(k).is_none()).collect());
+    };
+    Ok(Imap {
+        host,
+        port: cfg.get("IMAP_PORT").and_then(|p| p.parse().ok()).unwrap_or(993),
+        user,
+        password,
+        account: cfg.get("MAIL_ACCOUNT").cloned().unwrap_or_else(|| "account".into()),
+        folders: match folder {
+            Some(f) => vec![f],
+            None => list(cfg.get("MAIL_FOLDERS"), "INBOX,Sent Messages"),
+        },
+        since: get("MAIL_SINCE"),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn conf(env: &str, sources: &str) -> (PathBuf, Paths) {
+        let root = std::env::temp_dir().join(format!("settings-{}-{}", std::process::id(), env.len() + sources.len()));
+        let paths = Paths::under(&root);
+        fs::create_dir_all(&paths.conf).unwrap();
+        fs::write(env_file(&paths), env).unwrap();
+        fs::write(sources_file(&paths), sources).unwrap();
+        (root, paths)
+    }
+
+    #[test]
+    fn imap_settings_merge_env_and_sources_with_defaults() {
+        let (root, paths) = conf(
+            "IMAP_USER=me\nIMAP_PASSWORD=pw\nIMAP_HOST=old.example\n",
+            "[mail]\nhost = \"imap.example\"\nfolders = [\"INBOX\", \"Sent\"]\nsince = \"2026-01-01\"\n",
+        );
+        let got = imap(&paths, None).unwrap();
+        assert_eq!(
+            got,
+            Imap {
+                host: "imap.example".into(),
+                port: 993,
+                user: "me".into(),
+                password: "pw".into(),
+                account: "account".into(),
+                folders: vec!["INBOX".into(), "Sent".into()],
+                since: Some("2026-01-01".into()),
+            }
+        );
+        assert_eq!(imap(&paths, Some("Archive".into())).unwrap().folders, vec!["Archive".to_string()]);
+        assert!(!format!("{got:?}").contains("pw\""), "the password stays out of Debug");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_or_empty_imap_settings_are_named() {
+        let (root, paths) = conf("IMAP_USER=me\nIMAP_PASSWORD=\n", "");
+        assert_eq!(imap(&paths, None), Err(vec!["IMAP_HOST", "IMAP_PASSWORD"]));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn arg_takes_the_value_after_the_flag() {
+        let args: Vec<String> = ["--dry-run", "--limit", "5", "--folder"].map(String::from).to_vec();
+        assert_eq!(arg(&args, "--limit"), Some("5".into()));
+        assert_eq!(arg(&args, "--folder"), None);
+        assert_eq!(arg(&args, "--since"), None);
+    }
+}

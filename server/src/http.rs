@@ -214,13 +214,8 @@ fn authorized_token(token: &str, headers: &HeaderMap) -> bool {
 /// A failure the client is not told about; the type goes to the journal.
 fn internal(req: &Request, what: &dyn std::fmt::Debug) -> Reply {
     let path = req.target.split('?').next().unwrap_or("");
-    eprintln!("{} {} {} failed: {}", Local::now().format("%H:%M:%S"), req.method, path, kind_of(what));
+    eprintln!("{} {} {} failed: {}", Local::now().format("%H:%M:%S"), req.method, path, crate::errors::kind(what));
     Reply::new(500, json!({"error": "internal error"}))
-}
-
-fn kind_of(what: &dyn std::fmt::Debug) -> String {
-    let s = format!("{what:?}");
-    s.split(['(', ' ', '{']).next().unwrap_or("error").to_string()
 }
 
 // ---------- handlers ----------
@@ -244,12 +239,13 @@ fn todos_post(app: &App, req: &Request, _: &regex::Captures) -> Result<Reply, Re
 fn todo_act(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {
     let payload = req.json(100_000)?;
     let action = payload.get("action").and_then(Value::as_str).unwrap_or("");
-    if !matches!(action, "done" | "dismiss" | "reopen") {
+    if !matches!(action, "accept" | "done" | "dismiss" | "reopen") {
         return Ok(Reply::new(400, json!({"error": "bad action"})));
     }
     match todos::act(&app.paths, &caps[1], action).map_err(|e| internal(req, &e))? {
-        true => Ok(Reply::ok(json!({"ok": true}))),
-        false => Ok(Reply::new(404, json!({"error": "not found"}))),
+        todos::Acted::Changed => Ok(Reply::ok(json!({"ok": true}))),
+        todos::Acted::Missing => Ok(Reply::new(404, json!({"error": "not found"}))),
+        todos::Acted::NotNow => Ok(Reply::new(409, json!({"error": "not in a state for that"}))),
     }
 }
 
@@ -295,7 +291,7 @@ fn transcribe(app: &App, req: &Request, _: &regex::Captures) -> Result<Reply, Re
     let audio = req.blob(app.max_bytes)?;
     match app.speech.transcribe(audio) {
         Ok(text) => Ok(Reply::ok(json!({"text": text}))),
-        Err(e) => Ok(Reply::new(502, json!({"error": format!("asr failed: {}", kind_of(&e))}))),
+        Err(e) => Ok(Reply::new(502, json!({"error": format!("asr failed: {}", crate::errors::kind(&e))}))),
     }
 }
 

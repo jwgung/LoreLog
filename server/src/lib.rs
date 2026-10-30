@@ -3,10 +3,12 @@
 pub mod assistant;
 pub mod collect;
 pub mod config;
+pub mod errors;
 pub mod filestore;
 pub mod fsutil;
 pub mod http;
 pub mod jobs;
 pub mod librarian;
 pub mod llm;
+pub mod note;
 pub mod store;

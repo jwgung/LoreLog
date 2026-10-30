@@ -18,7 +18,7 @@ Import IMAP mail (inbox and sent folders) into the vault as Mail/ notes. Read-on
 - Raw .eml files and attachments are not stored (attachments are listed by name only).
 
 Settings live in ~/.config/vault-sync/ :
-  env           secrets only (KEY=VALUE, mode 600): IMAP_USER, IMAP_PASSWORD
+  env           secrets (KEY=VALUE, mode 600): IMAP_USER, IMAP_PASSWORD
   sources.toml  what to collect, under [mail]: host, port, account, folders, since
                 (env may also carry IMAP_HOST, IMAP_PORT, MAIL_ACCOUNT, MAIL_FOLDERS, MAIL_SINCE; sources.toml wins)
 Prefer `life add mail` and `life sync` over editing these by hand.
@@ -28,10 +28,6 @@ Exit status: 0 on success, 1 if the connection failed or a folder could not be r
 Usage: mail-sync [--dry-run] [--limit N] [--folder NAME] [-h]";
 
 const DEFAULT_LIMIT: usize = 300;
-
-fn arg(args: &[String], name: &str) -> Option<String> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
-}
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -51,28 +47,20 @@ fn main() -> ExitCode {
             }
         }
     };
-    let limit = arg(&args, "--limit").and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_LIMIT);
+    let limit = settings::arg(&args, "--limit").and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_LIMIT);
     let paths = Paths::from_env();
-    let cfg = settings::mail(&paths);
-    let need: Vec<&str> = ["IMAP_HOST", "IMAP_USER", "IMAP_PASSWORD"]
-        .into_iter()
-        .filter(|k| cfg.get(*k).map(|v| v.is_empty()).unwrap_or(true))
-        .collect();
-    if !need.is_empty() {
-        eprintln!(
-            "Missing {} (env: {}, sources.toml: {}). Run `life add mail`.",
-            need.join(", "),
-            settings::env_file(&paths).display(),
-            settings::sources_file(&paths).display()
-        );
-        return ExitCode::from(2);
-    }
-    let folders = match arg(&args, "--folder") {
-        Some(f) => vec![f],
-        None => settings::list(cfg.get("MAIL_FOLDERS"), "INBOX,Sent Messages"),
+    let cfg = match settings::imap(&paths, settings::arg(&args, "--folder")) {
+        Ok(c) => c,
+        Err(need) => {
+            eprintln!(
+                "Missing {} (env: {}, sources.toml: {}). Run `life add mail`.",
+                need.join(", "),
+                settings::env_file(&paths).display(),
+                settings::sources_file(&paths).display()
+            );
+            return ExitCode::from(2);
+        }
     };
-    let account = cfg.get("MAIL_ACCOUNT").cloned().unwrap_or_else(|| "account".into());
-    let since = cfg.get("MAIL_SINCE").filter(|v| !v.is_empty()).cloned();
     let home = dirs::home_dir().unwrap_or_default();
     let own: HashSet<String> = std::fs::read_to_string(home.join(".local/share/hub-sync/identity.json"))
         .ok()
@@ -85,8 +73,7 @@ fn main() -> ExitCode {
     let mut state = imapc::State::load(&state_file);
     let (mut known, mut known_fp) = mail::known_notes(&paths.vault);
     let synced = Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string();
-    let port: u16 = cfg.get("IMAP_PORT").and_then(|p| p.parse().ok()).unwrap_or(993);
-    let mut s = match imapc::connect(&cfg["IMAP_HOST"], port, &cfg["IMAP_USER"], &cfg["IMAP_PASSWORD"]) {
+    let mut s = match imapc::connect(&cfg.host, cfg.port, &cfg.user, &cfg.password) {
         Ok(s) => s,
         Err(k) => {
             eprintln!("IMAP connection failed: {k}");
@@ -94,8 +81,8 @@ fn main() -> ExitCode {
         }
     };
     let (mut total, mut failed) = (0usize, false);
-    for folder in &folders {
-        let (uidv, all) = match imapc::open(&mut s, folder, since.as_deref()) {
+    for folder in &cfg.folders {
+        let (uidv, all) = match imapc::open(&mut s, folder, cfg.since.as_deref()) {
             Ok(x) => x,
             Err(_) => {
                 eprintln!("[{folder}] cannot open folder");
@@ -150,7 +137,7 @@ fn main() -> ExitCode {
                 }
             };
             let Some(msg) = mail::parse(&raw) else { continue };
-            let (rel, note, mid) = mail::render(&msg, &format!("{account}/{folder}"), &own, &synced);
+            let (rel, note, mid) = mail::render(&msg, &format!("{}/{folder}", cfg.account), &own, &synced);
             seen.insert(u);
             let fp = mail::msg_fingerprint(&msg);
             if known.contains(&mid) || (!fp.is_empty() && known_fp.contains(&fp)) {

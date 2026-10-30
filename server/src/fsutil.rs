@@ -46,7 +46,9 @@ pub fn append_private(path: &Path, text: &str) -> io::Result<()> {
 /// reader sees the old content or the new, never half of it. The directory is created 0700 if missing.
 pub fn write_private_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
-    fs::create_dir_all(dir)?;
+    if !dir.is_dir() {
+        ensure_private_dir(dir)?;
+    }
     let mut tmp = tempfile_in(dir, path.file_name().and_then(|n| n.to_str()).unwrap_or("file"))?;
     let result = (|| {
         tmp.1.write_all(data)?;
@@ -111,5 +113,12 @@ mod tests {
         assert_eq!(fs::read(&g).unwrap(), b"new");
         assert_eq!(mode(&g), 0o600);
         assert_eq!(fs::read_dir(&d).unwrap().count(), 2, "no temp file is left behind");
+        let fresh = dir.path().join("Mail/2026/n.md");
+        write_private_atomic(&fresh, b"note").unwrap();
+        assert_eq!(
+            (mode(&fresh), mode(fresh.parent().unwrap())),
+            (0o600, 0o700),
+            "a new note directory is private too"
+        );
     }
 }

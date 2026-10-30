@@ -54,22 +54,16 @@ pub fn hm(ts_ms: Option<i64>) -> String {
     ts_ms.and_then(local).map(|t| t.format("%H:%M").to_string()).unwrap_or_else(|| "--:--".into())
 }
 
-/// Frontmatter values of a note: `key: value` lines in its first 3000 characters, trimmed and without quotes.
+/// Frontmatter values of a note: `key: value` lines in its first 3000 characters, trimmed and without double quotes.
 /// A missing key is "".
 pub fn front(path: &Path, keys: &[&str]) -> Vec<String> {
-    let text = fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
-    let head: String = text.chars().take(3000).collect();
+    let head = crate::note::head(path, 3000);
     keys.iter().map(|k| front_value(&head, k)).collect()
 }
 
 /// The value of the first `key:` line (trimmed, without surrounding double quotes), else "".
 pub fn front_value(head: &str, key: &str) -> String {
-    for line in head.split('\n') {
-        if let Some(rest) = line.strip_prefix(key).and_then(|r| r.strip_prefix(':')) {
-            return rest.trim_start_matches([' ', '\t']).trim_end_matches('\r').trim().trim_matches('"').to_string();
-        }
-    }
-    String::new()
+    crate::note::field(head, key).unwrap_or_default().trim_matches('"').to_string()
 }
 
 /// Files in `dir` whose names start with `prefix` and end with `suffix`, sorted by name.
