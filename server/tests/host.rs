@@ -2,6 +2,7 @@
 //! on first use, which addresses count as the tailnet, and starting and stopping it in-process.
 use std::collections::BTreeMap;
 use std::net::IpAddr;
+use std::sync::Arc;
 
 use life_server::config::Paths;
 use life_server::host::{self, IngestSettings, Models};
@@ -85,7 +86,8 @@ fn the_server_starts_on_the_given_addresses_and_stops() {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let settings =
         IngestSettings::from_map(&map(&[("INGEST_TOKEN", "0123456789abcdef"), ("INGEST_PORT", "0")])).unwrap();
-    let running = host::start(rt.handle(), paths, &settings, &Models::default(), &["127.0.0.1".parse().unwrap()]);
+    let app = Arc::new(Models::default().app(paths, &settings));
+    let running = host::start(rt.handle(), app, settings.port, &["127.0.0.1".parse().unwrap()]);
     let addr = running.listening()[0];
     let url = format!("http://{addr}/healthz");
     let body: String = ureq::get(&url).call().unwrap().body_mut().read_to_string().unwrap();
@@ -106,7 +108,8 @@ fn an_address_that_cannot_be_bound_is_reported_and_the_others_still_serve() {
     let settings =
         IngestSettings::from_map(&map(&[("INGEST_TOKEN", "0123456789abcdef"), ("INGEST_PORT", "0")])).unwrap();
     let addrs: [IpAddr; 2] = ["127.0.0.1".parse().unwrap(), "192.0.2.1".parse().unwrap()]; // TEST-NET: not ours
-    let running = host::start(rt.handle(), Paths::under(dir.path()), &settings, &Models::default(), &addrs);
+    let app = Arc::new(Models::default().app(Paths::under(dir.path()), &settings));
+    let running = host::start(rt.handle(), app, settings.port, &addrs);
     assert_eq!(running.listening().len(), 1);
     let failed = running.failed();
     assert_eq!(failed.len(), 1);

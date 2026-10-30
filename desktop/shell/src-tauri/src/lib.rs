@@ -9,12 +9,18 @@
 //!      watched-folder intake (deliverables the user drops into folders they chose). The settings the loop reads
 //!      (url, token, watched folders) live in the core config, shared with the CLI.
 //!
+//!   3. **The server, in host mode** — when the user keeps the vault on this PC (docs/adr/0002), the app runs the
+//!      server library itself (`host.rs`): receiving on loopback and the tailnet address, syncing every hour, the
+//!      librarian. The screens and the collector then talk to it on loopback like to any server.
+//!
 //! The shell owns no judgement about the diary: it exposes the config to the UI as commands and runs the collector.
+mod host;
+
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use life_agent_core::config;
+use life_agent_core::config::{self, Mode};
 use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
@@ -32,8 +38,64 @@ struct Settings {
 
 #[derive(Serialize)]
 struct ServerConfig {
+    /// "host", "connect", or null before the user chose where the vault lives
+    mode: Option<Mode>,
     base: String,
     token: String,
+}
+
+/// The server this app runs in host mode, once started.
+#[derive(Default)]
+struct HostSlot(Mutex<Option<host::Hosting>>);
+
+/// The app-wide stop flag (set when the app exits).
+struct Stop(Arc<AtomicBool>);
+
+fn start_hosting(slot: &HostSlot, stop: &Arc<AtomicBool>) -> Result<(), String> {
+    let mut held = slot.0.lock().unwrap_or_else(|e| e.into_inner());
+    if held.is_some() {
+        return Ok(());
+    }
+    let mut cfg = config::load()?;
+    *held = Some(host::Hosting::start(&mut cfg, stop.clone())?);
+    Ok(())
+}
+
+/// Where the vault lives, chosen on the first run: "host" (this PC; the app runs the server) or "connect" (a server
+/// elsewhere; the screen then asks for its address and token). Switching later does not move any data.
+#[tauri::command]
+fn choose_mode(mode: Mode, slot: tauri::State<HostSlot>, stop: tauri::State<Stop>) -> Result<(), String> {
+    let mut cfg = config::load()?;
+    cfg.mode = Some(mode);
+    config::save(&cfg)?;
+    match mode {
+        Mode::Host => start_hosting(&slot, &stop.0),
+        Mode::Connect => Ok(()),
+    }
+}
+
+/// What the screens show about the server this app runs (null when it runs none).
+#[tauri::command]
+fn host_info(slot: tauri::State<HostSlot>) -> Option<host::Info> {
+    slot.0.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|h| h.info())
+}
+
+/// Sync mail and calendars now (host mode).
+#[tauri::command]
+fn sync_now(slot: tauri::State<HostSlot>) -> Result<(), String> {
+    match slot.0.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        Some(h) => {
+            h.sync_now();
+            Ok(())
+        }
+        None => Err("이 PC에 금고를 둔 경우에만 동기화합니다".into()),
+    }
+}
+
+/// The last result of every sync job (host mode).
+#[tauri::command]
+fn sync_status(slot: tauri::State<HostSlot>) -> Option<serde_json::Value> {
+    slot.0.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|h| h.status())
 }
 
 #[tauri::command]
@@ -53,6 +115,7 @@ fn get_settings() -> Result<Settings, String> {
 fn server_config() -> Result<ServerConfig, String> {
     let cfg = config::load()?;
     Ok(ServerConfig {
+        mode: cfg.mode,
         base: cfg.url.trim_end_matches('/').to_string(),
         token: cfg.token,
     })
@@ -209,10 +272,21 @@ pub fn run() {
             server_config,
             save_settings,
             add_watch,
-            remove_watch
+            remove_watch,
+            choose_mode,
+            host_info,
+            sync_now,
+            sync_status
         ])
+        .manage(HostSlot::default())
+        .manage(Stop(stop.clone()))
         .setup(move |app| {
             build_tray(app.handle())?;
+            if config::load().ok().and_then(|c| c.mode) == Some(Mode::Host)
+                && let Err(e) = start_hosting(&app.state::<HostSlot>(), &stop)
+            {
+                life_agent_core::agent::log(&config::home(), &format!("server not running: {e}"));
+            }
             if started_at_login && let Some(w) = app.get_webview_window("main") {
                 let _ = w.hide(); // started at login: collect in the tray, open when the user asks
             }
@@ -229,9 +303,12 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building the app")
-        .run(move |_app, event| {
+        .run(move |app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
                 stop_for_exit.store(true, Ordering::SeqCst);
+                if let Some(h) = app.state::<HostSlot>().0.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                    h.stop();
+                }
             }
         });
 }

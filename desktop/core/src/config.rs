@@ -26,10 +26,24 @@ pub fn is_acceptable_url(u: &str) -> bool {
     }
 }
 
+/// Where the vault lives (docs/adr/0002).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    /// on this PC: the app runs the server itself
+    Host,
+    /// elsewhere: the app sends to and asks a server at `url`
+    Connect,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    /// e.g. https://<machine>.<tailnet>.ts.net:48765
+    /// Where the vault lives; None until the user chooses on the first run.
+    pub mode: Option<Mode>,
+    /// Host mode: the folder mail and event notes are written to (e.g. an Obsidian vault). None = the app's own.
+    pub vault_dir: Option<String>,
+    /// e.g. https://<machine>.<tailnet>.ts.net:48765 (in host mode the app's own server on loopback)
     pub url: String,
     /// The server's INGEST_TOKEN. Kept in its own file, not in config.toml — never serialized here.
     #[serde(skip)]
@@ -61,6 +75,8 @@ impl Default for Config {
     fn default() -> Self {
         let own = |v: &[&str]| v.iter().map(|s| s.to_string()).collect();
         Config {
+            mode: None,
+            vault_dir: None,
             url: String::new(),
             token: String::new(),
             source: "pc".into(),
@@ -114,6 +130,9 @@ pub fn load() -> Result<Config, String> {
         Err(e) => return Err(format!("{}: {e}", config_path().display())),
     };
     cfg.token = read_token();
+    if cfg.mode.is_none() && !cfg.url.is_empty() {
+        cfg.mode = Some(Mode::Connect); // set up before there was a choice: it was connecting to a server
+    }
     Ok(cfg)
 }
 
@@ -198,10 +217,12 @@ mod tests {
     #[test]
     fn settings_are_toml_and_the_token_is_a_separate_file() {
         with_home(|| {
-            let mut cfg = Config::default();
-            cfg.url = "https://host.ts.net:48765".into();
-            cfg.token = "secret-token-value".into();
-            cfg.watch_dirs = vec!["C:/Users/me/Downloads".into()];
+            let cfg = Config {
+                url: "https://host.ts.net:48765".into(),
+                token: "secret-token-value".into(),
+                watch_dirs: vec!["C:/Users/me/Downloads".into()],
+                ..Config::default()
+            };
             save(&cfg).unwrap();
 
             // config.toml holds the settings but NOT the token
@@ -228,6 +249,23 @@ mod tests {
             assert!(cfg.url.is_empty() && cfg.token.is_empty());
             assert_eq!(cfg.max_upload_mb, 20);
             assert!(!cfg.hide_title_apps.is_empty(), "title hiding is on by default");
+        });
+    }
+
+    #[test]
+    fn the_vault_mode_is_unset_until_chosen_and_an_old_setup_is_a_connection() {
+        with_home(|| {
+            assert_eq!(load().unwrap().mode, None, "a first run asks");
+            let mut cfg = Config { url: "https://host.ts.net:48765".into(), ..Config::default() };
+            save(&cfg).unwrap();
+            assert_eq!(load().unwrap().mode, Some(Mode::Connect), "set up before modes existed: it connects");
+            cfg.mode = Some(Mode::Host);
+            cfg.vault_dir = Some("D:/Obsidian".into());
+            save(&cfg).unwrap();
+            let text = std::fs::read_to_string(config_path()).unwrap();
+            assert!(text.contains("mode = \"host\""), "{text}");
+            let back = load().unwrap();
+            assert_eq!((back.mode, back.vault_dir.as_deref()), (Some(Mode::Host), Some("D:/Obsidian")));
         });
     }
 

@@ -185,22 +185,16 @@ impl Running {
     }
 }
 
-/// Start the server on each of `addrs` (one port, `settings.port`) on the given runtime. An address that cannot be
-/// bound is reported in [`Running::failed`]; the others serve. Plain HTTP: inside the tailnet the traffic is already
-/// encrypted, and HTTPS is for the user to add (`tailscale serve`).
-pub fn start(
-    rt: &tokio::runtime::Handle,
-    paths: Paths,
-    settings: &IngestSettings,
-    models: &Models,
-    addrs: &[IpAddr],
-) -> Running {
-    let app = Arc::new(models.app(paths, settings));
+/// Start serving `app` on each of `addrs` at `port` on the given runtime (call it from outside the runtime: it waits
+/// for the binds). An address that cannot be bound is reported in [`Running::failed`]; the others serve. Started again
+/// later with the same `app` (an address that appeared since), both serve the same state. Plain HTTP: inside the
+/// tailnet the traffic is already encrypted, and HTTPS is for the user to add (`tailscale serve`).
+pub fn start(rt: &tokio::runtime::Handle, app: Arc<App>, port: u16, addrs: &[IpAddr]) -> Running {
     let (stop, watch) = tokio::sync::watch::channel(false);
     let broken = Arc::new(Mutex::new(Vec::new()));
     let (mut listening, mut failed) = (Vec::new(), Vec::new());
     for &ip in addrs {
-        let bound = rt.block_on(tokio::net::TcpListener::bind(SocketAddr::new(ip, settings.port)));
+        let bound = rt.block_on(tokio::net::TcpListener::bind(SocketAddr::new(ip, port)));
         let listener = match bound.and_then(|l| l.local_addr().map(|a| (l, a))) {
             Ok((l, a)) => {
                 listening.push(a);

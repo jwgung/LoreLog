@@ -9,6 +9,16 @@
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
+<div id="choose" hidden>
+  <div class="choose">
+    <h1>금고를 어디에 둘까요</h1>
+    <p>기록과 메일·일정 노트, 색인을 모두 한 곳에 둡니다. 나중에 바꿀 수 있지만 데이터는 옮겨지지 않습니다.</p>
+    <button type="button" id="chooseHost">이 PC에 두기<span>이 앱이 서버가 됩니다. 폰과 다른 PC는 Tailscale로 이 PC에 보냅니다.</span></button>
+    <button type="button" id="chooseConnect" class="secondary">다른 곳의 금고에 연결<span>이미 돌고 있는 서버의 주소와 토큰을 넣습니다.</span></button>
+    <p id="chooseError" class="error"></p>
+  </div>
+</div>
+
 <div id="setup" hidden>
   <form id="setupForm">
     <h1>비서</h1>
