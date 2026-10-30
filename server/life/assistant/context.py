@@ -4,6 +4,7 @@ import collections
 import datetime as dt
 import json
 import re
+import sys
 
 from life.assistant.config import DATA, NOISE_PKGS, VAULT
 from life.assistant.senders import is_allowed, load_allow
@@ -83,25 +84,56 @@ def gather_mail(day):
     return sorted(rows)
 
 
+def conversations_in(lines):
+    """The conversation records among a phone file's records, in file order: [record]. A record without an id is
+    not a conversation anyone can refer to and is passed over."""
+    return [d for d in lines if d.get("type") == "conversation" and d.get("id") is not None]
+
+
+def read_records(path, only=None):
+    """The JSON objects of an NDJSON file, in order. Undecodable bytes and lines that are not objects are passed over
+    (raw files are only ever appended to, so one bad line must not hide the rest). With `only`, lines that do not
+    contain that text are not decoded at all."""
+    out = []
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if only is not None and only not in line:
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(d, dict):
+            out.append(d)
+    return out
+
+
 def load_conversations():
-    """Latest state of every LoreLog conversation (an updated status arrives as a new line)."""
+    """Latest state of every LoreLog conversation (an updated status arrives as a new line). A file that cannot be
+    read right now is passed over."""
     convs = {}
     for path in sorted((DATA / "raw/lorelog").glob("*.ndjson")):
-        for line in path.read_text(encoding="utf-8").splitlines():
-            try:
-                d = json.loads(line)
-            except ValueError:
-                continue
-            if d.get("type") == "conversation":
-                convs[d["id"]] = d
+        try:
+            lines = read_records(path)
+        except OSError as e:
+            sys.stderr.write(f"conversations: skipped {path.name}: {type(e).__name__}\n")
+            continue
+        for d in conversations_in(lines):
+            convs[d["id"]] = d
     return convs
 
 
 def confirmed_voice_label(convs, ts_ms):
     """Participants of the conversation this voice belongs to if the user confirmed it as theirs, else None.
-    ambient / pending / skipped conversations and voice outside any conversation are never used."""
+    ambient / pending / skipped conversations and voice outside any conversation are never used. A conversation
+    without a usable time span cannot contain anything."""
     for c in convs.values():
-        if c.get("status") in ("tagged", "auto") and int(c["start_ms"]) <= ts_ms <= int(c["end_ms"]):
+        if c.get("status") not in ("tagged", "auto"):
+            continue
+        try:
+            inside = int(c["start_ms"]) <= ts_ms <= int(c["end_ms"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            continue
+        if inside:
             return c.get("participants") or "?"
     return None
 
