@@ -214,13 +214,8 @@ fn authorized_token(token: &str, headers: &HeaderMap) -> bool {
 /// A failure the client is not told about; the type goes to the journal.
 fn internal(req: &Request, what: &dyn std::fmt::Debug) -> Reply {
     let path = req.target.split('?').next().unwrap_or("");
-    eprintln!("{} {} {} failed: {}", Local::now().format("%H:%M:%S"), req.method, path, kind_of(what));
+    eprintln!("{} {} {} failed: {}", Local::now().format("%H:%M:%S"), req.method, path, crate::errors::kind(what));
     Reply::new(500, json!({"error": "internal error"}))
-}
-
-fn kind_of(what: &dyn std::fmt::Debug) -> String {
-    let s = format!("{what:?}");
-    s.split(['(', ' ', '{']).next().unwrap_or("error").to_string()
 }
 
 // ---------- handlers ----------
@@ -295,7 +290,7 @@ fn transcribe(app: &App, req: &Request, _: &regex::Captures) -> Result<Reply, Re
     let audio = req.blob(app.max_bytes)?;
     match app.speech.transcribe(audio) {
         Ok(text) => Ok(Reply::ok(json!({"text": text}))),
-        Err(e) => Ok(Reply::new(502, json!({"error": format!("asr failed: {}", kind_of(&e))}))),
+        Err(e) => Ok(Reply::new(502, json!({"error": format!("asr failed: {}", crate::errors::kind(&e))}))),
     }
 }
 

@@ -193,11 +193,8 @@ pub fn etag_key(v: &str) -> String {
 pub fn existing_events(vault: &std::path::Path) -> HashMap<(String, String), (PathBuf, String)> {
     let mut out = HashMap::new();
     for p in files_like(&vault.join("Events"), "", ".md") {
-        let text = fs::read(&p).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
-        let head: String = text.chars().take(2500).collect();
-        let get = |k: &str| {
-            head.lines().find_map(|l| l.strip_prefix(k).and_then(|r| r.strip_prefix(':')).map(|r| r.trim().to_string()))
-        };
+        let head = crate::note::head(&p, 2500);
+        let get = |k: &str| crate::note::field(&head, k).map(str::to_string);
         if let (Some(u), Some(s)) = (get("dav_uid").filter(|v| !v.is_empty()), get("start").filter(|v| !v.is_empty())) {
             out.insert((u, s), (p.clone(), get("dav_etag").unwrap_or_default()));
         }
@@ -266,15 +263,11 @@ fn dav(method: &str, url: &str, acct: &Account, depth: &str, body: String, timeo
         .map_err(|_| DavError::Other("bad request".into()))?;
     match agent.run(req) {
         Ok(mut r) => {
-            r.body_mut().with_config().limit(200 * 1024 * 1024).read_to_string().map_err(|e| DavError::Other(kind(&e)))
+            r.body_mut().with_config().limit(200 * 1024 * 1024).read_to_string().map_err(|e| DavError::Other(crate::errors::kind(&e)))
         }
         Err(ureq::Error::StatusCode(c)) => Err(DavError::Status(c)),
-        Err(e) => Err(DavError::Other(kind(&e))),
+        Err(e) => Err(DavError::Other(crate::errors::kind(&e))),
     }
-}
-
-fn kind(e: &ureq::Error) -> String {
-    format!("{e:?}").split(['(', ' ', '{']).next().unwrap_or("error").to_string()
 }
 
 /// REPORT calendar-query for the window, expanding recurrences when asked.

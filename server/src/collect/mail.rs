@@ -453,11 +453,8 @@ pub fn known_notes(vault: &Path) -> (HashSet<String>, HashSet<String>) {
     static AT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\S+@\S+)").unwrap());
     let (mut ids, mut fps) = (HashSet::new(), HashSet::new());
     for p in files_like_nested(&vault.join("Mail"), "", ".md") {
-        let text = fs::read(&p).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
-        let head: String = text.chars().take(1500).collect();
-        let get = |k: &str| {
-            head.lines().find_map(|l| l.strip_prefix(k).and_then(|r| r.strip_prefix(':')).map(|r| r.trim().to_string()))
-        };
+        let head = crate::note::head(&p, 1500);
+        let get = |k: &str| crate::note::field(&head, k).map(str::to_string);
         if let Some(id) = get("mail_id").filter(|v| !v.is_empty()) {
             ids.insert(id);
         }

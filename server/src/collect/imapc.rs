@@ -12,8 +12,8 @@ pub fn connect(host: &str, port: u16, user: &str, password: &str) -> Result<Sess
     client.login(user, password).map_err(|(e, _)| kind(&e))
 }
 
-pub fn kind(e: &imap::Error) -> String {
-    format!("{e:?}").split(['(', ' ', '{']).next().unwrap_or("error").to_string()
+fn kind(e: &imap::Error) -> String {
+    crate::errors::kind(e)
 }
 
 /// A folder opened read-only: (UIDVALIDITY, every UID, ascending). `since`: only mail from that day (YYYY-MM-DD).

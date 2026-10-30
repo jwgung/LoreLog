@@ -15,7 +15,6 @@
 //! share a subject do not). Traces (phone, PC) become one document per day and kind; mail, events and words are one
 //! document each.
 use std::collections::BTreeSet;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -26,6 +25,7 @@ use sha2::{Digest, Sha256};
 use crate::assistant::context::{Conversations, confirmed_voice_label};
 use crate::assistant::diary::split_correction;
 use crate::assistant::senders::{noise, record_allowed};
+use crate::note;
 use crate::assistant::util::{Counter, as_int, files_like, files_like_nested, hm, local, pystr, truthy};
 use crate::config::Paths;
 
@@ -122,24 +122,9 @@ pub fn conversation_days(c: &Record) -> Span {
 
 // ---------- notes ----------
 
-/// (frontmatter, body) of a note; a note without frontmatter is all body.
-fn split_front(text: &str) -> (&str, &str) {
-    if let Some(rest) = text.strip_prefix("---\n")
-        && let Some(i) = rest.find("\n---")
-    {
-        return (&rest[..=i], &rest[i + 4..]);
-    }
-    ("", text)
-}
-
 /// The value of the first `key:` line, trimmed and without surrounding quotes.
 fn front_value(front: &str, key: &str) -> String {
-    for line in front.split('\n') {
-        if let Some(rest) = line.strip_prefix(key).and_then(|r| r.strip_prefix(':')) {
-            return rest.trim().trim_matches('"').trim_matches('\'').to_string();
-        }
-    }
-    String::new()
+    note::field(front, key).unwrap_or_default().trim_matches('"').trim_matches('\'').to_string()
 }
 
 /// The `YYYY-MM-DD` a value starts with, else the one the file name starts with, else "".
@@ -172,13 +157,9 @@ fn stem(path: &Path) -> String {
     path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
-fn read_lossy(path: &Path) -> std::io::Result<String> {
-    Ok(String::from_utf8_lossy(&fs::read(path)?).into_owned())
-}
-
 pub fn mail_docs(path: &Path) -> std::io::Result<Vec<Doc>> {
-    let text = read_lossy(path)?;
-    let (front, body) = split_front(&text);
+    let text = note::read(path)?;
+    let (front, body) = note::split(&text);
     let sent = front_value(front, "mail_source").contains("Sent");
     let subject = front_value(front, "subject");
     Ok(vec![Doc {
@@ -193,8 +174,8 @@ pub fn mail_docs(path: &Path) -> std::io::Result<Vec<Doc>> {
 }
 
 pub fn event_docs(path: &Path) -> std::io::Result<Vec<Doc>> {
-    let text = read_lossy(path)?;
-    let (front, body) = split_front(&text);
+    let text = note::read(path)?;
+    let (front, body) = note::split(&text);
     let (start, end, place) = (front_value(front, "start"), front_value(front, "end"), front_value(front, "location"));
     let head: String = start.chars().take(16).collect::<String>().replace('T', " ");
     let tail: String = end.chars().skip(11).take(5).collect();

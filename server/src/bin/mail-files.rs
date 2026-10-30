@@ -19,10 +19,6 @@ folder. --dry-run reads sizes and headers only and stores nothing.";
 
 const DEFAULT_LIMIT: usize = 100;
 
-fn arg(args: &[String], name: &str) -> Option<String> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
-}
-
 /// -> (mails read, files seen, bytes written), or what went wrong
 fn run_folder(
     s: &mut imapc::Session,
@@ -75,45 +71,37 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     let dry = args.iter().any(|a| a == "--dry-run");
-    let limit = arg(&args, "--limit").and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_LIMIT);
+    let limit = settings::arg(&args, "--limit").and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_LIMIT);
     let paths = Paths::from_env();
-    let cfg = settings::mail(&paths);
-    let need: Vec<&str> = ["IMAP_HOST", "IMAP_USER", "IMAP_PASSWORD"]
-        .into_iter()
-        .filter(|k| cfg.get(*k).map(|v| v.is_empty()).unwrap_or(true))
-        .collect();
-    if !need.is_empty() {
-        eprintln!(
-            "Missing {} ({}, {}).",
-            need.join(", "),
-            settings::env_file(&paths).display(),
-            settings::sources_file(&paths).display()
-        );
-        return ExitCode::from(2);
-    }
-    let folders = match arg(&args, "--folder") {
-        Some(f) => vec![f],
-        None => settings::list(cfg.get("MAIL_FOLDERS"), "INBOX,Sent Messages"),
+    let cfg = match settings::imap(&paths, settings::arg(&args, "--folder")) {
+        Ok(c) => c,
+        Err(need) => {
+            eprintln!(
+                "Missing {} ({}, {}).",
+                need.join(", "),
+                settings::env_file(&paths).display(),
+                settings::sources_file(&paths).display()
+            );
+            return ExitCode::from(2);
+        }
     };
-    if folders.is_empty() {
+    if cfg.folders.is_empty() {
         eprintln!("No mail folders configured.");
         return ExitCode::from(2);
     }
     let store = RawStore::new(&paths.data);
     let state_file = paths.data.join("mail-files-state.json");
     let mut state = imapc::State::load(&state_file);
-    let port: u16 = cfg.get("IMAP_PORT").and_then(|p| p.parse().ok()).unwrap_or(993);
-    let mut s = match imapc::connect(&cfg["IMAP_HOST"], port, &cfg["IMAP_USER"], &cfg["IMAP_PASSWORD"]) {
+    let mut s = match imapc::connect(&cfg.host, cfg.port, &cfg.user, &cfg.password) {
         Ok(s) => s,
         Err(k) => {
             eprintln!("IMAP connection failed: {k}");
             return ExitCode::FAILURE;
         }
     };
-    let account = cfg.get("MAIL_ACCOUNT").cloned().unwrap_or_else(|| "account".into());
     let (mut failed, mut totals) = (false, (0, 0, 0));
-    for folder in &folders {
-        match run_folder(&mut s, folder, &account, &store, &mut state, limit, dry) {
+    for folder in &cfg.folders {
+        match run_folder(&mut s, folder, &cfg.account, &store, &mut state, limit, dry) {
             Ok((m, f, w)) => totals = (totals.0 + m, totals.1 + f, totals.2 + w),
             Err(problem) => {
                 eprintln!("{problem}");
