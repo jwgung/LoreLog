@@ -75,7 +75,8 @@ impl IngestSettings {
 
 /// Where the chat and speech models are: `LIFE_LLM_URL`, `LIFE_LLM_MODEL`, `LIFE_ASR_URL`, `LIFE_ASR_MODEL`, in
 /// ingest.env or the environment (the environment wins). An empty value is no setting.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Models {
     pub chat_url: String,
     pub chat_model: String,
@@ -217,4 +218,80 @@ pub fn start(rt: &tokio::runtime::Handle, app: Arc<App>, port: u16, addrs: &[IpA
         });
     }
     Running { stop, listening, failed, broken }
+}
+
+const MODEL_KEYS: [&str; 4] = ["LIFE_LLM_URL", "LIFE_LLM_MODEL", "LIFE_ASR_URL", "LIFE_ASR_MODEL"];
+
+/// The model addresses written in ingest.env (the environment not counted: this is what the settings screen edits).
+pub fn saved_models(paths: &Paths) -> Models {
+    Models::from_maps(&read_env_file(&ingest_env(paths)), &BTreeMap::new())
+}
+
+/// Write the model addresses into ingest.env, keeping its other settings. An empty value removes the setting. Err: an
+/// address that is not http(s).
+pub fn save_models(paths: &Paths, m: &Models) -> Result<(), String> {
+    for (what, u) in [("대화 모델", &m.chat_url), ("음성 모델", &m.asr_url)] {
+        let u = u.trim();
+        if !u.is_empty()
+            && !matches!(url::Url::parse(u).map(|p| p.scheme().to_string()).as_deref(), Ok("http" | "https"))
+        {
+            return Err(format!("{what} 주소는 http:// 또는 https:// 로 시작해야 합니다"));
+        }
+    }
+    let file = ingest_env(paths);
+    let mut cfg = read_env_file(&file);
+    let values = [&m.chat_url, &m.chat_model, &m.asr_url, &m.asr_model];
+    for (k, v) in MODEL_KEYS.iter().zip(values) {
+        match v.trim() {
+            "" => cfg.remove(*k),
+            v => cfg.insert(k.to_string(), v.to_string()),
+        };
+    }
+    let text: String = cfg.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
+    let fail = |e: std::io::Error| format!("저장하지 못했습니다: {:?}", e.kind());
+    crate::fsutil::ensure_private_dir(&paths.conf).map_err(fail)?;
+    crate::fsutil::write_private_atomic(&file, text.as_bytes()).map_err(fail)
+}
+
+/// The chat and speech models of a running server, changeable without restarting it (the settings screen saves new
+/// addresses and they apply to the next request). An empty address answers with an error saying it is not set.
+pub struct LiveModels(std::sync::RwLock<Models>);
+
+impl LiveModels {
+    pub fn new(m: Models) -> Arc<LiveModels> {
+        Arc::new(LiveModels(std::sync::RwLock::new(m)))
+    }
+
+    pub fn set(&self, m: Models) {
+        *self.0.write().unwrap_or_else(|e| e.into_inner()) = m;
+    }
+
+    fn get(&self) -> Models {
+        self.0.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// The server's app with these models.
+    pub fn app(self: &Arc<Self>, paths: Paths, s: &IngestSettings) -> App {
+        App::with(paths, &s.token, &s.cls, s.max_bytes, self.clone(), self.clone())
+    }
+}
+
+impl crate::llm::Model for LiveModels {
+    fn complete(&self, messages: &[serde_json::Value], ask: crate::llm::Ask) -> anyhow::Result<String> {
+        let m = self.get();
+        if m.chat_url.is_empty() {
+            anyhow::bail!("대화 모델 주소가 설정되지 않았습니다");
+        }
+        Http { url: m.chat_url, model: m.chat_model }.complete(messages, ask)
+    }
+}
+
+impl crate::llm::Speech for LiveModels {
+    fn transcribe(&self, audio: &[u8]) -> anyhow::Result<String> {
+        let m = self.get();
+        if m.asr_url.is_empty() {
+            anyhow::bail!("음성 모델 주소가 설정되지 않았습니다");
+        }
+        HttpSpeech { url: m.asr_url, model: m.asr_model }.transcribe(audio)
+    }
 }

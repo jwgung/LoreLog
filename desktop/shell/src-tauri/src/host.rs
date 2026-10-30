@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use life_agent_core::config::{self, Config};
 use life_server::collect::{setup, sync};
 use life_server::config::{OsDirs, Paths};
-use life_server::host::{self, IngestSettings, Models, Running};
+use life_server::host::{self, IngestSettings, LiveModels, Models, Running};
 use life_server::http::App;
 use serde::Serialize;
 
@@ -104,6 +104,7 @@ pub struct Info {
 /// The server running in this app.
 pub struct Hosting {
     rt: tokio::runtime::Runtime,
+    models: Arc<LiveModels>,
     app: Arc<App>,
     paths: Paths,
     port: u16,
@@ -121,7 +122,8 @@ impl Hosting {
         log_to_file(&paths.data);
         let token = host::ensure_token(&paths).map_err(|e| format!("토큰을 만들지 못했습니다: {e}"))?;
         let settings = IngestSettings::load(&paths)?;
-        let app = Arc::new(Models::load(&paths).app(paths.clone(), &settings));
+        let models = LiveModels::new(Models::load(&paths));
+        let app = Arc::new(models.app(paths.clone(), &settings));
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .thread_name("life-host")
@@ -138,6 +140,7 @@ impl Hosting {
         let (sync_now, wake) = mpsc::channel();
         let hosting = Hosting {
             rt,
+            models,
             app,
             paths,
             port: addr.port(),
@@ -195,6 +198,18 @@ impl Hosting {
                 }
             }
         });
+    }
+
+    /// Where its vault and settings are.
+    pub fn paths(&self) -> &Paths {
+        &self.paths
+    }
+
+    /// Save new model addresses and use them from the next request on (no restart).
+    pub fn set_models(&self, m: &Models) -> Result<(), String> {
+        host::save_models(&self.paths, m)?;
+        self.models.set(Models::load(&self.paths)); // the environment still wins, as at start
+        Ok(())
     }
 
     /// Ask for a sync now (one waiting request is enough; a running sync is not doubled).

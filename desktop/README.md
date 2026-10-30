@@ -53,7 +53,8 @@ Omni 데스크톱 클라이언트(`dev` 브랜치의 `pc_activity`)를 읽고 �
   - 다른 기기에 넣을 주소는 `http://<PC의 tailnet 이름>:<포트>`. tailnet 안의 HTTP는 WireGuard로 이미 암호화된다. HTTPS를 원하면 사용자가 `tailscale serve`로 붙인다. tailnet 안에서는 토큰이 유일한 문이므로, 다른 사람과 tailnet을 함께 쓰면 Tailscale ACL로 이 포트에 닿을 기기를 좁힌다. 받는 주소는 Tailscale 인터페이스의 tailnet 주소뿐이다(같은 100.64.0.0/10 대역이라도 다른 인터페이스, 예컨대 통신사 CGNAT는 쓰지 않는다).
   - 서버를 띄우지 못하면(포트를 다른 프로그램이 쓰는 등) 처음 화면에 그 이유를 보여 준다. 금고를 이 PC에 둔 동안 설정의 서버 주소는 바꿀 수 없다.
   - 동기화: 켤 때 한 번, 그 뒤 1시간마다 메일·첨부·일정을 가져오고 사서 색인을 갱신한다(`life sync`와 같은 함수). 결과는 `life status`와 같은 `status.json`.
-  - 모델: `ingest.env`의 `LIFE_LLM_URL`·`LIFE_LLM_MODEL`·`LIFE_ASR_URL`·`LIFE_ASR_MODEL`. 비어 있으면 대화·음성이 실패한다(설정 화면은 다음 단계).
+  - 설정 화면: 다른 기기에 넣을 주소와 토큰(보기·복사), 메일(서버·계정·비밀번호 → 연결하고 폴더 고르기), 일정(CalDAV 서버 → 달력 고르기), 모델(대화·음성 주소, `ingest.env`의 `LIFE_LLM_URL`·`LIFE_LLM_MODEL`·`LIFE_ASR_URL`·`LIFE_ASR_MODEL`), 동기화 결과와 "지금 동기화". 메일·일정을 저장하면 바로 동기화한다. 모델은 저장한 다음 질문부터 쓴다(다시 켜지 않아도 된다). 모델 주소가 비어 있으면 대화·음성은 "주소가 설정되지 않았다"고 답한다.
+  - 금고 위치는 설정에서 바꿀 수 있다. 바꿔도 기록은 옮기거나 지우지 않는다.
   - 서버의 기록(받은 줄, 실패, 사서가 건너뛴 파일)은 `%LOCALAPPDATA%\life\desktop.log`.
 - **다른 곳의 금고에 연결**(`connect`): 지금까지의 방식. 서버 주소와 토큰을 넣는다. 모드가 생기기 전에 주소를 넣어 둔 설정은 이쪽으로 읽는다.
 
@@ -65,7 +66,7 @@ Omni 데스크톱 클라이언트(`dev` 브랜치의 `pc_activity`)를 읽고 �
 결과(이 PC는 `CARGO_TARGET_DIR`가 `~/.cache/cargo-target`): `.../x86_64-pc-windows-msvc/release/life-desktop.exe`(데스크톱 앱)와 `life-agent.exe`(명령줄). Windows에서 직접 빌드하려면 Rust와 Visual Studio Build Tools(C++)를 설치하고 `cargo build --release -p life-desktop -p life-agent`. 데스크톱 앱은 실행할 때 **WebView2 런타임**이 필요하다(Windows 11 기본 포함, Windows 10은 Edge WebView2 Evergreen Runtime 설치).
 
 ## Windows에서 시작하기 (데스크톱 앱)
-1. `life-desktop.exe`를 실행한다. 처음에는 금고를 어디에 둘지 묻는다. "이 PC에 두기"면 바로 대화로 넘어간다(폰에 넣을 주소·토큰을 보여 주는 화면은 다음 단계). "다른 곳의 금고에 연결"이면 서버 주소(예: `https://gungbuntu.tail8d1ab7.ts.net:48765`, PC가 tailnet에 있어야 한다)와 토큰(서버의 `INGEST_TOKEN`)을 넣고 "저장하고 대화 열기".
+1. `life-desktop.exe`를 실행한다. 처음에는 금고를 어디에 둘지 묻는다. "이 PC에 두기"면 바로 대화로 넘어간다. 설정에서 메일·일정·모델을 넣고, 폰에 넣을 주소·토큰을 본다. "다른 곳의 금고에 연결"이면 서버 주소(예: `https://gungbuntu.tail8d1ab7.ts.net:48765`, PC가 tailnet에 있어야 한다)와 토큰(서버의 `INGEST_TOKEN`)을 넣고 "저장하고 대화 열기".
 2. 그 자리에서 앱에 번들된 비서 화면(대화)으로 넘어간다. 창을 닫아도 트레이에 남아 수집을 계속한다. 트레이: 열기 / 채팅 열기 / 설정 / 종료.
 3. "설정"에서 감시 폴더를 더한다(예: 다운로드). 아무것도 더하지 않으면 파일은 보지 않고 창 활동만 수집한다.
 

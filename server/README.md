@@ -37,7 +37,7 @@ Rust 툴체인(저장소 루트의 `rust-toolchain.toml`)이 필요하다. `depl
 
 ## 어느 OS에서든
 
-라이브러리는 어느 OS에서든 그대로 돌아야 한다. 기본 위치는 `config::OsDirs`로 OS에서 고르고(리눅스는 예전 그대로 `~/.config/vault-sync`, `~/.local/share/life`, `~/.local/share/vault-sync`. `XDG_CONFIG_HOME`·`XDG_DATA_HOME`을 두면 그쪽을 따른다), 한 OS의 경로를 코드에 적지 않는다. 1시간마다의 동기화 같은 예약 실행은 라이브러리가 아니라 그것을 띄우는 쪽의 일이다(상시 서버는 `deploy/systemd/life-sync.timer`, 금고를 PC에 둔 데스크톱 앱은 앱이 1시간마다). 라이브러리 안의 스레드는 요청 하나에 딸린 일회성 작업(하루 정리 만들기, 할 일 뽑기)뿐이다. 받기 서버를 다른 프로그램 안에서 띄울 때는 `host`(설정 읽기 `IngestSettings`·`Models`, 토큰 만들기, 주소별로 띄우고 멈추기)를 쓴다. 라이브러리가 남기는 기록은 `log` 매크로로 나가고 띄우는 쪽이 받을 곳을 한 번 정한다(`logging`): 명령줄 도구는 예전처럼 stderr, 데스크톱 앱은 파일. 동기화 작업(메일, 첨부, 일정, 사서 갱신)은 `collect::sync`의 함수이고, 출력하지 않고 줄 단위로 알린다. 명령줄 도구는 그 줄을 stdout·stderr로 옮기고, 데스크톱 앱은 같은 함수를 직접 부른다.
+라이브러리는 어느 OS에서든 그대로 돌아야 한다. 기본 위치는 `config::OsDirs`로 OS에서 고르고(리눅스는 예전 그대로 `~/.config/vault-sync`, `~/.local/share/life`, `~/.local/share/vault-sync`. `XDG_CONFIG_HOME`·`XDG_DATA_HOME`을 두면 그쪽을 따른다), 한 OS의 경로를 코드에 적지 않는다. 1시간마다의 동기화 같은 예약 실행은 라이브러리가 아니라 그것을 띄우는 쪽의 일이다(상시 서버는 `deploy/systemd/life-sync.timer`, 금고를 PC에 둔 데스크톱 앱은 앱이 1시간마다). 라이브러리 안의 스레드는 요청 하나에 딸린 일회성 작업(하루 정리 만들기, 할 일 뽑기)뿐이다. 받기 서버를 다른 프로그램 안에서 띄울 때는 `host`(설정 읽기 `IngestSettings`·`Models`, 모델 저장·실행 중 바꾸기 `save_models`·`LiveModels`, 토큰 만들기, 주소별로 띄우고 멈추기)를 쓴다. 모을 곳 설정(메일 계정·폴더, 달력)은 `collect::sources`가 하고, `life add`와 데스크톱 설정 화면이 같이 쓴다. 라이브러리가 남기는 기록은 `log` 매크로로 나가고 띄우는 쪽이 받을 곳을 한 번 정한다(`logging`): 명령줄 도구는 예전처럼 stderr, 데스크톱 앱은 파일. 동기화 작업(메일, 첨부, 일정, 사서 갱신)은 `collect::sync`의 함수이고, 출력하지 않고 줄 단위로 알린다. 명령줄 도구는 그 줄을 stdout·stderr로 옮기고, 데스크톱 앱은 같은 함수를 직접 부른다.
 
 ## 테스트
 
