@@ -20,9 +20,9 @@ date: YYYY-MM-DD (default: today)
   --set-allow      read {allow:['label: title' | 'label: *']} from stdin and store it
   --chatlog        print the day's chat exchange as JSON
   --chat           read {message, wrong?} from stdin; save it and print the assistant's reply as JSON
-  --todos          print open and recently done to-dos as JSON
+  --todos          print proposed, open and recently done to-dos as JSON
   --todos-extract  extract new to-dos from the day's records (throttled)
-  --todo-act       read {id, action: accept|done|dismiss|reopen} from stdin
+  --todo-act       read {id, action: accept|done|dismiss|reopen} from stdin (accept: proposed only, reopen: done only)
   --todo-add       read {text} from stdin and add it as the user's own to-do
   --dry-run        print the generated draft instead of writing it";
 
@@ -46,8 +46,10 @@ fn run(args: &[String], paths: &Paths, day: &str) -> Result<(), String> {
         println!("{}", json!({"added": n}));
     } else if flag("--todo-act") {
         let v = stdin_json()?;
-        if !todos::act(paths, &text_of(&v, "id")?, &text_of(&v, "action")?).map_err(|e| e.to_string())? {
-            return Err("no such to-do or action".into());
+        match todos::act(paths, &text_of(&v, "id")?, &text_of(&v, "action")?).map_err(|e| e.to_string())? {
+            todos::Acted::Changed => {}
+            todos::Acted::Missing => return Err("no such to-do or action".into()),
+            todos::Acted::NotNow => return Err("the to-do is not in a state for that action".into()),
         }
     } else if flag("--todo-add") {
         todos::add_user(paths, &text_of(&stdin_json()?, "text")?, day).map_err(|e| e.to_string())?;

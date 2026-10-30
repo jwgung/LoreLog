@@ -119,7 +119,7 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
     var fixing by remember { mutableStateOf<String?>(null) }
     var input by remember { mutableStateOf("") }
     var todoCount by remember { mutableStateOf(0) }
-    LaunchedEffect(Unit) { todoCount = DiaryClient.fetchTodos(context)?.open?.size ?: 0 }
+    LaunchedEffect(Unit) { todoCount = DiaryClient.fetchTodos(context)?.let { it.open.size + it.proposed.size } ?: 0 }
     // 앱을 다시 열어도 오늘 나눈 대화가 이어서 보이게 서버에서 불러온다.
     LaunchedEffect(day) {
         extra.clear(); selected = null; fixing = null

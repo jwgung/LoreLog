@@ -243,8 +243,9 @@ fn todo_act(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, R
         return Ok(Reply::new(400, json!({"error": "bad action"})));
     }
     match todos::act(&app.paths, &caps[1], action).map_err(|e| internal(req, &e))? {
-        true => Ok(Reply::ok(json!({"ok": true}))),
-        false => Ok(Reply::new(404, json!({"error": "not found"}))),
+        todos::Acted::Changed => Ok(Reply::ok(json!({"ok": true}))),
+        todos::Acted::Missing => Ok(Reply::new(404, json!({"error": "not found"}))),
+        todos::Acted::NotNow => Ok(Reply::new(409, json!({"error": "not in a state for that"}))),
     }
 }
 

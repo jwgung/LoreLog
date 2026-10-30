@@ -4,16 +4,14 @@ use std::collections::{BTreeMap, HashMap};
 
 use serde_json::{Value, json};
 
+use crate::errors::kind;
+
 pub type Session = imap::Session<imap::Connection>;
 
 /// Log in. The error says only what kind of failure it was, so the password cannot leak into a message.
 pub fn connect(host: &str, port: u16, user: &str, password: &str) -> Result<Session, String> {
     let client = imap::ClientBuilder::new(host, port).connect().map_err(|e| kind(&e))?;
     client.login(user, password).map_err(|(e, _)| kind(&e))
-}
-
-fn kind(e: &imap::Error) -> String {
-    crate::errors::kind(e)
 }
 
 /// A folder opened read-only: (UIDVALIDITY, every UID, ascending). `since`: only mail from that day (YYYY-MM-DD).

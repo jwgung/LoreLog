@@ -97,8 +97,8 @@ pub fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
 }
 
-/// What the mail collectors need to reach the mailbox.
-#[derive(Debug, PartialEq)]
+/// What the mail collectors need to reach the mailbox. `Debug` leaves the password out.
+#[derive(PartialEq)]
 pub struct Imap {
     pub host: String,
     pub port: u16,
@@ -111,21 +111,33 @@ pub struct Imap {
     pub since: Option<String>,
 }
 
+impl std::fmt::Debug for Imap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Imap")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("user", &self.user)
+            .field("password", &"<hidden>")
+            .field("account", &self.account)
+            .field("folders", &self.folders)
+            .field("since", &self.since)
+            .finish()
+    }
+}
+
 /// The mail settings, `folder` (from `--folder`) replacing the configured folders. Err: the required settings that are
 /// missing or empty.
 pub fn imap(paths: &Paths, folder: Option<String>) -> Result<Imap, Vec<&'static str>> {
     let cfg = mail(paths);
     let get = |k: &str| cfg.get(k).filter(|v| !v.is_empty()).cloned();
-    let need: Vec<&'static str> =
-        ["IMAP_HOST", "IMAP_USER", "IMAP_PASSWORD"].into_iter().filter(|k| get(k).is_none()).collect();
-    if !need.is_empty() {
-        return Err(need);
-    }
+    let (Some(host), Some(user), Some(password)) = (get("IMAP_HOST"), get("IMAP_USER"), get("IMAP_PASSWORD")) else {
+        return Err(["IMAP_HOST", "IMAP_USER", "IMAP_PASSWORD"].into_iter().filter(|k| get(k).is_none()).collect());
+    };
     Ok(Imap {
-        host: get("IMAP_HOST").unwrap_or_default(),
+        host,
         port: cfg.get("IMAP_PORT").and_then(|p| p.parse().ok()).unwrap_or(993),
-        user: get("IMAP_USER").unwrap_or_default(),
-        password: get("IMAP_PASSWORD").unwrap_or_default(),
+        user,
+        password,
         account: cfg.get("MAIL_ACCOUNT").cloned().unwrap_or_else(|| "account".into()),
         folders: match folder {
             Some(f) => vec![f],
@@ -168,6 +180,7 @@ mod tests {
             }
         );
         assert_eq!(imap(&paths, Some("Archive".into())).unwrap().folders, vec!["Archive".to_string()]);
+        assert!(!format!("{got:?}").contains("pw\""), "the password stays out of Debug");
         fs::remove_dir_all(root).unwrap();
     }
 

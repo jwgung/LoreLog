@@ -1,7 +1,8 @@
 //! What goes into the journal about a failure: its kind, never its text, which may carry a password, a URL's
 //! credentials or what the user wrote.
 
-/// The variant name of an error's `Debug` form (`Io(Custom { .. })` -> `Io`).
+/// The variant name of an error's `Debug` form (`Io(Custom { .. })` -> `Io`). Pass typed errors: for a bare string
+/// the first word of the string itself would survive.
 pub fn kind(e: &dyn std::fmt::Debug) -> String {
     let s = format!("{e:?}");
     let k = s.split(['(', ' ', '{']).next().unwrap_or_default();

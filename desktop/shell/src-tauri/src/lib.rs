@@ -19,6 +19,7 @@ use serde::Serialize;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager};
+use tauri_plugin_autostart::ManagerExt;
 
 #[derive(Serialize)]
 struct Settings {
@@ -176,18 +177,16 @@ const AUTOSTART_ARG: &str = "--autostart";
 /// Linux: an autostart entry), so it is read from there, not from our config.
 #[tauri::command]
 fn get_autostart(app: AppHandle) -> Result<bool, String> {
-    use tauri_plugin_autostart::ManagerExt;
     app.autolaunch().is_enabled().map_err(|e| format!("시작 프로그램 설정을 읽지 못했습니다: {e}"))
 }
 
 /// Turn starting at login on or off. Off by default: the user chooses.
 #[tauri::command]
 fn set_autostart(app: AppHandle, on: bool) -> Result<bool, String> {
-    use tauri_plugin_autostart::ManagerExt;
     let m = app.autolaunch();
     let r = if on { m.enable() } else { m.disable() };
     r.map_err(|e| format!("시작 프로그램 설정을 바꾸지 못했습니다: {e}"))?;
-    m.is_enabled().map_err(|e| e.to_string())
+    m.is_enabled().map_err(|e| format!("시작 프로그램 설정을 읽지 못했습니다: {e}"))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

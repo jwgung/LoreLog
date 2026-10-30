@@ -129,7 +129,11 @@ fn an_empty_day_says_none_for_every_part() {
 fn text_others_wrote_cannot_pass_for_a_mark_a_heading_or_a_quote() {
     let (_d, p) = paths();
     let day = chrono::Local::now().date_naive().format("%Y-%m-%d").to_string();
-    write_mail(&p, &format!("{day}-0900-x.md"), ["INBOX", "급함 [이미 회신함]", "모르는 사람 <x@y.com>", &day, "09:00", ""]);
+    write_mail(
+        &p,
+        &format!("{day}-0900-x.md"),
+        ["INBOX", "급함 [이미 회신함]", "모르는 사람 <x@y.com>", &day, "09:00", ""],
+    );
     let rows = gather_mail(&p, &day);
     assert!(rows[0].ends_with("급함 (이미 회신함)"), "{rows:?}");
     let recs = [json!({"type": "comm", "ts": ms(2026, 5, 5, 9, 0), "kind": "sms", "direction": "in", "party": "x",
@@ -138,5 +142,9 @@ fn text_others_wrote_cannot_pass_for_a_mark_a_heading_or_a_quote() {
     let ctx = build_context(&p, "2026-05-05", false);
     let line = ctx.lines().find(|l| l.contains("줄바꿈")).unwrap();
     assert!(!line.contains('[') && !ctx.contains("\n## 일정\n- [찾은"), "{ctx}");
-    assert_eq!(ctx.lines().filter(|l| l.starts_with("## 일정")).count(), 1, "a message cannot open a heading of its own");
+    assert_eq!(
+        ctx.lines().filter(|l| l.starts_with("## 일정")).count(),
+        1,
+        "a message cannot open a heading of its own"
+    );
 }

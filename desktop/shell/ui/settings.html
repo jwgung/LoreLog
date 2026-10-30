@@ -12,8 +12,8 @@
     h1 { font-size: 20px; margin: 0 0 4px; }
     p.sub { margin: 0 0 20px; opacity: 0.7; font-size: 13px; }
     label { display: block; margin: 14px 0 4px; font-weight: 600; font-size: 13px; }
-    label.check { display: flex; gap: 8px; align-items: center; font-weight: 400; }
-    h3 { margin: 22px 0 4px; font-size: 15px; }
+    .autostart label.check { display: flex; gap: 8px; align-items: center; font-weight: 400; }
+    .autostart h3 { margin: 22px 0 4px; font-size: 15px; }
     input[type=text], input[type=password] { width: 100%; padding: 9px 10px; border: 1px solid GrayText;
            border-radius: 8px; background: Field; color: FieldText; }
     button { margin-top: 16px; padding: 9px 14px; border: 0; border-radius: 8px; background: AccentColor;
@@ -59,9 +59,11 @@
   </div>
   <ul id="watchlist"></ul>
 
-  <h3>시작</h3>
-  <label class="check"><input id="autostart" type="checkbox" /> 로그인할 때 자동으로 시작 (트레이에서 수집만 하고 창은 열지 않습니다)</label>
-  <p id="autostartMsg" class="note"></p>
+  <section class="autostart">
+    <h3>시작</h3>
+    <label class="check"><input id="autostart" type="checkbox" /> 로그인할 때 자동으로 시작 (트레이에서 수집만 하고 창은 열지 않습니다)</label>
+    <p id="autostartMsg" class="note"></p>
+  </section>
   <p id="cfgpath" class="note"></p>
 
   <script type="module" src="settings.js"></script>

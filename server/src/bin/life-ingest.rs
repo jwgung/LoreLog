@@ -23,7 +23,7 @@ const HELP: &str = r#"life-ingest: collection endpoint that any client (phone, P
   POST /transcribe           body: audio (wav); returns {text} from the speech model (LIFE_ASR_URL); nothing is stored
   GET  /todos                proposed (found by the model), open and recently done to-dos (+ extracting flag)
   POST /todos                body: {text}; add the user's own to-do
-  POST /todos/<id>           body: {action: accept|done|dismiss|reopen}
+  POST /todos/<id>           body: {action: accept|done|dismiss|reopen}; 409 when the to-do is not in a state for it
   POST /todos/extract        extract new to-dos from the records in the background (throttled)
   GET  /healthz              only reports that it is alive (no auth, reveals nothing else)
 

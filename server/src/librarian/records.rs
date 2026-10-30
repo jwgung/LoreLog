@@ -25,9 +25,9 @@ use sha2::{Digest, Sha256};
 use crate::assistant::context::{Conversations, confirmed_voice_label};
 use crate::assistant::diary::split_correction;
 use crate::assistant::senders::{noise, record_allowed};
-use crate::note;
 use crate::assistant::util::{Counter, as_int, files_like, files_like_nested, hm, local, pystr, truthy};
 use crate::config::Paths;
+use crate::note;
 
 type Record = Map<String, Value>;
 

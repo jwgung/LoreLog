@@ -56,6 +56,12 @@ fn items(d: &mut Value) -> &mut Vec<Value> {
     d["items"].as_array_mut().expect("items is a list")
 }
 
+/// What the model found, waiting for the user to take it.
+pub const PROPOSED: &str = "proposed";
+pub const OPEN: &str = "open";
+pub const DONE: &str = "done";
+pub const DISMISSED: &str = "dismissed";
+
 fn status(i: &Value) -> &str {
     i.get("status").and_then(Value::as_str).unwrap_or("")
 }
@@ -63,11 +69,19 @@ fn status(i: &Value) -> &str {
 /// Add a to-do unless one with the same title (letters and digits only) exists, also a dismissed one: a dismissed
 /// to-do never comes back.
 pub fn add(d: &mut Value, title: &str, source: &str, due: &str, day: &str, mail_subject: &str) -> bool {
-    add_as(d, title, source, due, day, mail_subject, "open")
+    add_as(d, title, source, due, day, mail_subject, OPEN)
 }
 
-/// [`add`] with the status the to-do starts in (`open`, or `proposed` for what the model found).
-pub fn add_as(d: &mut Value, title: &str, source: &str, due: &str, day: &str, mail_subject: &str, status: &str) -> bool {
+/// [`add`] with the status the to-do starts in ([`OPEN`], or [`PROPOSED`] for what the model found).
+pub fn add_as(
+    d: &mut Value,
+    title: &str,
+    source: &str,
+    due: &str,
+    day: &str,
+    mail_subject: &str,
+    status: &str,
+) -> bool {
     let n = norm(title);
     if n.is_empty() || items(d).iter().any(|i| norm(&pystr(i.get("title"))) == n) {
         return false;
@@ -79,7 +93,8 @@ pub fn add_as(d: &mut Value, title: &str, source: &str, due: &str, day: &str, ma
     true
 }
 
-/// Mark open mail to-dos done when the user has since replied in the same thread (recorded as auto-closed).
+/// Mark open or proposed mail to-dos done when the user has since replied in the same thread (recorded as
+/// auto-closed).
 pub fn autoclose(paths: &Paths, d: &mut Value) -> usize {
     autoclose_with(d, &sent_index(paths, 21))
 }
@@ -89,11 +104,11 @@ pub fn autoclose_with(d: &mut Value, sent: &[super::context::Sent]) -> usize {
     for i in items(d).iter_mut() {
         let thread = i.get("thread").and_then(Value::as_str).unwrap_or("").to_string();
         let created = i.get("created").and_then(Value::as_f64).unwrap_or(0.0);
-        if status(i) == "open"
+        if matches!(status(i), OPEN | PROPOSED)
             && !thread.is_empty()
             && sent.iter().any(|(k, _, w)| *k == thread && w * 1000.0 >= created)
         {
-            i["status"] = json!("done");
+            i["status"] = json!(DONE);
             i["auto"] = json!(true);
             closed += 1;
         }
@@ -109,9 +124,8 @@ pub fn view(paths: &Paths) -> Value {
         let _ = save(paths, &d);
     }
     let all = items(&mut d).clone();
-    let proposed: Vec<&Value> = all.iter().filter(|i| status(i) == "proposed").collect();
-    let open: Vec<&Value> = all.iter().filter(|i| status(i) == "open").collect();
-    let done: Vec<&Value> = all.iter().filter(|i| status(i) == "done").collect();
+    let with = |st: &str| -> Vec<&Value> { all.iter().filter(|i| status(i) == st).collect() };
+    let (proposed, open, done) = (with(PROPOSED), with(OPEN), with(DONE));
     let recent: Vec<&Value> = done[done.len().saturating_sub(10)..].iter().rev().copied().collect();
     json!({"proposed": proposed, "open": open, "done": recent})
 }
@@ -142,7 +156,7 @@ pub fn extract(paths: &Paths, model: &dyn Model, day: &str, force: bool) -> anyh
         .iter()
         .take(5)
         .filter_map(Value::as_object)
-        .filter(|t| add_as(&mut d, &s(t, "title"), &s(t, "source"), &s(t, "due"), day, &s(t, "mail_subject"), "proposed"))
+        .filter(|t| add_as(&mut d, &s(t, "title"), &s(t, "source"), &s(t, "due"), day, &s(t, "mail_subject"), PROPOSED))
         .count();
     autoclose(paths, &mut d);
     d["last_extract"] = json!(now);
@@ -150,23 +164,37 @@ pub fn extract(paths: &Paths, model: &dyn Model, day: &str, force: bool) -> anyh
     Ok(added)
 }
 
-/// accept (a proposal becomes open) | done | dismiss | reopen. -> false when there is no such to-do
-pub fn act(paths: &Paths, id: &str, action: &str) -> std::io::Result<bool> {
-    let to = match action {
-        "accept" => "open",
-        "done" => "done",
-        "dismiss" => "dismissed",
-        "reopen" => "open",
-        _ => return Ok(false),
+/// What became of an action on a to-do.
+#[derive(Debug, PartialEq)]
+pub enum Acted {
+    Changed,
+    /// no such to-do, or no such action
+    Missing,
+    /// the to-do is not in a state the action applies to
+    NotNow,
+}
+
+/// accept (proposed -> open) | done (open -> done) | dismiss (proposed or open -> dismissed) | reopen (done -> open).
+/// Only `accept` opens a proposal, and a dismissed to-do stays dismissed.
+pub fn act(paths: &Paths, id: &str, action: &str) -> std::io::Result<Acted> {
+    let (from, to): (&[&str], &str) = match action {
+        "accept" => (&[PROPOSED], OPEN),
+        "done" => (&[OPEN], DONE),
+        "dismiss" => (&[PROPOSED, OPEN], DISMISSED),
+        "reopen" => (&[DONE], OPEN),
+        _ => return Ok(Acted::Missing),
     };
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut d = load(paths);
     let Some(i) = items(&mut d).iter_mut().find(|i| i.get("id").and_then(Value::as_str) == Some(id)) else {
-        return Ok(false);
+        return Ok(Acted::Missing);
     };
+    if !from.contains(&status(i)) {
+        return Ok(Acted::NotNow);
+    }
     i["status"] = json!(to);
     save(paths, &d)?;
-    Ok(true)
+    Ok(Acted::Changed)
 }
 
 /// The user's own to-do.
@@ -195,7 +223,7 @@ mod tests {
         add(&mut d, "OO 님 문의에 답장하기", "메일", "", "2026-10-28", "");
         save(&p, &d).unwrap();
         let id = load(&p)["items"][0]["id"].as_str().unwrap().to_string();
-        assert!(act(&p, &id, "dismiss").unwrap());
+        assert_eq!(act(&p, &id, "dismiss").unwrap(), Acted::Changed);
         let mut d = load(&p);
         assert!(
             !add(&mut d, "OO 님 문의에 답장하기!", "메일", "", "2026-10-29", ""),
@@ -208,14 +236,36 @@ mod tests {
     fn what_the_model_found_is_a_proposal_until_the_user_takes_it() {
         let (_d, p) = paths();
         let mut d = load(&p);
-        add_as(&mut d, "견적 보내기", "메일", "", "2026-10-28", "", "proposed");
+        add_as(&mut d, "견적 보내기", "메일", "", "2026-10-28", "", PROPOSED);
         save(&p, &d).unwrap();
         let v = view(&p);
         assert_eq!((v["proposed"].as_array().unwrap().len(), v["open"].as_array().unwrap().len()), (1, 0));
         let id = v["proposed"][0]["id"].as_str().unwrap().to_string();
-        assert!(act(&p, &id, "accept").unwrap());
+        assert_eq!(act(&p, &id, "accept").unwrap(), Acted::Changed);
         let v = view(&p);
         assert_eq!((v["proposed"].as_array().unwrap().len(), v["open"][0]["title"].as_str()), (0, Some("견적 보내기")));
+    }
+
+    #[test]
+    fn only_a_proposal_can_be_accepted_and_a_dismissed_one_stays_gone() {
+        let (_d, p) = paths();
+        let mut d = load(&p);
+        add_as(&mut d, "견적 보내기", "메일", "", "2026-10-28", "", PROPOSED);
+        save(&p, &d).unwrap();
+        let id = view(&p)["proposed"][0]["id"].as_str().unwrap().to_string();
+        assert_eq!(act(&p, &id, "reopen").unwrap(), Acted::NotNow, "reopen is no way around accept");
+        assert_eq!(act(&p, &id, "done").unwrap(), Acted::NotNow);
+        assert_eq!(act(&p, &id, "dismiss").unwrap(), Acted::Changed);
+        assert_eq!(act(&p, &id, "accept").unwrap(), Acted::NotNow, "dismissed never comes back");
+        assert_eq!(act(&p, &id, "reopen").unwrap(), Acted::NotNow);
+        assert_eq!(act(&p, "0000000000", "done").unwrap(), Acted::Missing);
+        assert_eq!(act(&p, &id, "bogus").unwrap(), Acted::Missing);
+
+        add_user(&p, "세금 서류 챙기기", "2026-10-28").unwrap();
+        let id = view(&p)["open"][0]["id"].as_str().unwrap().to_string();
+        assert_eq!(act(&p, &id, "accept").unwrap(), Acted::NotNow);
+        assert_eq!(act(&p, &id, "done").unwrap(), Acted::Changed);
+        assert_eq!(act(&p, &id, "reopen").unwrap(), Acted::Changed);
     }
 
     #[test]

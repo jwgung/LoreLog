@@ -23,7 +23,8 @@ for name in "${bins[@]}"; do
         mkdir -p "$backup/bin"
         cp -p "$lib/$name" "$backup/bin/$name"
     fi
-    install -m 0755 "$target/release/$name" "$lib/$name.new" && mv -f "$lib/$name.new" "$lib/$name"
+    install -m 0755 "$target/release/$name" "$lib/$name.new"
+    mv -f "$lib/$name.new" "$lib/$name"
     src="$lib/$name"
     target_link="$dest/$name"
     if [ -e "$target_link" ] && [ ! -L "$target_link" ]; then

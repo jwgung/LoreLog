@@ -17,6 +17,7 @@ use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone};
 use regex::Regex;
 
 use crate::assistant::util::files_like;
+use crate::errors::kind;
 
 pub const DAV: &str = "DAV:";
 pub const CALDAV: &str = "urn:ietf:params:xml:ns:caldav";
@@ -263,10 +264,10 @@ fn dav(method: &str, url: &str, acct: &Account, depth: &str, body: String, timeo
         .map_err(|_| DavError::Other("bad request".into()))?;
     match agent.run(req) {
         Ok(mut r) => {
-            r.body_mut().with_config().limit(200 * 1024 * 1024).read_to_string().map_err(|e| DavError::Other(crate::errors::kind(&e)))
+            r.body_mut().with_config().limit(200 * 1024 * 1024).read_to_string().map_err(|e| DavError::Other(kind(&e)))
         }
         Err(ureq::Error::StatusCode(c)) => Err(DavError::Status(c)),
-        Err(e) => Err(DavError::Other(crate::errors::kind(&e))),
+        Err(e) => Err(DavError::Other(kind(&e))),
     }
 }
 

@@ -18,7 +18,7 @@ Import IMAP mail (inbox and sent folders) into the vault as Mail/ notes. Read-on
 - Raw .eml files and attachments are not stored (attachments are listed by name only).
 
 Settings live in ~/.config/vault-sync/ :
-  env           secrets only (KEY=VALUE, mode 600): IMAP_USER, IMAP_PASSWORD
+  env           secrets (KEY=VALUE, mode 600): IMAP_USER, IMAP_PASSWORD
   sources.toml  what to collect, under [mail]: host, port, account, folders, since
                 (env may also carry IMAP_HOST, IMAP_PORT, MAIL_ACCOUNT, MAIL_FOLDERS, MAIL_SINCE; sources.toml wins)
 Prefer `life add mail` and `life sync` over editing these by hand.

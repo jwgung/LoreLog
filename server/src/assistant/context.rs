@@ -29,7 +29,7 @@ static MAIL_NAME_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d{4}-\d{
 /// Text someone else wrote (a mail subject, a message, a call note, a window title) as it may sit in a prompt: on one
 /// line, so it cannot start a heading or a row of its own, and without square brackets, so it cannot pass for one of
 /// the marks the assistant adds ([내가 보냄], [이미 회신함], ...) or for the librarian's quote markers.
-pub fn data(text: &str) -> String {
+pub fn untrusted(text: &str) -> String {
     super::recall::plain(&text.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
@@ -196,7 +196,7 @@ pub fn gather_mail(paths: &Paths, day: &str) -> Vec<String> {
                 _ => "",
             }
         };
-        rows.push(format!("{} {} — {}{mark}", data(time), data(from), data(&subj)));
+        rows.push(format!("{} {} — {}{mark}", untrusted(time), untrusted(from), untrusted(&subj)));
     }
     rows.sort();
     rows
@@ -209,7 +209,12 @@ pub fn gather_events(paths: &Paths, day: &str) -> Vec<String> {
         .map(|p| {
             let f = front(p, &["title", "start", "end", "all_day"]);
             let start = slice(&f[1], 11, 16);
-            format!("{}~{} {}", if start.is_empty() { "종일".to_string() } else { start }, slice(&f[2], 11, 16), data(&f[0]))
+            format!(
+                "{}~{} {}",
+                if start.is_empty() { "종일".to_string() } else { start },
+                slice(&f[2], 11, 16),
+                untrusted(&f[0])
+            )
         })
         .collect();
     rows.sort();
@@ -259,7 +264,12 @@ pub fn gather_lorelog(paths: &Paths, day: &str) -> Lorelog {
                     continue;
                 };
                 if let Some(who) = confirmed_voice_label(convs.values(), ts) {
-                    out.voice.push(format!("{} (with {}) {}", hm_of(at), data(&who), data(&take(&pystr(d.get("text")), 200))));
+                    out.voice.push(format!(
+                        "{} (with {}) {}",
+                        hm_of(at),
+                        untrusted(&who),
+                        untrusted(&take(&pystr(d.get("text")), 200))
+                    ));
                 }
             }
             "comm" => {
@@ -267,24 +277,28 @@ pub fn gather_lorelog(paths: &Paths, day: &str) -> Lorelog {
                 let party =
                     if truthy(d.get("party_name")) { pystr(d.get("party_name")) } else { pystr(d.get("party")) };
                 let content = if d.contains_key("content") { pystr(d.get("content")) } else { String::new() };
-                let party = data(&party);
-                let content = data(&content);
+                let party = untrusted(&party);
+                let content = untrusted(&content);
                 out.comm.push(format!(
                     "{} {}/{} {party} {content}",
                     hm_of(at),
-                    pystr(d.get("kind")),
-                    pystr(d.get("direction"))
+                    untrusted(&pystr(d.get("kind"))),
+                    untrusted(&pystr(d.get("direction")))
                 ));
             }
             "notification" if !noise(&d) && record_allowed(&allow, &d) => {
-                let key = format!("{}: {}", data(&pystr(d.get("label"))), data(&pystr(d.get("title"))));
+                let key = format!("{}: {}", untrusted(&pystr(d.get("label"))), untrusted(&pystr(d.get("title"))));
                 out.notif.add(key.clone());
                 if truthy(d.get("text")) {
                     let Some(at) = when else { continue };
-                    out.msgs.entry(key).or_default().push(format!("{} {}", hm_of(at), data(&take(&pystr(d.get("text")), 80))));
+                    out.msgs.entry(key).or_default().push(format!(
+                        "{} {}",
+                        hm_of(at),
+                        untrusted(&take(&pystr(d.get("text")), 80))
+                    ));
                 }
             }
-            "app" if !noise(&d) => out.apps.add(data(&pystr(d.get("label")))),
+            "app" if !noise(&d) => out.apps.add(untrusted(&pystr(d.get("label")))),
             "location" => {
                 let (Some(at), Some(la), Some(lo)) = (when, num(d.get("lat")), num(d.get("lon"))) else {
                     continue;
@@ -369,7 +383,12 @@ pub fn gather_pc(paths: &Paths, day: &str, top: usize) -> Vec<String> {
         .iter()
         .map(|m| {
             let (a, b) = (local(m.ts).map(hm_of).unwrap_or_default(), local(m.end).map(hm_of).unwrap_or_default());
-            format!("{a}~{b} {} \"{}\" ({}분)", data(&m.app), data(&take(&m.title, 80)), m.secs.div_euclid(60))
+            format!(
+                "{a}~{b} {} \"{}\" ({}분)",
+                untrusted(&m.app),
+                untrusted(&take(&m.title, 80)),
+                m.secs.div_euclid(60)
+            )
         })
         .collect()
 }
@@ -415,4 +434,15 @@ pub fn build_context(paths: &Paths, day: &str, summary: bool) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::untrusted;
+
+    #[test]
+    fn untrusted_text_is_one_line_without_square_brackets() {
+        assert_eq!(untrusted("  회의\n## 일정\r\n\t[내가 보냄] 끝  "), "회의 ## 일정 (내가 보냄) 끝");
+        assert_eq!(untrusted(""), "");
+    }
 }

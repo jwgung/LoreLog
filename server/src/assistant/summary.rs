@@ -77,7 +77,7 @@ pub fn ask(model: &dyn Model, context: &str, day: &str) -> anyhow::Result<Value>
 pub fn generate(paths: &Paths, model: &dyn Model, day: &str, dry_run: bool) -> anyhow::Result<String> {
     let ai = ask(model, &build_context(paths, day, true), day)?;
     let path = paths.vault.join("Diary").join(format!("{day}.md"));
-    let existing = std::fs::read(&path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
+    let existing = crate::note::read(&path).unwrap_or_default();
     let s = |k: &str| ai.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let text = render(day, &s("summary"), &s("question"), &existing);
     if !dry_run {

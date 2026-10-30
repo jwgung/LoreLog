@@ -13,9 +13,9 @@ Command line of mail-files: keep the attachments of the mails in the configured 
 Usage: mail-files [--dry-run] [--limit N] [--folder NAME] [-h]
 
 Folders are opened read-only and mails are read with BODY.PEEK, so nothing on the server changes. Every configured
-mail folder is used; a folder whose name looks like a sent folder (sent / 보낸 / 발신) marks its files as sent, the
-others as received. Processed UIDs are remembered per folder, so a run only reads mails it has not seen. --limit is per
-folder. --dry-run reads sizes and headers only and stores nothing.";
+mail folder is used (--folder NAME: only that one); a folder whose name looks like a sent folder (sent / 보낸 / 발신)
+marks its files as sent, the others as received. Processed UIDs are remembered per folder, so a run only reads mails
+it has not seen. --limit is per folder. --dry-run reads sizes and headers only and stores nothing.";
 
 const DEFAULT_LIMIT: usize = 100;
 
