@@ -26,8 +26,7 @@ pub fn load_allow(paths: &Paths) -> BTreeSet<String> {
 
 pub fn save_allow(paths: &Paths, items: &[Value]) -> std::io::Result<()> {
     let set: BTreeSet<String> = items.iter().map(|v| pystr(Some(v))).collect();
-    let text =
-        serde_json::to_string_pretty(&json!({"allow": set})).expect("a list of strings serializes");
+    let text = serde_json::to_string_pretty(&json!({"allow": set})).expect("a list of strings serializes");
     write_private_atomic(&paths.allow_file, text.as_bytes())
 }
 
@@ -48,19 +47,13 @@ pub fn list_senders(paths: &Paths, days: i64) -> Vec<Value> {
     let today = Local::now().date_naive();
     for i in 0..days {
         let day = today - chrono::Duration::days(i);
-        let path = paths
-            .raw()
-            .join("lorelog")
-            .join(format!("{}.ndjson", day.format("%Y-%m-%d")));
+        let path = paths.raw().join("lorelog").join(format!("{}.ndjson", day.format("%Y-%m-%d")));
         let Ok(bytes) = fs::read(&path) else { continue };
         for line in String::from_utf8_lossy(&bytes).lines() {
             let Ok(Value::Object(d)) = serde_json::from_str::<Value>(line) else {
                 continue;
             };
-            if d.get("type").and_then(Value::as_str) == Some("notification")
-                && !noise(&d)
-                && truthy(d.get("title"))
-            {
+            if d.get("type").and_then(Value::as_str) == Some("notification") && !noise(&d) && truthy(d.get("title")) {
                 counts.add((
                     d.get("label").cloned().unwrap_or(Value::Null),
                     d.get("title").cloned().unwrap_or(Value::Null),
@@ -80,10 +73,7 @@ pub fn list_senders(paths: &Paths, days: i64) -> Vec<Value> {
 
 /// Is this a phone system app whose events say nothing about the user's day?
 pub fn noise(rec: &serde_json::Map<String, Value>) -> bool {
-    rec.get("pkg")
-        .and_then(Value::as_str)
-        .map(|p| NOISE_PKGS.contains(&p))
-        .unwrap_or(false)
+    rec.get("pkg").and_then(Value::as_str).map(|p| NOISE_PKGS.contains(&p)).unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -97,10 +87,7 @@ mod tests {
 
     #[test]
     fn app_wide_and_per_sender_entries() {
-        let allow: BTreeSet<String> = ["WORKS: *", "카카오톡: 철수"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let allow: BTreeSet<String> = ["WORKS: *", "카카오톡: 철수"].iter().map(|s| s.to_string()).collect();
         assert!(is_allowed(&allow, "WORKS", "아무나"));
         assert!(is_allowed(&allow, "카카오톡", "철수"));
         assert!(!is_allowed(&allow, "카카오톡", "엄마"));
@@ -110,14 +97,7 @@ mod tests {
     fn the_list_round_trips_sorted_and_without_repeats() {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths::under(dir.path());
-        save_allow(
-            &paths,
-            &[json!("카카오톡: 홍길동"), json!("앱: *"), json!("앱: *")],
-        )
-        .unwrap();
-        assert_eq!(
-            load_allow(&paths).into_iter().collect::<Vec<_>>(),
-            ["앱: *", "카카오톡: 홍길동"]
-        );
+        save_allow(&paths, &[json!("카카오톡: 홍길동"), json!("앱: *"), json!("앱: *")]).unwrap();
+        assert_eq!(load_allow(&paths).into_iter().collect::<Vec<_>>(), ["앱: *", "카카오톡: 홍길동"]);
     }
 }

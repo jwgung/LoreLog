@@ -43,30 +43,18 @@ pub fn chat_reply(
 ) -> anyhow::Result<String> {
     let draft = read_day(paths, day);
     match wrong {
-        Some(w) => save_user(
-            paths,
-            day,
-            &json!({"append": true, "corrections": [{"wrong": w, "right": message}]}),
-        )?,
+        Some(w) => save_user(paths, day, &json!({"append": true, "corrections": [{"wrong": w, "right": message}]}))?,
         None => save_user(paths, day, &json!({"append": true, "reflection": message}))?,
     }
     let exists = draft["exists"].as_bool().unwrap_or(false);
-    let mut head = format!(
-        "{CHAT_SYSTEM}\n\n[오늘 기록]\n{}",
-        build_context(paths, day, false)
-    );
+    let mut head = format!("{CHAT_SYSTEM}\n\n[오늘 기록]\n{}", build_context(paths, day, false));
     if exists {
-        let lines: Vec<String> = draft["summary"]
-            .as_array()
-            .map(|a| a.iter().map(|v| pystr(Some(v))).collect())
-            .unwrap_or_default();
+        let lines: Vec<String> =
+            draft["summary"].as_array().map(|a| a.iter().map(|v| pystr(Some(v))).collect()).unwrap_or_default();
         head += &format!("\n\n[비서가 오늘 정리해서 전한 말]\n{}", lines.join("\n"));
     }
     let mut msgs = vec![json!({"role": "system", "content": head})];
-    if let Some(q) = draft["question"]
-        .as_str()
-        .filter(|q| exists && !q.is_empty())
-    {
+    if let Some(q) = draft["question"].as_str().filter(|q| exists && !q.is_empty()) {
         msgs.push(json!({"role": "assistant", "content": q}));
     }
     let log = chat_log(paths, day);
@@ -85,19 +73,10 @@ pub fn chat_reply(
         .filter(|t| t.get("role").and_then(Value::as_str) == Some("user"))
         .map(|t| pystr(t.get("text")))
         .collect();
-    let past = if wrong.is_some() {
-        None
-    } else {
-        recall(message, day, &said)
-    };
-    let quoted = past
-        .map(|p| format!("{}\n\n", super::recall::quote(&p)))
-        .unwrap_or_default();
+    let past = if wrong.is_some() { None } else { recall(message, day, &said) };
+    let quoted = past.map(|p| format!("{}\n\n", super::recall::quote(&p))).unwrap_or_default();
     msgs.push(json!({"role": "user", "content": format!("{quoted}{user}")}));
-    let reply = model
-        .complete(&msgs, Ask::new(0.5, 300, false, 120))?
-        .trim()
-        .to_string();
+    let reply = model.complete(&msgs, Ask::new(0.5, 300, false, 120))?.trim().to_string();
     append_chat(paths, day, "user", &user)?;
     append_chat(paths, day, "assistant", &reply)?;
     Ok(reply)
@@ -105,14 +84,11 @@ pub fn chat_reply(
 
 /// The day's chat turns in order.
 pub fn chat_log(paths: &Paths, day: &str) -> Vec<Map<String, Value>> {
-    read_records(
-        &paths.raw().join("diary").join(format!("{day}.ndjson")),
-        None,
-    )
-    .unwrap_or_default()
-    .into_iter()
-    .filter(|d| d.get("type").and_then(Value::as_str) == Some("chat"))
-    .collect()
+    read_records(&paths.raw().join("diary").join(format!("{day}.ndjson")), None)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|d| d.get("type").and_then(Value::as_str) == Some("chat"))
+        .collect()
 }
 
 pub fn append_chat(paths: &Paths, day: &str, role: &str, text: &str) -> std::io::Result<()> {
@@ -147,19 +123,11 @@ mod tests {
     fn a_correction_wrapper_is_unwrapped() {
         let dir = tempfile::tempdir().unwrap();
         let p = Paths::under(dir.path());
-        append_chat(
-            &p,
-            "2026-01-02",
-            "user",
-            "(정리의 이 문장이 틀렸다고 알려 주셨어요: \"10초 통화\")\n20분 했어",
-        )
-        .unwrap();
+        append_chat(&p, "2026-01-02", "user", "(정리의 이 문장이 틀렸다고 알려 주셨어요: \"10초 통화\")\n20분 했어")
+            .unwrap();
         append_chat(&p, "2026-01-02", "assistant", "알겠어요.").unwrap();
         let h = chat_history(&p, "2026-01-02");
-        assert_eq!(
-            h[0],
-            json!({"role": "user", "text": "20분 했어", "wrong": "10초 통화"})
-        );
+        assert_eq!(h[0], json!({"role": "user", "text": "20분 했어", "wrong": "10초 통화"}));
         assert_eq!(h[1], json!({"role": "assistant", "text": "알겠어요."}));
     }
 }

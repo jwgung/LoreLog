@@ -40,10 +40,7 @@ pub struct RawStore {
 
 impl RawStore {
     pub fn new(data: &Path) -> RawStore {
-        RawStore {
-            data: data.to_path_buf(),
-            seen: Mutex::new(HashMap::new()),
-        }
+        RawStore { data: data.to_path_buf(), seen: Mutex::new(HashMap::new()) }
     }
 
     pub fn data(&self) -> &Path {
@@ -70,8 +67,7 @@ impl RawStore {
             rec.insert("_src".into(), Value::String(source.into()));
             rec.insert("_recv".into(), Value::String(recv.clone()));
             rec.insert("_class".into(), Value::String(cls.into()));
-            let line =
-                serde_json::to_string(&Value::Object(rec)).expect("a parsed record serializes");
+            let line = serde_json::to_string(&Value::Object(rec)).expect("a parsed record serializes");
             match by_day.iter_mut().find(|(d, _)| *d == day) {
                 Some((_, items)) => items.push((digest, line)),
                 None => by_day.push((day, vec![(digest, line)])),
@@ -84,9 +80,7 @@ impl RawStore {
             ensure_private_dir(&self.data.join("raw"))?;
             ensure_private_dir(&dir)?;
             let file = dir.join(format!("{}.ndjson", day.format("%Y-%m-%d")));
-            let seen = seen_all
-                .entry(file.clone())
-                .or_insert_with(|| digests_in(&file));
+            let seen = seen_all.entry(file.clone()).or_insert_with(|| digests_in(&file));
             let mut fresh = Vec::new();
             for (digest, line) in items {
                 if seen.insert(digest) {
@@ -157,52 +151,31 @@ fn local_from_secs(secs: f64) -> Option<NaiveDateTime> {
     }
     let whole = secs.floor();
     let nanos = ((secs - whole) * 1e9) as u32;
-    Local
-        .timestamp_opt(whole as i64, nanos)
-        .single()
-        .map(|t| t.naive_local())
+    Local.timestamp_opt(whole as i64, nanos).single().map(|t| t.naive_local())
 }
 
 /// An ISO time as local naive time: with an offset (or `Z`) it is converted, without one it is taken as local already.
 pub fn parse_iso_local(s: &str) -> Option<NaiveDateTime> {
     let s = s.trim();
-    let zoned = s
-        .strip_suffix('Z')
-        .map(|r| format!("{r}+00:00"))
-        .unwrap_or_else(|| s.to_string());
-    for f in [
-        "%Y-%m-%dT%H:%M:%S%.f%:z",
-        "%Y-%m-%d %H:%M:%S%.f%:z",
-        "%Y-%m-%dT%H:%M%:z",
-        "%Y-%m-%dT%H:%M:%S%.f%z",
-    ] {
+    let zoned = s.strip_suffix('Z').map(|r| format!("{r}+00:00")).unwrap_or_else(|| s.to_string());
+    for f in ["%Y-%m-%dT%H:%M:%S%.f%:z", "%Y-%m-%d %H:%M:%S%.f%:z", "%Y-%m-%dT%H:%M%:z", "%Y-%m-%dT%H:%M:%S%.f%z"] {
         if let Ok(t) = DateTime::parse_from_str(&zoned, f) {
             return Some(t.with_timezone(&Local).naive_local());
         }
     }
-    for f in [
-        "%Y-%m-%dT%H:%M:%S%.f",
-        "%Y-%m-%d %H:%M:%S%.f",
-        "%Y-%m-%dT%H:%M",
-        "%Y-%m-%d %H:%M",
-    ] {
+    for f in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M"] {
         if let Ok(t) = NaiveDateTime::parse_from_str(s, f) {
             return Some(t);
         }
     }
-    NaiveDate::parse_from_str(s, "%Y-%m-%d")
-        .ok()
-        .and_then(|d| d.and_hms_opt(0, 0, 0))
+    NaiveDate::parse_from_str(s, "%Y-%m-%d").ok().and_then(|d| d.and_hms_opt(0, 0, 0))
 }
 
 // ---------- blobs ----------
 
 /// Where a deliverable's bytes live: named by their own content hash, shared by every channel that sees the file.
 pub fn blob_path(data: &Path, sha: &str) -> PathBuf {
-    data.join("raw")
-        .join("files")
-        .join(&sha[..2.min(sha.len())])
-        .join(sha)
+    data.join("raw").join("files").join(&sha[..2.min(sha.len())]).join(sha)
 }
 
 pub fn sha256_hex(data: &[u8]) -> String {
@@ -213,10 +186,7 @@ pub fn sha256_hex(data: &[u8]) -> String {
 pub fn put_blob(data_dir: &Path, data: &[u8]) -> io::Result<(String, bool)> {
     let sha = sha256_hex(data);
     let path = blob_path(data_dir, &sha);
-    if fs::metadata(&path)
-        .map(|m| m.len() == data.len() as u64)
-        .unwrap_or(false)
-    {
+    if fs::metadata(&path).map(|m| m.len() == data.len() as u64).unwrap_or(false) {
         return Ok((sha, false));
     }
     ensure_private_dir(data_dir)?;
@@ -234,18 +204,11 @@ mod tests {
     use serde_json::json;
 
     fn ms(y: i32, m: u32, d: u32, h: u32, mi: u32) -> i64 {
-        Local
-            .with_ymd_and_hms(y, m, d, h, mi, 0)
-            .unwrap()
-            .timestamp_millis()
+        Local.with_ymd_and_hms(y, m, d, h, mi, 0).unwrap().timestamp_millis()
     }
 
     fn lines(p: &Path) -> Vec<Value> {
-        fs::read_to_string(p)
-            .unwrap()
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect()
+        fs::read_to_string(p).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
     }
 
     #[test]
@@ -260,19 +223,11 @@ mod tests {
         );
         assert_eq!(
             store.store("lorelog", &body, "personal").unwrap(),
-            Counts {
-                accepted: 2,
-                duplicates: 0,
-                rejected: 2
-            }
+            Counts { accepted: 2, duplicates: 0, rejected: 2 }
         );
         assert_eq!(
             store.store("lorelog", &body, "personal").unwrap(),
-            Counts {
-                accepted: 0,
-                duplicates: 2,
-                rejected: 2
-            }
+            Counts { accepted: 0, duplicates: 2, rejected: 2 }
         );
         let f = dir.path().join("raw/lorelog/2026-10-26.ndjson");
         let recs = lines(&f);
@@ -289,18 +244,8 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                fs::metadata(&f).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-            assert_eq!(
-                fs::metadata(dir.path().join("raw"))
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o700
-            );
+            assert_eq!(fs::metadata(&f).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(fs::metadata(dir.path().join("raw")).unwrap().permissions().mode() & 0o777, 0o700);
         }
     }
 
@@ -309,31 +254,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ts = ms(2026, 3, 1, 9, 0);
         RawStore::new(dir.path())
-            .store(
-                "pc",
-                &format!("{{\"type\":\"window\",\"ts\":{ts},\"app\":\"한글.exe\"}}\n"),
-                "work",
-            )
+            .store("pc", &format!("{{\"type\":\"window\",\"ts\":{ts},\"app\":\"한글.exe\"}}\n"), "work")
             .unwrap();
         let again = RawStore::new(dir.path()); // a new process: knows only the file
-        let spaced =
-            format!("{{ \"type\": \"window\", \"ts\": {ts}, \"app\": \"\\ud55c\\uae00.exe\" }}\n");
-        assert_eq!(
-            again.store("pc", &spaced, "work").unwrap(),
-            Counts {
-                accepted: 0,
-                duplicates: 1,
-                rejected: 0
-            }
-        );
+        let spaced = format!("{{ \"type\": \"window\", \"ts\": {ts}, \"app\": \"\\ud55c\\uae00.exe\" }}\n");
+        assert_eq!(again.store("pc", &spaced, "work").unwrap(), Counts { accepted: 0, duplicates: 1, rejected: 0 });
     }
 
     #[test]
     fn the_day_comes_from_ms_seconds_or_iso_else_now() {
-        let now = NaiveDate::from_ymd_opt(2030, 1, 1)
-            .unwrap()
-            .and_hms_opt(12, 0, 0)
-            .unwrap();
+        let now = NaiveDate::from_ymd_opt(2030, 1, 1).unwrap().and_hms_opt(12, 0, 0).unwrap();
         let day = |v: Value| record_day(v.as_object().unwrap(), now).date().to_string();
         let ts = ms(2026, 10, 26, 23, 59);
         assert_eq!(day(json!({"ts": ts})), "2026-10-26");
@@ -346,20 +276,12 @@ mod tests {
             "a non-positive number is passed over"
         );
         assert_eq!(day(json!({"ts": "nonsense"})), "2030-01-01");
-        assert_eq!(
-            day(json!({"ts": 1e300})),
-            "2030-01-01",
-            "a time too large to be one is now, not a failed request"
-        );
+        assert_eq!(day(json!({"ts": 1e300})), "2030-01-01", "a time too large to be one is now, not a failed request");
         assert_eq!(day(json!({})), "2030-01-01");
         let z = parse_iso_local("2026-10-26T15:30:00Z").unwrap();
         assert_eq!(
             z,
-            chrono::Utc
-                .with_ymd_and_hms(2026, 10, 26, 15, 30, 0)
-                .unwrap()
-                .with_timezone(&Local)
-                .naive_local()
+            chrono::Utc.with_ymd_and_hms(2026, 10, 26, 15, 30, 0).unwrap().with_timezone(&Local).naive_local()
         );
     }
 

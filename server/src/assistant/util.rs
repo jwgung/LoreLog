@@ -31,11 +31,9 @@ pub fn truthy(v: Option<&Value>) -> bool {
 /// A record value as a whole number: integers, finite floats (cut toward zero) and strings of digits.
 pub fn as_int(v: Option<&Value>) -> Option<i64> {
     match v? {
-        Value::Number(n) => n.as_i64().or_else(|| {
-            n.as_f64()
-                .filter(|f| f.is_finite() && f.abs() < 9.2e18)
-                .map(|f| f.trunc() as i64)
-        }),
+        Value::Number(n) => {
+            n.as_i64().or_else(|| n.as_f64().filter(|f| f.is_finite() && f.abs() < 9.2e18).map(|f| f.trunc() as i64))
+        }
         Value::String(s) => s.trim().parse().ok(),
         _ => None,
     }
@@ -48,26 +46,18 @@ pub fn take(s: &str, n: usize) -> String {
 
 /// Local time of epoch milliseconds, if it is a time at all.
 pub fn local(ts_ms: i64) -> Option<NaiveDateTime> {
-    Local
-        .timestamp_millis_opt(ts_ms)
-        .single()
-        .map(|t| t.naive_local())
+    Local.timestamp_millis_opt(ts_ms).single().map(|t| t.naive_local())
 }
 
 /// `HH:MM` of epoch milliseconds (`--:--` for a value that is not a time).
 pub fn hm(ts_ms: Option<i64>) -> String {
-    ts_ms
-        .and_then(local)
-        .map(|t| t.format("%H:%M").to_string())
-        .unwrap_or_else(|| "--:--".into())
+    ts_ms.and_then(local).map(|t| t.format("%H:%M").to_string()).unwrap_or_else(|| "--:--".into())
 }
 
 /// Frontmatter values of a note: `key: value` lines in its first 3000 characters, trimmed and without quotes.
 /// A missing key is "".
 pub fn front(path: &Path, keys: &[&str]) -> Vec<String> {
-    let text = fs::read(path)
-        .map(|b| String::from_utf8_lossy(&b).into_owned())
-        .unwrap_or_default();
+    let text = fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
     let head: String = text.chars().take(3000).collect();
     keys.iter().map(|k| front_value(&head, k)).collect()
 }
@@ -76,12 +66,7 @@ pub fn front(path: &Path, keys: &[&str]) -> Vec<String> {
 pub fn front_value(head: &str, key: &str) -> String {
     for line in head.split('\n') {
         if let Some(rest) = line.strip_prefix(key).and_then(|r| r.strip_prefix(':')) {
-            return rest
-                .trim_start_matches([' ', '\t'])
-                .trim_end_matches('\r')
-                .trim()
-                .trim_matches('"')
-                .to_string();
+            return rest.trim_start_matches([' ', '\t']).trim_end_matches('\r').trim().trim_matches('"').to_string();
         }
     }
     String::new()
@@ -110,17 +95,10 @@ pub fn files_like(dir: &Path, prefix: &str, suffix: &str) -> Vec<PathBuf> {
 /// Files `<dir>/*/<prefix>*<suffix>` (one level of sub-directories, like `Mail/<year>/`), sorted.
 pub fn files_like_nested(dir: &Path, prefix: &str, suffix: &str) -> Vec<PathBuf> {
     let mut subs: Vec<PathBuf> = fs::read_dir(dir)
-        .map(|rd| {
-            rd.filter_map(Result::ok)
-                .map(|e| e.path())
-                .filter(|p| p.is_dir())
-                .collect()
-        })
+        .map(|rd| rd.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.is_dir()).collect())
         .unwrap_or_default();
     subs.sort();
-    subs.iter()
-        .flat_map(|s| files_like(s, prefix, suffix))
-        .collect()
+    subs.iter().flat_map(|s| files_like(s, prefix, suffix)).collect()
 }
 
 /// Counts in first-seen order, listed most common first (ties keep first-seen order), like Python's Counter.
@@ -164,10 +142,7 @@ mod tests {
         assert_eq!(pystr(None), "None");
         assert_eq!(pystr(Some(&json!("a"))), "a");
         assert_eq!(pystr(Some(&json!(3))), "3");
-        assert_eq!(
-            as_int(Some(&json!("1792000000000"))),
-            Some(1_792_000_000_000)
-        );
+        assert_eq!(as_int(Some(&json!("1792000000000"))), Some(1_792_000_000_000));
         assert_eq!(as_int(Some(&json!(1.9))), Some(1));
         assert_eq!(as_int(Some(&json!(1e300))), None);
         assert_eq!(as_int(Some(&json!([1]))), None);
@@ -177,8 +152,7 @@ mod tests {
 
     #[test]
     fn frontmatter_values_are_trimmed_and_unquoted() {
-        let head =
-            "---\ntitle: \"회의\"\nstart:\t2026-01-01T10:00:00\nempty:\n---\nbody title: x\n";
+        let head = "---\ntitle: \"회의\"\nstart:\t2026-01-01T10:00:00\nempty:\n---\nbody title: x\n";
         assert_eq!(front_value(head, "title"), "회의");
         assert_eq!(front_value(head, "start"), "2026-01-01T10:00:00");
         assert_eq!(front_value(head, "empty"), "");

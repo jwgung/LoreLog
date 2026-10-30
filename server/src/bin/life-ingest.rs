@@ -43,10 +43,7 @@ fn main() -> std::process::ExitCode {
     let get = |k: &str, d: &str| cfg.get(k).cloned().unwrap_or_else(|| d.to_string());
     let token = get("INGEST_TOKEN", "");
     if token.chars().count() < 16 {
-        eprintln!(
-            "{} needs INGEST_TOKEN (at least 16 characters).",
-            env_file.display()
-        );
+        eprintln!("{} needs INGEST_TOKEN (at least 16 characters).", env_file.display());
         return std::process::ExitCode::from(2);
     }
     let bind = get("INGEST_BIND", "127.0.0.1");
@@ -62,12 +59,7 @@ fn main() -> std::process::ExitCode {
     let max_bytes = (max_mb * 1024.0 * 1024.0) as usize;
     let cert = cfg.get("INGEST_CERT").filter(|v| !v.is_empty()).cloned();
     let key = cfg.get("INGEST_KEY").filter(|v| !v.is_empty()).cloned();
-    let app = Arc::new(App::new(
-        paths.clone(),
-        &token,
-        &get("INGEST_CLASS", "personal"),
-        max_bytes,
-    ));
+    let app = Arc::new(App::new(paths.clone(), &token, &get("INGEST_CLASS", "personal"), max_bytes));
     let addr = SocketAddr::new(ip, port);
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let result = rt.block_on(async move {

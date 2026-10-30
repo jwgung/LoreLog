@@ -46,7 +46,7 @@ pub struct App {
 }
 
 impl App {
-    /// An app that talks to the model and speech servers named in the environment, and asks no librarian.
+    /// An app that talks to the model and speech servers named in the environment.
     pub fn new(paths: Paths, token: &str, cls: &str, max_bytes: usize) -> App {
         App::with(
             paths,
@@ -67,6 +67,10 @@ impl App {
         speech: Arc<dyn Speech>,
     ) -> App {
         let store = RawStore::new(&paths.data);
+        // a chat question asks the librarian of the same places
+        let (p, m) = (paths.clone(), model.clone());
+        let recall: RecallFn =
+            Arc::new(move |message, day, said| crate::assistant::recall::find(&p, m.as_ref(), message, day, said));
         App {
             paths,
             store,
@@ -75,7 +79,7 @@ impl App {
             max_bytes,
             model,
             speech,
-            recall: Arc::new(|_, _, _| None),
+            recall,
             jobs: Arc::new(Jobs::default()),
         }
     }
@@ -93,10 +97,7 @@ pub struct Request {
 
 impl Request {
     fn header(&self, name: &str) -> String {
-        self.headers
-            .get(name)
-            .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
-            .unwrap_or_default()
+        self.headers.get(name).map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned()).unwrap_or_default()
     }
 
     /// The declared body length. A missing header is 0; one that is not a number is a bad request.
@@ -106,9 +107,7 @@ impl Request {
         if v.is_empty() {
             return Ok(0);
         }
-        v.parse::<i64>()
-            .map(|n| n.max(0) as usize)
-            .map_err(|_| Reply::new(400, json!({"error": "bad length"})))
+        v.parse::<i64>().map(|n| n.max(0) as usize).map_err(|_| Reply::new(400, json!({"error": "bad length"})))
     }
 
     /// The body as JSON (at most `limit` bytes; a longer body is a bad request).
@@ -126,10 +125,7 @@ impl Request {
     fn blob(&self, max: usize) -> Result<&[u8], Reply> {
         let n = self.length()?;
         if n == 0 || n > max || n > self.body.len() {
-            return Err(Reply::new(
-                413,
-                json!({"error": "too large or empty", "max_bytes": max}),
-            ));
+            return Err(Reply::new(413, json!({"error": "too large or empty", "max_bytes": max})));
         }
         Ok(&self.body[..n])
     }
@@ -159,41 +155,21 @@ static ROUTES: LazyLock<Vec<(Method, Regex, Handler)>> = LazyLock::new(|| {
     let r = |p: &str| Regex::new(&format!("^(?:{p})$")).expect("route pattern");
     const DAY: &str = "([0-9]{4}-[0-9]{2}-[0-9]{2})";
     vec![
-        (
-            Method::GET,
-            r("/healthz"),
-            (|_, _, _| Ok(Reply::ok(json!({"ok": true})))) as Handler,
-        ),
-        (Method::GET, r("/todos"), |app, _, _| {
-            Ok(Reply::ok(app.jobs.todos(&app.paths)))
-        }),
+        (Method::GET, r("/healthz"), (|_, _, _| Ok(Reply::ok(json!({"ok": true})))) as Handler),
+        (Method::GET, r("/todos"), |app, _, _| Ok(Reply::ok(app.jobs.todos(&app.paths)))),
         (Method::POST, r("/todos"), todos_post),
         (Method::POST, r("/todos/extract"), todos_extract),
         (Method::POST, r("/todos/([0-9a-f]{10})"), todo_act),
         (Method::GET, r("/diary/senders"), |app, _, _| {
-            Ok(Reply::ok(Value::Array(senders::list_senders(
-                &app.paths, 14,
-            ))))
+            Ok(Reply::ok(Value::Array(senders::list_senders(&app.paths, 14))))
         }),
-        (Method::GET, r("/diary/allow"), |app, _, _| {
-            Ok(Reply::ok(json!({"allow": senders::load_allow(&app.paths)})))
-        }),
+        (Method::GET, r("/diary/allow"), |app, _, _| Ok(Reply::ok(json!({"allow": senders::load_allow(&app.paths)})))),
         (Method::POST, r("/diary/senders"), senders_post),
-        (
-            Method::GET,
-            r(&format!("/diary/{DAY}/chat")),
-            |app, _, c| {
-                Ok(Reply::ok(
-                    json!({"messages": chat::chat_history(&app.paths, &c[1])}),
-                ))
-            },
-        ),
+        (Method::GET, r(&format!("/diary/{DAY}/chat")), |app, _, c| {
+            Ok(Reply::ok(json!({"messages": chat::chat_history(&app.paths, &c[1])})))
+        }),
         (Method::POST, r(&format!("/diary/{DAY}/chat")), chat_post),
-        (
-            Method::GET,
-            r(&format!("/diary/{DAY}(\\?refresh=1)?")),
-            draft_get,
-        ),
+        (Method::GET, r(&format!("/diary/{DAY}(\\?refresh=1)?")), draft_get),
         (Method::POST, r(&format!("/diary/{DAY}")), diary_post),
         (Method::POST, r("/transcribe"), transcribe),
         (Method::GET, r("/ingest/file/([0-9a-f]{64})"), file_has),
@@ -232,22 +208,13 @@ fn authorized(app: &App, req: &Request) -> bool {
 /// A failure the client is not told about; the type goes to the journal.
 fn internal(req: &Request, what: &dyn std::fmt::Debug) -> Reply {
     let path = req.target.split('?').next().unwrap_or("");
-    eprintln!(
-        "{} {} {} failed: {}",
-        Local::now().format("%H:%M:%S"),
-        req.method,
-        path,
-        kind_of(what)
-    );
+    eprintln!("{} {} {} failed: {}", Local::now().format("%H:%M:%S"), req.method, path, kind_of(what));
     Reply::new(500, json!({"error": "internal error"}))
 }
 
 fn kind_of(what: &dyn std::fmt::Debug) -> String {
     let s = format!("{what:?}");
-    s.split(['(', ' ', '{'])
-        .next()
-        .unwrap_or("error")
-        .to_string()
+    s.split(['(', ' ', '{']).next().unwrap_or("error").to_string()
 }
 
 // ---------- handlers ----------
@@ -258,11 +225,8 @@ fn today() -> String {
 
 fn todos_post(app: &App, req: &Request, _: &regex::Captures) -> Result<Reply, Reply> {
     let payload = req.json(100_000)?;
-    let raw = payload.as_object().map(|o| {
-        o.get("text")
-            .map(|v| crate::assistant::util::pystr(Some(v)))
-            .unwrap_or_default()
-    });
+    let raw =
+        payload.as_object().map(|o| o.get("text").map(|v| crate::assistant::util::pystr(Some(v))).unwrap_or_default());
     let Some(raw) = raw else {
         return Err(internal(req, &"BadPayload"));
     };
@@ -293,49 +257,28 @@ fn todos_extract(app: &App, _: &Request, _: &regex::Captures) -> Result<Reply, R
 
 fn senders_post(app: &App, req: &Request, _: &regex::Captures) -> Result<Reply, Reply> {
     let payload = req.json(BODY_LIMIT)?;
-    let items = payload
-        .get("allow")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let items = payload.get("allow").and_then(Value::as_array).cloned().unwrap_or_default();
     senders::save_allow(&app.paths, &items).map_err(|e| internal(req, &e))?;
     Ok(Reply::ok(json!({"saved": true})))
 }
 
 fn chat_post(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {
     let payload = req.json(BODY_LIMIT)?;
-    let Some(message) = payload
-        .get("message")
-        .and_then(Value::as_str)
-        .filter(|m| !m.trim().is_empty())
-    else {
+    let Some(message) = payload.get("message").and_then(Value::as_str).filter(|m| !m.trim().is_empty()) else {
         return Ok(Reply::new(400, json!({"error": "bad body"})));
     };
-    let wrong = payload
-        .get("wrong")
-        .and_then(Value::as_str)
-        .filter(|w| !w.is_empty());
+    let wrong = payload.get("wrong").and_then(Value::as_str).filter(|w| !w.is_empty());
     let recall = |m: &str, d: &str, said: &[String]| (app.recall)(m, d, said);
-    match chat::chat_reply(
-        &app.paths,
-        app.model.as_ref(),
-        &recall,
-        &caps[1],
-        message,
-        wrong,
-    ) {
+    match chat::chat_reply(&app.paths, app.model.as_ref(), &recall, &caps[1], message, wrong) {
         Ok(reply) => Ok(Reply::ok(json!({"reply": reply}))),
-        Err(e) => Ok(Reply::new(
-            502,
-            json!({"error": format!("chat failed: {e}").chars().take(300).collect::<String>()}),
-        )),
+        Err(e) => {
+            Ok(Reply::new(502, json!({"error": format!("chat failed: {e}").chars().take(300).collect::<String>()})))
+        }
     }
 }
 
 fn draft_get(app: &App, _: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {
-    let (status, body) = app
-        .jobs
-        .draft(&app.paths, &app.model, &caps[1], caps.get(2).is_some());
+    let (status, body) = app.jobs.draft(&app.paths, &app.model, &caps[1], caps.get(2).is_some());
     Ok(Reply::new(status, body))
 }
 
@@ -349,20 +292,14 @@ fn transcribe(app: &App, req: &Request, _: &regex::Captures) -> Result<Reply, Re
     let audio = req.blob(app.max_bytes)?;
     match app.speech.transcribe(audio) {
         Ok(text) => Ok(Reply::ok(json!({"text": text}))),
-        Err(e) => Ok(Reply::new(
-            502,
-            json!({"error": format!("asr failed: {}", kind_of(&e))}),
-        )),
+        Err(e) => Ok(Reply::new(502, json!({"error": format!("asr failed: {}", kind_of(&e))}))),
     }
 }
 
 fn ingest(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {
     let source = &caps[1];
     let body = String::from_utf8_lossy(req.blob(app.max_bytes)?).into_owned();
-    let c = app
-        .store
-        .store(source, &body, &app.cls)
-        .map_err(|e| internal(req, &e))?;
+    let c = app.store.store(source, &body, &app.cls).map_err(|e| internal(req, &e))?;
     eprintln!(
         "{} {source} stored {} duplicates {} rejected {}",
         Local::now().format("%H:%M:%S"),
@@ -370,29 +307,19 @@ fn ingest(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, Rep
         c.duplicates,
         c.rejected
     );
-    Ok(Reply::ok(
-        json!({"accepted": c.accepted, "duplicates": c.duplicates, "rejected": c.rejected}),
-    ))
+    Ok(Reply::ok(json!({"accepted": c.accepted, "duplicates": c.duplicates, "rejected": c.rejected})))
 }
 
 fn file_has(app: &App, _req: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {
     let sha = &caps[1];
-    Ok(Reply::ok(
-        json!({"sha256": sha, "present": filestore::has_blob(&app.store, sha)}),
-    ))
+    Ok(Reply::ok(json!({"sha256": sha, "present": filestore::has_blob(&app.store, sha)})))
 }
 
 fn file_put(app: &App, req: &Request, _caps: &regex::Captures) -> Result<Reply, Reply> {
     let sha = req.header("x-file-sha256").trim().to_lowercase();
-    let decoded = percent_encoding::percent_decode_str(&req.header("x-file-name"))
-        .decode_utf8_lossy()
-        .into_owned();
+    let decoded = percent_encoding::percent_decode_str(&req.header("x-file-name")).decode_utf8_lossy().into_owned();
     let name: String = decoded.chars().take(400).collect();
-    let name = if name.is_empty() {
-        "(unnamed)".to_string()
-    } else {
-        name
-    };
+    let name = if name.is_empty() { "(unnamed)".to_string() } else { name };
     let mime_header = req.header("x-file-mime");
     let mime: String = if mime_header.is_empty() {
         "application/octet-stream".into()
@@ -404,17 +331,10 @@ fn file_put(app: &App, req: &Request, _caps: &regex::Captures) -> Result<Reply, 
         Ok(v) if !ts.is_empty() && ts.bytes().all(|b| b.is_ascii_digit()) => v,
         _ => Local::now().timestamp_millis(),
     };
-    let meta = FileMeta {
-        name: &name,
-        mime: &mime,
-        when_ms,
-        cls: &app.cls,
-    };
+    let meta = FileMeta { name: &name, mime: &mime, when_ms, cls: &app.cls };
     if req.header("x-file-sighting").trim() == "1" {
         return match filestore::record_sighting(&app.store, &sha, &meta) {
-            Ok(()) => Ok(Reply::ok(
-                json!({"sha256": sha, "stored": false, "duplicate": true}),
-            )),
+            Ok(()) => Ok(Reply::ok(json!({"sha256": sha, "stored": false, "duplicate": true}))),
             Err(FileError::NotKept) => Ok(Reply::new(409, json!({"error": "blob not present"}))),
             Err(e) => Err(internal(req, &e)),
         };
@@ -424,14 +344,8 @@ fn file_put(app: &App, req: &Request, _caps: &regex::Captures) -> Result<Reply, 
         Ok((sha, stored)) => {
             let safe: String = name.escape_default().collect(); // no raw newlines etc. in the journal line
             let what = if stored { "stored" } else { "dup" };
-            eprintln!(
-                "{} file {} {what} {safe}",
-                Local::now().format("%H:%M:%S"),
-                &sha[..12]
-            );
-            Ok(Reply::ok(
-                json!({"sha256": sha, "stored": stored, "duplicate": !stored}),
-            ))
+            eprintln!("{} file {} {what} {safe}", Local::now().format("%H:%M:%S"), &sha[..12]);
+            Ok(Reply::ok(json!({"sha256": sha, "stored": stored, "duplicate": !stored})))
         }
         Err(FileError::HashMismatch) => Ok(Reply::new(400, json!({"error": "hash mismatch"}))),
         Err(e) => Err(internal(req, &e)),
@@ -447,11 +361,8 @@ pub fn router(app: Arc<App>) -> Router {
 
 async fn entry(State(app): State<Arc<App>>, req: axum::extract::Request) -> AxumResponse {
     let (parts, body) = req.into_parts();
-    let target = parts
-        .uri
-        .path_and_query()
-        .map(|p| p.as_str().to_string())
-        .unwrap_or_else(|| parts.uri.path().to_string());
+    let target =
+        parts.uri.path_and_query().map(|p| p.as_str().to_string()).unwrap_or_else(|| parts.uri.path().to_string());
     let declared = parts
         .headers
         .get(header::CONTENT_LENGTH)
@@ -460,17 +371,8 @@ async fn entry(State(app): State<Arc<App>>, req: axum::extract::Request) -> Axum
         .unwrap_or(0);
     // read only what some handler may use; a larger declared body is refused by the handler without being read
     let cap = app.max_bytes.max(BODY_LIMIT);
-    let body = if declared > 0 && declared <= cap {
-        read(body, declared).await
-    } else {
-        Vec::new()
-    };
-    let request = Request {
-        method: parts.method,
-        target,
-        headers: parts.headers,
-        body,
-    };
+    let body = if declared > 0 && declared <= cap { read(body, declared).await } else { Vec::new() };
+    let request = Request { method: parts.method, target, headers: parts.headers, body };
     let app2 = app.clone();
     let reply = tokio::task::spawn_blocking(move || handle(&app2, &request))
         .await
@@ -479,21 +381,13 @@ async fn entry(State(app): State<Arc<App>>, req: axum::extract::Request) -> Axum
 }
 
 async fn read(body: Body, limit: usize) -> Vec<u8> {
-    to_bytes(body, limit)
-        .await
-        .map(|b| b.to_vec())
-        .unwrap_or_default()
+    to_bytes(body, limit).await.map(|b| b.to_vec()).unwrap_or_default()
 }
 
 fn respond(reply: Reply) -> AxumResponse {
     let status = StatusCode::from_u16(reply.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let body = serde_json::to_vec(&reply.body).unwrap_or_default();
-    (
-        status,
-        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
-        body,
-    )
-        .into_response()
+    (status, [(header::CONTENT_TYPE, "application/json; charset=utf-8")], body).into_response()
 }
 
 /// Serve until the future `stop` completes.
@@ -502,12 +396,9 @@ pub async fn serve(
     listener: tokio::net::TcpListener,
     stop: impl Future<Output = ()> + Send + 'static,
 ) -> std::io::Result<()> {
-    axum::serve(
-        listener,
-        router(app).into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(stop)
-    .await
+    axum::serve(listener, router(app).into_make_service_with_connect_info::<SocketAddr>())
+        .with_graceful_shutdown(stop)
+        .await
 }
 
 /// Serve HTTPS with a certificate and key in PEM files, until the process ends.
@@ -519,7 +410,5 @@ pub async fn serve_tls(
 ) -> std::io::Result<()> {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let tls = axum_server::tls_rustls::RustlsConfig::from_pem_file(cert, key).await?;
-    axum_server::bind_rustls(addr, tls)
-        .serve(router(app).into_make_service_with_connect_info::<SocketAddr>())
-        .await
+    axum_server::bind_rustls(addr, tls).serve(router(app).into_make_service_with_connect_info::<SocketAddr>()).await
 }

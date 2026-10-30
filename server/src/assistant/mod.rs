@@ -9,8 +9,5 @@ pub mod todos;
 pub mod util;
 
 /// Phone system apps whose notifications and app events say nothing about the user's day.
-pub const NOISE_PKGS: [&str; 3] = [
-    "com.android.systemui",
-    "com.sec.android.app.launcher",
-    "com.samsung.android.honeyboard",
-];
+pub const NOISE_PKGS: [&str; 3] =
+    ["com.android.systemui", "com.sec.android.app.launcher", "com.samsung.android.honeyboard"];

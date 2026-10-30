@@ -25,13 +25,7 @@ pub struct Jobs {
 impl Jobs {
     /// The day's stored draft -> (status, body). Starts making it in the background when it is missing or stale.
     /// A failure is reported once, then a retry is allowed.
-    pub fn draft(
-        self: &Arc<Self>,
-        paths: &Paths,
-        model: &Arc<dyn Model>,
-        day: &str,
-        refresh: bool,
-    ) -> (u16, Value) {
+    pub fn draft(self: &Arc<Self>, paths: &Paths, model: &Arc<dyn Model>, day: &str, refresh: bool) -> (u16, Value) {
         let mut drafts = self.drafts.lock().unwrap_or_else(|e| e.into_inner());
         match drafts.get(day) {
             Some(Draft::Running) => return (202, json!({"status": "generating"})),
@@ -62,18 +56,12 @@ impl Jobs {
 
     /// For tests: pretend the last attempt for this day failed.
     pub fn set_failed(&self, day: &str, why: &str) {
-        self.drafts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(day.to_string(), Draft::Failed(why.to_string()));
+        self.drafts.lock().unwrap_or_else(|e| e.into_inner()).insert(day.to_string(), Draft::Failed(why.to_string()));
     }
 
     /// Is a draft for this day being made or waiting to report a failure?
     pub fn pending(&self, day: &str) -> bool {
-        self.drafts
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains_key(day)
+        self.drafts.lock().unwrap_or_else(|e| e.into_inner()).contains_key(day)
     }
 
     /// Extract new to-dos in the background, one run at a time (throttled inside).

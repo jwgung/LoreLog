@@ -6,5 +6,6 @@ pub mod filestore;
 pub mod fsutil;
 pub mod http;
 pub mod jobs;
+pub mod librarian;
 pub mod llm;
 pub mod store;

@@ -44,12 +44,7 @@ pub fn load(paths: &Paths) -> Value {
 }
 
 pub fn save(paths: &Paths, d: &Value) -> std::io::Result<()> {
-    write_private_atomic(
-        &paths.todo_file(),
-        serde_json::to_string_pretty(d)
-            .expect("JSON serializes")
-            .as_bytes(),
-    )
+    write_private_atomic(&paths.todo_file(), serde_json::to_string_pretty(d).expect("JSON serializes").as_bytes())
 }
 
 fn items(d: &mut Value) -> &mut Vec<Value> {
@@ -65,24 +60,13 @@ fn status(i: &Value) -> &str {
 
 /// Add a to-do unless one with the same title (letters and digits only) exists, also a dismissed one: a dismissed
 /// to-do never comes back.
-pub fn add(
-    d: &mut Value,
-    title: &str,
-    source: &str,
-    due: &str,
-    day: &str,
-    mail_subject: &str,
-) -> bool {
+pub fn add(d: &mut Value, title: &str, source: &str, due: &str, day: &str, mail_subject: &str) -> bool {
     let n = norm(title);
     if n.is_empty() || items(d).iter().any(|i| norm(&pystr(i.get("title"))) == n) {
         return false;
     }
     let id = &hex::encode(Sha1::digest(n.as_bytes()))[..10];
-    let thread = if source == "메일" {
-        subj_key(mail_subject)
-    } else {
-        String::new()
-    };
+    let thread = if source == "메일" { subj_key(mail_subject) } else { String::new() };
     items(d).push(json!({"id": id, "title": title.trim(), "source": source, "due": due, "status": "open", "day": day,
                          "thread": thread, "created": Local::now().timestamp_millis()}));
     true
@@ -96,17 +80,11 @@ pub fn autoclose(paths: &Paths, d: &mut Value) -> usize {
 pub fn autoclose_with(d: &mut Value, sent: &[super::context::Sent]) -> usize {
     let mut closed = 0;
     for i in items(d).iter_mut() {
-        let thread = i
-            .get("thread")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
+        let thread = i.get("thread").and_then(Value::as_str).unwrap_or("").to_string();
         let created = i.get("created").and_then(Value::as_f64).unwrap_or(0.0);
         if status(i) == "open"
             && !thread.is_empty()
-            && sent
-                .iter()
-                .any(|(k, _, w)| *k == thread && w * 1000.0 >= created)
+            && sent.iter().any(|(k, _, w)| *k == thread && w * 1000.0 >= created)
         {
             i["status"] = json!("done");
             i["auto"] = json!(true);
@@ -126,11 +104,7 @@ pub fn view(paths: &Paths) -> Value {
     let all = items(&mut d).clone();
     let open: Vec<&Value> = all.iter().filter(|i| status(i) == "open").collect();
     let done: Vec<&Value> = all.iter().filter(|i| status(i) == "done").collect();
-    let recent: Vec<&Value> = done[done.len().saturating_sub(10)..]
-        .iter()
-        .rev()
-        .copied()
-        .collect();
+    let recent: Vec<&Value> = done[done.len().saturating_sub(10)..].iter().rev().copied().collect();
     json!({"open": open, "done": recent})
 }
 
@@ -138,10 +112,7 @@ pub fn view(paths: &Paths) -> Value {
 /// -> how many were added
 pub fn extract(paths: &Paths, model: &dyn Model, day: &str, force: bool) -> anyhow::Result<usize> {
     let now = Local::now().timestamp() as f64;
-    let last = load(paths)
-        .get("last_extract")
-        .and_then(Value::as_f64)
-        .unwrap_or(0.0);
+    let last = load(paths).get("last_extract").and_then(Value::as_f64).unwrap_or(0.0);
     if !force && now - last < 1800.0 {
         return Ok(0);
     }
@@ -152,16 +123,9 @@ pub fn extract(paths: &Paths, model: &dyn Model, day: &str, force: bool) -> anyh
         build_context(paths, &prev, false),
         build_context(paths, day, false)
     );
-    let messages = [
-        json!({"role": "system", "content": TODO_SYSTEM}),
-        json!({"role": "user", "content": ctx}),
-    ];
+    let messages = [json!({"role": "system", "content": TODO_SYSTEM}), json!({"role": "user", "content": ctx})];
     let found = parse_json(&model.complete(&messages, Ask::new(0.2, 700, true, 180))?)?;
-    let found: Vec<Value> = found
-        .get("todos")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let found: Vec<Value> = found.get("todos").and_then(Value::as_array).cloned().unwrap_or_default();
     // the model call took minutes: merge into the file as it is now, not as it was then
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut d = load(paths);
@@ -170,16 +134,7 @@ pub fn extract(paths: &Paths, model: &dyn Model, day: &str, force: bool) -> anyh
         .iter()
         .take(5)
         .filter_map(Value::as_object)
-        .filter(|t| {
-            add(
-                &mut d,
-                &s(t, "title"),
-                &s(t, "source"),
-                &s(t, "due"),
-                day,
-                &s(t, "mail_subject"),
-            )
-        })
+        .filter(|t| add(&mut d, &s(t, "title"), &s(t, "source"), &s(t, "due"), day, &s(t, "mail_subject")))
         .count();
     autoclose(paths, &mut d);
     d["last_extract"] = json!(now);
@@ -197,10 +152,7 @@ pub fn act(paths: &Paths, id: &str, action: &str) -> std::io::Result<bool> {
     };
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut d = load(paths);
-    let Some(i) = items(&mut d)
-        .iter_mut()
-        .find(|i| i.get("id").and_then(Value::as_str) == Some(id))
-    else {
+    let Some(i) = items(&mut d).iter_mut().find(|i| i.get("id").and_then(Value::as_str) == Some(id)) else {
         return Ok(false);
     };
     i["status"] = json!(to);
@@ -231,27 +183,13 @@ mod tests {
     fn a_dismissed_todo_never_returns() {
         let (_d, p) = paths();
         let mut d = load(&p);
-        add(
-            &mut d,
-            "OO 님 문의에 답장하기",
-            "메일",
-            "",
-            "2026-10-28",
-            "",
-        );
+        add(&mut d, "OO 님 문의에 답장하기", "메일", "", "2026-10-28", "");
         save(&p, &d).unwrap();
         let id = load(&p)["items"][0]["id"].as_str().unwrap().to_string();
         assert!(act(&p, &id, "dismiss").unwrap());
         let mut d = load(&p);
         assert!(
-            !add(
-                &mut d,
-                "OO 님 문의에 답장하기!",
-                "메일",
-                "",
-                "2026-10-29",
-                ""
-            ),
+            !add(&mut d, "OO 님 문의에 답장하기!", "메일", "", "2026-10-29", ""),
             "same title modulo punctuation is a duplicate"
         );
         assert_eq!(view(&p)["open"], json!([]));
@@ -267,27 +205,10 @@ mod tests {
     #[test]
     fn a_reply_closes_a_mail_todo() {
         let mut d = json!({"items": [], "last_extract": 0});
-        add(
-            &mut d,
-            "견적 의견 전달하기",
-            "메일",
-            "",
-            "2026-10-28",
-            "RE: 견적 검토",
-        );
+        add(&mut d, "견적 의견 전달하기", "메일", "", "2026-10-28", "RE: 견적 검토");
         let created = d["items"][0]["created"].as_f64().unwrap();
-        let sent = vec![(
-            subj_key("견적 검토"),
-            String::new(),
-            created / 1000.0 + 60.0,
-        )];
+        let sent = vec![(subj_key("견적 검토"), String::new(), created / 1000.0 + 60.0)];
         assert_eq!(autoclose_with(&mut d, &sent), 1);
-        assert_eq!(
-            (
-                d["items"][0]["status"].as_str(),
-                d["items"][0]["auto"].as_bool()
-            ),
-            (Some("done"), Some(true))
-        );
+        assert_eq!((d["items"][0]["status"].as_str(), d["items"][0]["auto"].as_bool()), (Some("done"), Some(true)));
     }
 }

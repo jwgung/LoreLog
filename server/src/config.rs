@@ -24,36 +24,20 @@ impl Paths {
     pub fn from_env() -> Paths {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let conf = env_path("LIFE_CONF_DIR").unwrap_or_else(|| home.join(".config/vault-sync"));
-        let vault = env_path("LIFE_VAULT")
-            .or_else(|| env_path("OBSIDIAN_VAULT"))
-            .unwrap_or_else(|| home.join("Obsidian"));
+        let vault =
+            env_path("LIFE_VAULT").or_else(|| env_path("OBSIDIAN_VAULT")).unwrap_or_else(|| home.join("Obsidian"));
         let ingest = read_env_file(&conf.join("ingest.env"));
         let data = env_path("LIFE_DATA_DIR")
-            .or_else(|| {
-                ingest
-                    .get("LIFE_DATA_DIR")
-                    .filter(|v| !v.is_empty())
-                    .map(|v| expand_home(v, &home))
-            })
+            .or_else(|| ingest.get("LIFE_DATA_DIR").filter(|v| !v.is_empty()).map(|v| expand_home(v, &home)))
             .unwrap_or_else(default_data_dir);
         let allow_file = env_path("LIFE_DIARY_CONFIG").unwrap_or_else(|| conf.join("diary.json"));
-        Paths {
-            vault,
-            data,
-            conf,
-            allow_file,
-        }
+        Paths { vault, data, conf, allow_file }
     }
 
     /// Everything under one directory: `<root>/vault`, `<root>/data`, `<root>/conf`. For tests and trial runs.
     pub fn under(root: &Path) -> Paths {
         let conf = root.join("conf");
-        Paths {
-            vault: root.join("vault"),
-            data: root.join("data"),
-            allow_file: conf.join("diary.json"),
-            conf,
-        }
+        Paths { vault: root.join("vault"), data: root.join("data"), allow_file: conf.join("diary.json"), conf }
     }
 
     pub fn raw(&self) -> PathBuf {
@@ -66,9 +50,7 @@ impl Paths {
 }
 
 fn env_path(key: &str) -> Option<PathBuf> {
-    std::env::var_os(key)
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
+    std::env::var_os(key).filter(|v| !v.is_empty()).map(PathBuf::from)
 }
 
 fn expand_home(v: &str, home: &Path) -> PathBuf {
@@ -82,9 +64,7 @@ fn expand_home(v: &str, home: &Path) -> PathBuf {
 /// The OS place for application data: Linux `$XDG_DATA_HOME/life` (else ~/.local/share/life), Windows
 /// `%LOCALAPPDATA%\life`, macOS `~/Library/Application Support/life`.
 pub fn default_data_dir() -> PathBuf {
-    dirs::data_local_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("life")
+    dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".")).join("life")
 }
 
 /// A `KEY=VALUE` file (secrets live in these, mode 600). Blank lines and `#` comments are skipped; values may be quoted.
@@ -100,10 +80,7 @@ pub fn read_env_file(path: &Path) -> BTreeMap<String, String> {
             continue;
         }
         if let Some((k, v)) = line.split_once('=') {
-            out.insert(
-                k.trim().to_string(),
-                v.trim().trim_matches('"').trim_matches('\'').to_string(),
-            );
+            out.insert(k.trim().to_string(), v.trim().trim_matches('"').trim_matches('\'').to_string());
         }
     }
     out
@@ -117,11 +94,7 @@ mod tests {
     fn an_env_file_skips_comments_and_unquotes_values() {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path().join("env");
-        fs::write(
-            &p,
-            "# secrets\n\nA=1\n B = \"two words\" \nC='x=y'\nnot a pair\n",
-        )
-        .unwrap();
+        fs::write(&p, "# secrets\n\nA=1\n B = \"two words\" \nC='x=y'\nnot a pair\n").unwrap();
         let m = read_env_file(&p);
         assert_eq!(m.get("A").map(String::as_str), Some("1"));
         assert_eq!(m.get("B").map(String::as_str), Some("two words"));

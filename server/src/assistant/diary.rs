@@ -22,21 +22,12 @@ const USER_PART: &str = "
 ";
 
 static COMMENT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?s)<!--.*?-->").unwrap());
-static AI_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(
-        "(?s){}(.*?){}",
-        regex::escape(AI_BEGIN),
-        regex::escape(AI_END)
-    ))
-    .unwrap()
-});
-static GENERATED_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^ai_generated:[ \t]*(.+)$").unwrap());
-static GENERATED_LINE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^ai_generated:.*$").unwrap());
-static CORRECTION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?s)^\(정리의 이 문장이 틀렸다고 알려 주셨어요: "(.*?)"\)\n(.*)$"#).unwrap()
-});
+static AI_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(&format!("(?s){}(.*?){}", regex::escape(AI_BEGIN), regex::escape(AI_END))).unwrap());
+static GENERATED_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^ai_generated:[ \t]*(.+)$").unwrap());
+static GENERATED_LINE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^ai_generated:.*$").unwrap());
+static CORRECTION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?s)^\(정리의 이 문장이 틀렸다고 알려 주셨어요: "(.*?)"\)\n(.*)$"#).unwrap());
 
 // ---------- corrections said in chat ----------
 
@@ -47,9 +38,7 @@ pub fn wrap_correction(wrong: &str, message: &str) -> String {
 
 /// (wrong sentence, what the user said) for a stored correction line, else None.
 pub fn split_correction(text: &str) -> Option<(String, String)> {
-    CORRECTION_RE
-        .captures(text)
-        .map(|c| (c[1].to_string(), c[2].to_string()))
+    CORRECTION_RE.captures(text).map(|c| (c[1].to_string(), c[2].to_string()))
 }
 
 // ---------- sections ----------
@@ -99,11 +88,7 @@ pub fn section(text: &str, name: &str) -> String {
 
 /// The text with the body of `## <name>` replaced (the section is added at the end when missing).
 pub fn set_section(text: &str, name: &str, body: &str) -> String {
-    let new = if body.trim().is_empty() {
-        String::new()
-    } else {
-        format!("{}\n\n", body.trim())
-    };
+    let new = if body.trim().is_empty() { String::new() } else { format!("{}\n\n", body.trim()) };
     match find_section(text, name) {
         Some((_, s, e)) => format!("{}{new}{}", &text[..s], &text[e..]),
         None => format!("{}\n\n## {name}\n{new}", text.trim_end_matches('\n')),
@@ -117,9 +102,7 @@ fn note_path(paths: &Paths, day: &str) -> std::path::PathBuf {
 }
 
 fn read_text(path: &std::path::Path) -> String {
-    fs::read(path)
-        .map(|b| String::from_utf8_lossy(&b).into_owned())
-        .unwrap_or_default()
+    fs::read(path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default()
 }
 
 /// The day as the app shows it. `stale` when the phone records or the allowed senders changed after the draft.
@@ -129,23 +112,15 @@ pub fn read_day(paths: &Paths, day: &str) -> Value {
         return json!({"date": day, "exists": false});
     };
     let ai = m[1].to_string();
-    let generated = GENERATED_RE.captures(&text).and_then(|g| {
-        DateTime::parse_from_rfc3339(g[1].trim())
-            .ok()
-            .or_else(|| parse_offsetless(g[1].trim()))
-    });
+    let generated = GENERATED_RE
+        .captures(&text)
+        .and_then(|g| DateTime::parse_from_rfc3339(g[1].trim()).ok().or_else(|| parse_offsetless(g[1].trim())));
     let stale = match generated {
         None => true,
         Some(g) => {
-            let inputs = [
-                paths.raw().join("lorelog").join(format!("{day}.ndjson")),
-                paths.allow_file.clone(),
-            ];
+            let inputs = [paths.raw().join("lorelog").join(format!("{day}.ndjson")), paths.allow_file.clone()];
             inputs.iter().any(|p| {
-                fs::metadata(p)
-                    .and_then(|m| m.modified())
-                    .map(|t| DateTime::<Local>::from(t) > g)
-                    .unwrap_or(false)
+                fs::metadata(p).and_then(|m| m.modified()).map(|t| DateTime::<Local>::from(t) > g).unwrap_or(false)
             })
         }
     };
@@ -167,9 +142,7 @@ pub fn read_day(paths: &Paths, day: &str) -> Value {
 /// A stamp without an offset is local time.
 fn parse_offsetless(s: &str) -> Option<DateTime<chrono::FixedOffset>> {
     let t = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").ok()?;
-    t.and_local_timezone(Local)
-        .earliest()
-        .map(|t| t.fixed_offset())
+    t.and_local_timezone(Local).earliest().map(|t| t.fixed_offset())
 }
 
 /// Write the user's corrections and reflection into the day's note and append a raw copy.
@@ -189,30 +162,18 @@ pub fn save_user(paths: &Paths, day: &str, payload: &Value) -> std::io::Result<(
             cs.iter()
                 .filter_map(|c| {
                     let (w, r) = (c.get("wrong")?.as_str()?, c.get("right")?.as_str()?);
-                    (!w.is_empty() && !r.is_empty())
-                        .then(|| format!("- {} → {}", w.trim(), r.trim()))
+                    (!w.is_empty() && !r.is_empty()).then(|| format!("- {} → {}", w.trim(), r.trim()))
                 })
                 .collect()
         })
         .unwrap_or_default();
-    let mut reflection = p
-        .get("reflection")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    if p.get("append")
-        .map(|v| super::util::truthy(Some(v)))
-        .unwrap_or(false)
-    {
+    let mut reflection = p.get("reflection").and_then(Value::as_str).unwrap_or("").to_string();
+    if p.get("append").map(|v| super::util::truthy(Some(v))).unwrap_or(false) {
         let (old_fix, old_ref) = (section(&text, "정정"), section(&text, "회고"));
         if !old_fix.is_empty() {
             lines.insert(0, old_fix);
         }
-        reflection = [old_ref, reflection]
-            .into_iter()
-            .filter(|x| !x.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        reflection = [old_ref, reflection].into_iter().filter(|x| !x.is_empty()).collect::<Vec<_>>().join("\n\n");
     }
     text = set_section(&text, "정정", &lines.join("\n"));
     text = set_section(&text, "회고", &reflection);
@@ -256,19 +217,13 @@ pub fn render(day: &str, summary: &str, question: &str, existing: &str) -> Strin
         question.trim()
     );
     if !existing.is_empty() && existing.contains(AI_BEGIN) {
-        let text = AI_RE
-            .replace_all(existing, regex::NoExpand(&block))
-            .into_owned();
+        let text = AI_RE.replace_all(existing, regex::NoExpand(&block)).into_owned();
         if GENERATED_LINE_RE.is_match(&text) {
             return GENERATED_LINE_RE
                 .replacen(&text, 1, regex::NoExpand(&format!("ai_generated: {stamp}")))
                 .into_owned();
         }
-        return text.replacen(
-            "\nclass: personal\n",
-            &format!("\nclass: personal\nai_generated: {stamp}\n"),
-            1,
-        );
+        return text.replacen("\nclass: personal\n", &format!("\nclass: personal\nai_generated: {stamp}\n"), 1);
     }
     format!(
         "---\ntype: diary\ndate: {day}\nclass: personal\nai_generated: {stamp}\n---\n# {day}\n\n{block}\n{USER_PART}"
@@ -286,11 +241,7 @@ mod tests {
         let text = set_section(NOTE, "회고", "좋은 하루");
         assert_eq!(section(&text, "회고"), "좋은 하루");
         assert_eq!(section(&text, "정정"), "");
-        assert_eq!(
-            section(&set_section("# x\n", "회고", "새로"), "회고"),
-            "새로",
-            "a missing section is added"
-        );
+        assert_eq!(section(&set_section("# x\n", "회고", "새로"), "회고"), "새로", "a missing section is added");
     }
 
     #[test]
@@ -299,16 +250,22 @@ mod tests {
         let paths = Paths::under(dir.path());
         fs::create_dir_all(paths.vault.join("Diary")).unwrap();
         fs::write(paths.vault.join("Diary/2026-01-01.md"), NOTE).unwrap();
-        save_user(&paths, "2026-01-01", &json!({"append": true, "corrections": [{"wrong": "둘", "right": "셋"}], "reflection": "첫째"})).unwrap();
-        save_user(&paths, "2026-01-01", &json!({"append": true, "corrections": [{"wrong": "셋", "right": "넷"}], "reflection": "둘째"})).unwrap();
+        save_user(
+            &paths,
+            "2026-01-01",
+            &json!({"append": true, "corrections": [{"wrong": "둘", "right": "셋"}], "reflection": "첫째"}),
+        )
+        .unwrap();
+        save_user(
+            &paths,
+            "2026-01-01",
+            &json!({"append": true, "corrections": [{"wrong": "셋", "right": "넷"}], "reflection": "둘째"}),
+        )
+        .unwrap();
         let day = read_day(&paths, "2026-01-01");
         assert_eq!(day["corrections"], "- 둘 → 셋\n- 셋 → 넷");
         assert_eq!(day["reflection"], "첫째\n\n둘째");
-        assert_eq!(
-            day["summary"],
-            json!(["하나", "둘"]),
-            "the AI part is untouched by the user's words"
-        );
+        assert_eq!(day["summary"], json!(["하나", "둘"]), "the AI part is untouched by the user's words");
         let raw = fs::read_to_string(paths.raw().join("diary/2026-01-01.ndjson")).unwrap();
         assert_eq!(raw.lines().count(), 2);
     }
@@ -317,9 +274,7 @@ mod tests {
     fn a_new_draft_replaces_only_the_ai_part_and_marks_when() {
         let note = render("2026-01-02", "- 하나\n둘\n\n", " 왜요? ", "");
         assert!(note.contains("ai_generated: "));
-        assert!(note.contains(
-            "## 오늘의 정리 (ai)\n- 하나\n- 둘\n\n## 오늘의 질문 (ai)\n왜요?\n<!-- ai:end -->"
-        ));
+        assert!(note.contains("## 오늘의 정리 (ai)\n- 하나\n- 둘\n\n## 오늘의 질문 (ai)\n왜요?\n<!-- ai:end -->"));
         let with_words = set_section(&note, "회고", "내 말");
         let again = render("2026-01-02", "셋", "또?", &with_words);
         assert_eq!(section(&again, "회고"), "내 말");
@@ -330,10 +285,7 @@ mod tests {
     #[test]
     fn a_correction_line_unwraps() {
         let line = wrap_correction("10초 통화", "20분 했어");
-        assert_eq!(
-            split_correction(&line),
-            Some(("10초 통화".into(), "20분 했어".into()))
-        );
+        assert_eq!(split_correction(&line), Some(("10초 통화".into(), "20분 했어".into())));
         assert_eq!(split_correction("그냥 말"), None);
     }
 }

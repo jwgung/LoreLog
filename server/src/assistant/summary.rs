@@ -28,19 +28,14 @@ static FILLER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(다양한 앱|앱과 메신저를 활용|곳의 장소|장소를 이동|여러 곳을 이동|업무 관련 대화를 나누|메시지를 주고받으셨어요$)").unwrap()
 });
 static CLOCK: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(오전|오후|저녁|밤|아침|점심|정오|새벽)?\s*(\d{1,2})\s*시\s*(?:(\d{1,2})\s*분)?")
-        .unwrap()
+    Regex::new(r"(오전|오후|저녁|밤|아침|점심|정오|새벽)?\s*(\d{1,2})\s*시\s*(?:(\d{1,2})\s*분)?").unwrap()
 });
 static NOON: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"점심|정오").unwrap());
 
 /// Minutes since midnight of the first clock time in the sentence; 점심/정오 without a number is 12:00; else `fallback`.
 fn minutes(line: &str, fallback: u32) -> u32 {
     let Some(m) = CLOCK.captures(line) else {
-        return if NOON.is_match(line) {
-            12 * 60
-        } else {
-            fallback
-        };
+        return if NOON.is_match(line) { 12 * 60 } else { fallback };
     };
     let mut h: u32 = m[2].parse().unwrap_or(0);
     let mi: u32 = m.get(3).and_then(|x| x.as_str().parse().ok()).unwrap_or(0);
@@ -55,20 +50,12 @@ fn minutes(line: &str, fallback: u32) -> u32 {
 pub fn drop_filler(summary: &str) -> String {
     let mut last = 0;
     let mut keyed: Vec<(u32, usize, &str)> = Vec::new();
-    for (i, l) in summary
-        .lines()
-        .filter(|l| !l.trim().is_empty() && !FILLER.is_match(l))
-        .enumerate()
-    {
+    for (i, l) in summary.lines().filter(|l| !l.trim().is_empty() && !FILLER.is_match(l)).enumerate() {
         last = minutes(l, last);
         keyed.push((last, i, l));
     }
     keyed.sort();
-    keyed
-        .iter()
-        .map(|(_, _, l)| *l)
-        .collect::<Vec<_>>()
-        .join("\n")
+    keyed.iter().map(|(_, _, l)| *l).collect::<Vec<_>>().join("\n")
 }
 
 /// Ask the model for the day's summary and question. -> {summary, question}
@@ -79,28 +66,17 @@ pub fn ask(model: &dyn Model, context: &str, day: &str) -> anyhow::Result<Value>
     ];
     let text = model.complete(&messages, Ask::new(0.3, 1500, true, 180))?;
     let mut data = parse_json(&text)?;
-    let raw = data
-        .get("summary")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+    let raw = data.get("summary").and_then(Value::as_str).unwrap_or("").to_string();
     let kept = drop_filler(&raw);
     data["summary"] = Value::String(if kept.is_empty() { raw } else { kept });
     Ok(data)
 }
 
 /// Build the day's draft with the model and write it into the day's note (unless `dry_run`). -> the note text
-pub fn generate(
-    paths: &Paths,
-    model: &dyn Model,
-    day: &str,
-    dry_run: bool,
-) -> anyhow::Result<String> {
+pub fn generate(paths: &Paths, model: &dyn Model, day: &str, dry_run: bool) -> anyhow::Result<String> {
     let ai = ask(model, &build_context(paths, day, true), day)?;
     let path = paths.vault.join("Diary").join(format!("{day}.md"));
-    let existing = std::fs::read(&path)
-        .map(|b| String::from_utf8_lossy(&b).into_owned())
-        .unwrap_or_default();
+    let existing = std::fs::read(&path).map(|b| String::from_utf8_lossy(&b).into_owned()).unwrap_or_default();
     let s = |k: &str| ai.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let text = render(day, &s("summary"), &s("question"), &existing);
     if !dry_run {
@@ -115,9 +91,7 @@ mod tests {
 
     #[test]
     fn filler_sentences_are_removed() {
-        let out = drop_filler(
-            "오전 9시 회의가 있었어요.\n오늘은 다양한 앱을 활용하셨어요.\n오후 3시 통화를 하셨어요.",
-        );
+        let out = drop_filler("오전 9시 회의가 있었어요.\n오늘은 다양한 앱을 활용하셨어요.\n오후 3시 통화를 하셨어요.");
         assert!(!out.contains("다양한 앱"));
         assert_eq!(out.lines().count(), 2);
     }

@@ -11,21 +11,20 @@ use regex::Regex;
 use serde_json::{Map, Value};
 
 use super::senders::{load_allow, noise, record_allowed};
-use super::util::{
-    Counter, as_int, files_like, files_like_nested, front, local, pystr, take, truthy,
-};
+use super::util::{Counter, as_int, files_like, files_like_nested, front, local, pystr, take, truthy};
 use crate::config::Paths;
 
 type Record = Map<String, Value>;
 
-static PREFIX_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)^(\s*(re|fw|fwd|회신|전달)\s*:\s*)+").unwrap());
+static PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^(\s*(re|fw|fwd|회신|전달)\s*:\s*)+").unwrap());
 static KEEP_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[^0-9a-z가-힣]").unwrap());
 static BULK_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(no-?reply|newsletter|news@|info@|support@|marketing|promo|stibee|mailchimp|광고|뉴스레터|\(광고\))").unwrap()
+    Regex::new(
+        r"(?i)(no-?reply|newsletter|news@|info@|support@|marketing|promo|stibee|mailchimp|광고|뉴스레터|\(광고\))",
+    )
+    .unwrap()
 });
-static MAIL_NAME_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^(\d{4}-\d{2}-\d{2})-(\d{2})(\d{2})-").unwrap());
+static MAIL_NAME_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(\d{4}-\d{2}-\d{2})-(\d{2})(\d{2})-").unwrap());
 
 // ---------- records ----------
 
@@ -93,10 +92,7 @@ pub fn load_conversations(paths: &Paths) -> Conversations {
 /// Participants of the conversation this voice belongs to if the user confirmed it as theirs, else None.
 /// ambient / pending / skipped conversations and voice outside any conversation are never used. A conversation
 /// without a usable time span cannot contain anything.
-pub fn confirmed_voice_label<'a>(
-    convs: impl IntoIterator<Item = &'a Record>,
-    ts_ms: i64,
-) -> Option<String> {
+pub fn confirmed_voice_label<'a>(convs: impl IntoIterator<Item = &'a Record>, ts_ms: i64) -> Option<String> {
     for c in convs {
         let status = c.get("status").and_then(Value::as_str);
         if !matches!(status, Some("tagged") | Some("auto")) {
@@ -106,11 +102,7 @@ pub fn confirmed_voice_label<'a>(
             continue;
         };
         if start <= ts_ms && ts_ms <= end {
-            return Some(if truthy(c.get("participants")) {
-                pystr(c.get("participants"))
-            } else {
-                "?".into()
-            });
+            return Some(if truthy(c.get("participants")) { pystr(c.get("participants")) } else { "?".into() });
         }
     }
     None
@@ -149,11 +141,7 @@ pub fn sent_index(paths: &Paths, days: i64) -> Vec<Sent> {
         let Some(when) = local_epoch(&format!("{}T{}:{}:00", &m[1], &m[2], &m[3])) else {
             continue;
         };
-        out.push((
-            subj_key(&f[1]),
-            f[2].trim_matches(['<', '>']).to_string(),
-            when,
-        ));
+        out.push((subj_key(&f[1]), f[2].trim_matches(['<', '>']).to_string(), when));
     }
     out
 }
@@ -161,18 +149,14 @@ pub fn sent_index(paths: &Paths, days: i64) -> Vec<Sent> {
 /// Epoch seconds of a local `YYYY-MM-DDTHH:MM:SS`.
 fn local_epoch(s: &str) -> Option<f64> {
     let t = NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").ok()?;
-    t.and_local_timezone(Local)
-        .earliest()
-        .map(|t| t.timestamp() as f64)
+    t.and_local_timezone(Local).earliest().map(|t| t.timestamp() as f64)
 }
 
 /// Did the user send a reply to this mail after it arrived (same thread subject, or an in-reply-to pointing at it)?
 pub fn replied(sent: &[Sent], subject: &str, mail_id: &str, received_at: f64) -> bool {
     let key = subj_key(subject);
     let mid = mail_id.trim_matches(['<', '>']);
-    sent.iter().any(|(k, r, w)| {
-        *w >= received_at && ((!key.is_empty() && *k == key) || (!mid.is_empty() && r == mid))
-    })
+    sent.iter().any(|(k, r, w)| *w >= received_at && ((!key.is_empty() && *k == key) || (!mid.is_empty() && r == mid)))
 }
 
 /// Mail of the day. Marked, not removed: bulk senders, mail the user sent, mail the user already replied to.
@@ -194,20 +178,13 @@ pub fn gather_mail(paths: &Paths, day: &str) -> Vec<String> {
         } else if BULK_RE.is_match(&format!("{from} {subject}")) {
             " [대량 발송]"
         } else {
-            let t = if time.is_empty() {
-                "00:00"
-            } else {
-                time.as_str()
-            };
+            let t = if time.is_empty() { "00:00" } else { time.as_str() };
             let mut hm = t.split(':');
             let (h, m) = (
                 hm.next().and_then(|x| x.trim().parse::<u32>().ok()),
                 hm.next().and_then(|x| x.trim().parse::<u32>().ok()),
             );
-            match h
-                .zip(m)
-                .and_then(|(h, m)| local_epoch(&format!("{day}T{h:02}:{m:02}:00")))
-            {
+            match h.zip(m).and_then(|(h, m)| local_epoch(&format!("{day}T{h:02}:{m:02}:00"))) {
                 Some(received) if replied(&sent, subject, mail_id, received) => " [이미 회신함]",
                 _ => "",
             }
@@ -225,16 +202,7 @@ pub fn gather_events(paths: &Paths, day: &str) -> Vec<String> {
         .map(|p| {
             let f = front(p, &["title", "start", "end", "all_day"]);
             let start = slice(&f[1], 11, 16);
-            format!(
-                "{}~{} {}",
-                if start.is_empty() {
-                    "종일".to_string()
-                } else {
-                    start
-                },
-                slice(&f[2], 11, 16),
-                f[0]
-            )
+            format!("{}~{} {}", if start.is_empty() { "종일".to_string() } else { start }, slice(&f[2], 11, 16), f[0])
         })
         .collect();
     rows.sort();
@@ -284,25 +252,14 @@ pub fn gather_lorelog(paths: &Paths, day: &str) -> Lorelog {
                     continue;
                 };
                 if let Some(who) = confirmed_voice_label(convs.values(), ts) {
-                    out.voice.push(format!(
-                        "{} (with {who}) {}",
-                        hm_of(at),
-                        take(&pystr(d.get("text")), 200)
-                    ));
+                    out.voice.push(format!("{} (with {who}) {}", hm_of(at), take(&pystr(d.get("text")), 200)));
                 }
             }
             "comm" => {
                 let Some(at) = when else { continue };
-                let party = if truthy(d.get("party_name")) {
-                    pystr(d.get("party_name"))
-                } else {
-                    pystr(d.get("party"))
-                };
-                let content = if d.contains_key("content") {
-                    pystr(d.get("content"))
-                } else {
-                    String::new()
-                };
+                let party =
+                    if truthy(d.get("party_name")) { pystr(d.get("party_name")) } else { pystr(d.get("party")) };
+                let content = if d.contains_key("content") { pystr(d.get("content")) } else { String::new() };
                 out.comm.push(format!(
                     "{} {}/{} {party} {content}",
                     hm_of(at),
@@ -315,24 +272,15 @@ pub fn gather_lorelog(paths: &Paths, day: &str) -> Lorelog {
                 out.notif.add(key.clone());
                 if truthy(d.get("text")) {
                     let Some(at) = when else { continue };
-                    out.msgs.entry(key).or_default().push(format!(
-                        "{} {}",
-                        hm_of(at),
-                        take(&pystr(d.get("text")), 80)
-                    ));
+                    out.msgs.entry(key).or_default().push(format!("{} {}", hm_of(at), take(&pystr(d.get("text")), 80)));
                 }
             }
             "app" if !noise(&d) => out.apps.add(pystr(d.get("label"))),
             "location" => {
-                let (Some(at), Some(la), Some(lo)) = (when, num(d.get("lat")), num(d.get("lon")))
-                else {
+                let (Some(at), Some(la), Some(lo)) = (when, num(d.get("lat")), num(d.get("lon"))) else {
                     continue;
                 };
-                places.push((
-                    at,
-                    (la * 1000.0).round() as i64,
-                    (lo * 1000.0).round() as i64,
-                ));
+                places.push((at, (la * 1000.0).round() as i64, (lo * 1000.0).round() as i64));
             }
             _ => {}
         }
@@ -381,14 +329,9 @@ pub fn gather_pc(paths: &Paths, day: &str, top: usize) -> Vec<String> {
     let mut segs: Vec<(i64, i64, String, String, i64)> =
         records_or_none(&paths.raw().join("pc").join(format!("{day}.ndjson")))
             .into_iter()
-            .filter(|d| {
-                d.get("type").and_then(Value::as_str) == Some("window") && truthy(d.get("app"))
-            })
+            .filter(|d| d.get("type").and_then(Value::as_str) == Some("window") && truthy(d.get("app")))
             .filter_map(|d| {
-                let (ts, end) = (
-                    as_int(d.get("ts")).filter(|v| *v != 0)?,
-                    as_int(d.get("end")).filter(|v| *v != 0)?,
-                );
+                let (ts, end) = (as_int(d.get("ts")).filter(|v| *v != 0)?, as_int(d.get("end")).filter(|v| *v != 0)?);
                 Some((
                     ts,
                     end,
@@ -406,13 +349,7 @@ pub fn gather_pc(paths: &Paths, day: &str, top: usize) -> Vec<String> {
                 m.end = end;
                 m.secs += dur;
             }
-            _ => merged.push(Stay {
-                app,
-                title,
-                ts,
-                end,
-                secs: dur,
-            }),
+            _ => merged.push(Stay { app, title, ts, end, secs: dur }),
         }
     }
     let mut longest: Vec<&Stay> = merged.iter().filter(|m| m.secs >= 300).collect();
@@ -422,16 +359,8 @@ pub fn gather_pc(paths: &Paths, day: &str, top: usize) -> Vec<String> {
     longest
         .iter()
         .map(|m| {
-            let (a, b) = (
-                local(m.ts).map(hm_of).unwrap_or_default(),
-                local(m.end).map(hm_of).unwrap_or_default(),
-            );
-            format!(
-                "{a}~{b} {} \"{}\" ({}분)",
-                m.app,
-                take(&m.title, 80),
-                m.secs.div_euclid(60)
-            )
+            let (a, b) = (local(m.ts).map(hm_of).unwrap_or_default(), local(m.end).map(hm_of).unwrap_or_default());
+            format!("{a}~{b} {} \"{}\" ({}분)", m.app, take(&m.title, 80), m.secs.div_euclid(60))
         })
         .collect()
 }
@@ -448,11 +377,7 @@ pub fn build_context(paths: &Paths, day: &str, summary: bool) -> String {
         .most_common(15)
         .into_iter()
         .map(|(k, v)| {
-            let msgs = lore
-                .msgs
-                .get(&k)
-                .map(|m| m[m.len().saturating_sub(4)..].join(" / "))
-                .unwrap_or_default();
+            let msgs = lore.msgs.get(&k).map(|m| m[m.len().saturating_sub(4)..].join(" / ")).unwrap_or_default();
             format!("{k} x{v}: {msgs}")
         })
         .collect();
@@ -460,26 +385,10 @@ pub fn build_context(paths: &Paths, day: &str, summary: bool) -> String {
         ("일정", gather_events(paths, day)),
         ("받거나 보낸 메일(제목만)", mail),
         ("통화/문자", lore.comm.clone()),
-        (
-            "대화(사용자가 본인 대화로 확인한 음성 전사, 오류 있음)",
-            lore.voice.iter().take(30).cloned().collect(),
-        ),
-        (
-            "PC에서 5분 넘게 머문 창(앱, 창 제목, 시간)",
-            gather_pc(paths, day, 12),
-        ),
-        (
-            "메신저 알림(사용자가 허용한 상대만, 건수: 최근 내용)",
-            notif,
-        ),
-        (
-            "앱 사용(기록 횟수)",
-            lore.apps
-                .most_common(12)
-                .into_iter()
-                .map(|(k, v)| format!("{k} x{v}"))
-                .collect(),
-        ),
+        ("대화(사용자가 본인 대화로 확인한 음성 전사, 오류 있음)", lore.voice.iter().take(30).cloned().collect()),
+        ("PC에서 5분 넘게 머문 창(앱, 창 제목, 시간)", gather_pc(paths, day, 12)),
+        ("메신저 알림(사용자가 허용한 상대만, 건수: 최근 내용)", notif),
+        ("앱 사용(기록 횟수)", lore.apps.most_common(12).into_iter().map(|(k, v)| format!("{k} x{v}")).collect()),
         ("위치", lore.places.iter().take(20).cloned().collect()),
     ];
     if summary {
@@ -491,10 +400,7 @@ pub fn build_context(paths: &Paths, day: &str, summary: bool) -> String {
             let body = if rows.is_empty() {
                 "- (없음)".to_string()
             } else {
-                rows.iter()
-                    .map(|r| format!("- {r}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
+                rows.iter().map(|r| format!("- {r}")).collect::<Vec<_>>().join("\n")
             };
             format!("## {name}\n{body}")
         })

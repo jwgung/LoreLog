@@ -47,10 +47,7 @@ pub fn append_private(path: &Path, text: &str) -> io::Result<()> {
 pub fn write_private_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     fs::create_dir_all(dir)?;
-    let mut tmp = tempfile_in(
-        dir,
-        path.file_name().and_then(|n| n.to_str()).unwrap_or("file"),
-    )?;
+    let mut tmp = tempfile_in(dir, path.file_name().and_then(|n| n.to_str()).unwrap_or("file"))?;
     let result = (|| {
         tmp.1.write_all(data)?;
         tmp.1.sync_all()?;
@@ -68,15 +65,9 @@ fn tempfile_in(dir: &Path, prefix: &str) -> io::Result<(std::path::PathBuf, File
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
     for _ in 0..100 {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let name = format!(
-            "{prefix}.{}-{nanos}-{}.tmp",
-            std::process::id(),
-            N.fetch_add(1, Ordering::Relaxed)
-        );
+        let nanos =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+        let name = format!("{prefix}.{}-{nanos}-{}.tmp", std::process::id(), N.fetch_add(1, Ordering::Relaxed));
         let p = dir.join(name);
         let mut o = OpenOptions::new();
         o.write(true).create_new(true);
@@ -91,10 +82,7 @@ fn tempfile_in(dir: &Path, prefix: &str) -> io::Result<(std::path::PathBuf, File
             Err(e) => return Err(e),
         }
     }
-    Err(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "no free temp name",
-    ))
+    Err(io::Error::new(io::ErrorKind::AlreadyExists, "no free temp name"))
 }
 
 #[cfg(all(test, unix))]
@@ -122,10 +110,6 @@ mod tests {
         write_private_atomic(&g, b"new").unwrap();
         assert_eq!(fs::read(&g).unwrap(), b"new");
         assert_eq!(mode(&g), 0o600);
-        assert_eq!(
-            fs::read_dir(&d).unwrap().count(),
-            2,
-            "no temp file is left behind"
-        );
+        assert_eq!(fs::read_dir(&d).unwrap().count(), 2, "no temp file is left behind");
     }
 }

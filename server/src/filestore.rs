@@ -15,18 +15,12 @@ use crate::store::{RawStore, blob_path, put_blob, sha256_hex};
 
 /// A sha must be 64 lowercase hex before it is used in a file path (no empty value, no path segments).
 pub fn valid_sha(sha: &str) -> bool {
-    sha.len() == 64
-        && sha
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// Is this content hash already kept? Lets the agent skip uploading bytes we have.
 pub fn has_blob(store: &RawStore, sha: &str) -> bool {
-    valid_sha(sha)
-        && fs::metadata(blob_path(store.data(), sha))
-            .map(|m| m.len() > 0)
-            .unwrap_or(false)
+    valid_sha(sha) && fs::metadata(blob_path(store.data(), sha)).map(|m| m.len() > 0).unwrap_or(false)
 }
 
 #[derive(Debug)]
@@ -54,12 +48,7 @@ pub struct FileMeta<'a> {
 
 /// Store one PC file: verify the claimed hash (if one is given), keep the bytes once, record a sighting.
 /// -> (sha, newly stored)
-pub fn keep_file(
-    store: &RawStore,
-    data: &[u8],
-    claimed: &str,
-    meta: &FileMeta,
-) -> Result<(String, bool), FileError> {
+pub fn keep_file(store: &RawStore, data: &[u8], claimed: &str, meta: &FileMeta) -> Result<(String, bool), FileError> {
     let actual = sha256_hex(data);
     if !claimed.is_empty() && claimed != actual {
         return Err(FileError::HashMismatch);
