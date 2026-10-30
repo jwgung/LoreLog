@@ -61,7 +61,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let identity = dirs::data_local_dir().unwrap_or_default().join("hub-sync/identity.json"); // Linux ~/.local/share
+    let identity = life_server::config::OsDirs::here().data.join("hub-sync/identity.json");
     let own: HashSet<String> = std::fs::read_to_string(identity)
         .ok()
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())

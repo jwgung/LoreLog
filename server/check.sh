@@ -13,7 +13,7 @@ if cargo xwin --version >/dev/null 2>&1; then
     cargo xwin check -q --target x86_64-pc-windows-msvc -p life-server
     echo "windows: ok"
 else
-    echo "windows: skipped (install cargo-xwin to check the Windows build)" >&2
+    echo "windows: FAILED, cargo-xwin is not installed (cargo install cargo-xwin)" >&2
     exit 1
 fi
 echo "all checks passed"

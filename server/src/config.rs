@@ -1,11 +1,13 @@
 //! Where the server reads and writes. Every place has a default and can be moved with an environment variable, so the
 //! same code runs as the home server, inside the desktop app, or in a test against throwaway directories.
 //!
-//! The defaults sit in the OS places ([`OsDirs`]); on Linux they are the files the home server has always used:
+//! The defaults sit in the OS places ([`OsDirs`]); on Linux they are the files the home server always used:
 //!   vault       LIFE_VAULT, else OBSIDIAN_VAULT, else ~/Obsidian          (Mail/, Events/, Diary/ notes)
 //!   data        LIFE_DATA_DIR, else LIFE_DATA_DIR in ingest.env, else the OS data dir + /life   (raw/, todos.json, index)
 //!   config      LIFE_CONF_DIR, else the OS config dir + /vault-sync       (env, sources.toml, ingest.env, diary.json)
-//!               (Linux ~/.config/vault-sync, Windows %APPDATA%\vault-sync, macOS ~/Library/Application Support/vault-sync)
+//!               (Linux ~/.config/vault-sync, Windows %APPDATA%\vault-sync,
+//!               macOS ~/Library/Application Support/vault-sync)
+//! On Linux the OS places follow XDG_CONFIG_HOME and XDG_DATA_HOME when they are set.
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
