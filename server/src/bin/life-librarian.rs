@@ -1,7 +1,8 @@
 //! life-librarian (사서): keep the index of every record and search it.
 use std::process::ExitCode;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use life_server::collect::sync;
 use life_server::config::Paths;
 use life_server::librarian::{Librarian, Outdated};
 use serde_json::Value;
@@ -58,6 +59,9 @@ fn main() -> ExitCode {
         return usage("the following arguments are required: words");
     }
     let paths = Paths::from_env();
+    if matches!(cmd, "update" | "rebuild") {
+        return ExitCode::from(sync::librarian(&paths, cmd == "rebuild", &mut sync::console).exit_code());
+    }
     let mut lib = match Librarian::open(&paths, None, Duration::from_secs(30)) {
         Ok(l) => l,
         Err(e) => {
@@ -67,23 +71,6 @@ fn main() -> ExitCode {
     };
     let result: anyhow::Result<ExitCode> = (|| {
         match cmd {
-            "update" | "rebuild" => {
-                // rebuild empties and fills the index in one transaction: a search meanwhile sees the old index
-                let t = Instant::now();
-                let r = lib.update(cmd == "rebuild")?;
-                let skipped = if r.skipped > 0 {
-                    format!(", skipped {} (file names on stderr)", r.skipped)
-                } else {
-                    String::new()
-                };
-                println!(
-                    "indexed {} files, removed {}{skipped}, {} documents ({:.1}s)",
-                    r.indexed,
-                    r.removed,
-                    r.docs,
-                    t.elapsed().as_secs_f64()
-                );
-            }
             "search" => match lib.search(&words.join(" "), limit, None) {
                 Err(e) if e.downcast_ref::<Outdated>().is_some() => {
                     eprintln!("{OUTDATED}");
