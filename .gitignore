@@ -15,5 +15,5 @@
 # build artifacts and scratch
 /dist
 /tmp
-/desktop/target
+/target
 /desktop/shell/src-tauri/gen/schemas

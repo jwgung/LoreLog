@@ -1,8 +1,0 @@
-[workspace]
-members = ["core", "agent", "shell/src-tauri"]
-resolver = "2"
-
-[workspace.package]
-edition = "2024"
-rust-version = "1.97"
-publish = false

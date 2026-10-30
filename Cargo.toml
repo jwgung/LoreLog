@@ -1,0 +1,10 @@
+[workspace]
+# One workspace for every Rust part: the server library (also embeddable in the desktop app), the PC collector and the
+# desktop app. Android (app/) builds with Gradle and is not part of it.
+members = ["server", "desktop/core", "desktop/agent", "desktop/shell/src-tauri"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97"
+publish = false
