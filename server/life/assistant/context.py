@@ -90,11 +90,14 @@ def conversations_in(lines):
     return [d for d in lines if d.get("type") == "conversation" and d.get("id") is not None]
 
 
-def read_records(path):
+def read_records(path, only=None):
     """The JSON objects of an NDJSON file, in order. Undecodable bytes and lines that are not objects are passed over
-    (raw files are only ever appended to, so one bad line must not hide the rest)."""
+    (raw files are only ever appended to, so one bad line must not hide the rest). With `only`, lines that do not
+    contain that text are not decoded at all."""
     out = []
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if only is not None and only not in line:
+            continue
         try:
             d = json.loads(line)
         except ValueError:

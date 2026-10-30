@@ -140,7 +140,7 @@ def event_docs(path):
              "day": day_of(start, path.name),
              "title": front_value(front, "title") or path.stem,
              "extra": NOISE_KEYS.sub("", front).strip(),
-             "text": "\n".join(x for x in (when, f"장소 {place}" if place else "", body.strip()) if x)}]
+             "text": "\n".join(x for x in (when, f"장소 {place}" if place else "", clean_body(body)) if x)}]
 
 
 def _lines(path):

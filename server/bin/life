@@ -327,7 +327,8 @@ def build_parser():
                                  "Requires `life add mail` first. Only calendars that support events (VEVENT) are listed.")
     sy = sub.add_parser("sync", help="collect from all configured sources", **sub_kw,
                         description="Collect from every source configured in sources.toml. A timer only needs to call this one command.\n"
-                                    "Mail is capped at 300 messages per run, so a first import takes several runs.")
+                                    "Mail is capped at 300 messages per run, so a first import takes several runs.\n"
+                                    "Last, the librarian's index is brought up to date (`life-librarian update`; not with --dry-run).")
     sy.add_argument("--dry-run", action="store_true", help="show what would be collected without saving (and without recording status)")
     sub.add_parser("status", help="last run and result per source", **sub_kw,
                    description="Show, for each configured source, the last run, the last success and a short result.")

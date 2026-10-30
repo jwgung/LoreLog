@@ -28,11 +28,11 @@ def parser():
 def update(lib, reset=False):
     t = time.time()
     r = lib.update(reset=reset)
-    skipped = f", skipped {r['skipped']} (see above)" if r["skipped"] else ""
+    skipped = f", skipped {r['skipped']} (file names on stderr)" if r["skipped"] else ""
     print(f"indexed {r['indexed']} files, removed {r['removed']}{skipped}, {r['docs']} documents ({time.time() - t:.1f}s)")
 
 
-OUTDATED = "the index is from another version and is not searched: run `life-librarian update` first"
+OUTDATED = "the index is from another version or not built yet, and is not searched: run `life-librarian update` first"
 
 
 def search(lib, words, limit):

@@ -27,6 +27,7 @@ import os
 import re
 import sqlite3
 import sys
+import unicodedata
 from pathlib import Path
 
 from life.assistant.config import DATA
@@ -43,7 +44,7 @@ MAX_QUERY_WORDS = 16
 MAX_WORD_HITS = 2  # the user's own words (often past questions with the same words) may take this many slots at most
 SNIPPET_BEFORE, SNIPPET_AFTER = 60, 140
 WINDOW = 400  # matches looked at per search before the mails of one thread are folded together
-SCHEMA_VERSION = "5"  # bump when the tables or what goes in them change: an index of another version is built again
+SCHEMA_VERSION = "6"  # bump when the tables or what goes in them change: an index of another version is built again
 
 TABLES = [
     "create table if not exists meta(key text primary key, value text)",
@@ -63,8 +64,18 @@ def default_path():
 
 
 class OutdatedIndex(RuntimeError):
-    """The index was built by another version (other tables or other rules): it is not searched until update()
-    builds it again, because it may hold what the current rules leave out."""
+    """The index was built by another version (other tables or other rules), or no update has finished yet: it is not
+    searched until update() builds it, because it may hold what the current rules leave out, or nothing at all."""
+
+
+# fullwidth letters, digits and signs (ＡＢＣ, ２０２４) read as their plain forms; one letter for one, so positions hold
+FULLWIDTH = {o: o - 0xFEE0 for o in range(0xFF01, 0xFF5F)}
+
+
+def _fold(text):
+    """The text as it is matched: composed Hangul (NFC; a name sent from a Mac often arrives decomposed), fullwidth
+    forms as plain ones, lower case. Only for matching: what is shown keeps the letters as written."""
+    return unicodedata.normalize("NFC", text).translate(FULLWIDTH).lower()
 
 
 def _pieces(word):
@@ -83,7 +94,7 @@ def _stem(word):
 
 def terms(text):
     """The index terms of a text, space separated."""
-    return " ".join(p for w in WORD_RE.findall(text.lower()) for p in _pieces(w))
+    return " ".join(p for w in WORD_RE.findall(_fold(text)) for p in _pieces(w))
 
 
 def _phrase(w):
@@ -95,15 +106,16 @@ def _phrase(w):
 def to_query(q):
     """An FTS5 expression for the words of q (the first MAX_QUERY_WORDS of them, each with its stem), or "" if q has
     none. Every word is quoted, so nothing in q can act as an FTS5 operator or column filter."""
-    words = list(dict.fromkeys(WORD_RE.findall(q.lower())))[:MAX_QUERY_WORDS]
+    words = list(dict.fromkeys(WORD_RE.findall(_fold(q))))[:MAX_QUERY_WORDS]
     parts = [_phrase(w) for w in words] + [_phrase(s) for s in map(_stem, words) if s]
     return " OR ".join(dict.fromkeys(parts))
 
 
 def snippet(text, q):
     """The part of the text around the first word of the query (or its stem) that appears in it."""
-    low = text.lower()
-    words = [x for w in WORD_RE.findall(q.lower()) for x in (w, _stem(w)) if x]
+    text = unicodedata.normalize("NFC", text)  # looks the same; lets the positions below match the shown text
+    low = text.translate(FULLWIDTH).lower()
+    words = [x for w in WORD_RE.findall(_fold(q)) for x in (w, _stem(w)) if x]
     at = [i for i in (low.find(w) for w in words) if i >= 0]
     start = max(0, min(at) - SNIPPET_BEFORE) if at else 0
     end = start + SNIPPET_BEFORE + SNIPPET_AFTER
@@ -116,6 +128,12 @@ def _stamp(path):
     return f"{st.st_mtime_ns}:{st.st_size}"
 
 
+def _conversations_of(path):
+    """The conversation records of a phone file, without decoding its other lines (most of a phone file is screen
+    and app records)."""
+    return conversations_in(read_records(path, only='"conversation"'))
+
+
 def _day_file(path_str):
     return Path(path_str).stem
 
@@ -123,7 +141,7 @@ def _day_file(path_str):
 class Librarian:
     def __init__(self, path=None, timeout=30):
         self.path = Path(path) if path else default_path()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)  # like the rest of the data directory
         if not self.path.exists():  # create it private first so the WAL files SQLite adds inherit the mode
             os.close(os.open(self.path, os.O_CREAT | os.O_WRONLY, 0o600))
         self.db = sqlite3.connect(self.path, timeout=timeout)
@@ -223,8 +241,11 @@ class Librarian:
         return dirty, removed
 
     def _update_phone(self, found, dirty, allow):
-        """Read the changed phone files once, keep their conversation states, read again the days whose
-        conversations changed, and index them all. -> (indexed, skipped)"""
+        """Keep the conversation states of the changed phone files, read again the days whose conversations changed,
+        and index them all. Two passes, so memory holds one file at a time however many files are read again (a
+        changed allow list reads them all): the first keeps only each file's stamp and conversation states, the
+        second reads each file again and indexes it at once. A file that grew between the passes keeps the first
+        stamp, so the next update reads it again. -> (indexed, skipped)"""
         phone_paths = {path for path, (kind, _) in found.items() if kind == "lorelog"}
         todo = {path for path in dirty if path in phone_paths}
         # files whose conversation states are kept but that are gone (also one skipped before it went, which has no
@@ -233,24 +254,25 @@ class Librarian:
         if not todo and not gone:
             return 0, 0
         before = self._convs()
-        read, skipped = {}, 0
+        stamps, skipped = {}, 0
 
-        def take(paths):
+        def take(paths):  # first pass: stamps and conversation states only
             nonlocal skipped
             for path in sorted(paths):
                 p = found[path][1]
                 try:
-                    read[path] = (_stamp(p), read_records(p))
+                    stamp, convs = _stamp(p), _conversations_of(p)
                 except Exception as e:  # noqa: BLE001 - one unreadable file must not stop the rest
                     # its conversation states stay as last read: the raw files only grow, so they are still the best
                     # we know, and dropping them could bring back an older state (a voice the user took back)
                     self._skip(path, p, e)
                     skipped += 1
                     continue
+                stamps[path] = stamp
                 self.db.execute("delete from convs where file = ?", (path,))
                 self.db.executemany("insert into convs(file, seq, id, data) values (?, ?, ?, ?)",
                                     [(path, i, str(c["id"]), json.dumps(c, ensure_ascii=False))
-                                     for i, c in enumerate(conversations_in(read[path][1]))])
+                                     for i, c in enumerate(convs)])
 
         for path in gone:
             self.db.execute("delete from convs where file = ?", (path,))
@@ -269,19 +291,20 @@ class Librarian:
                             days.update(span)
         by_day = {_day_file(path): path for path in phone_paths}
         wanted = set(phone_paths) if every_day else {by_day[d] for d in days if d in by_day}
-        more = wanted - set(read) - todo
+        more = wanted - set(stamps) - todo
         if more:
             take(more)
             after = self._convs()
         indexed = 0
-        for path, (stamp, lines) in read.items():
+        for path in sorted(stamps):  # second pass: one file at a time
+            p = found[path][1]
             try:
-                new = records.lorelog_docs(_day_file(path), lines, after, allow)
-            except Exception as e:  # noqa: BLE001 - one file that cannot be understood must not stop the rest
-                self._skip(path, found[path][1], e)  # its conversation states, just read, stay
+                new = records.lorelog_docs(_day_file(path), read_records(p), after, allow)
+            except Exception as e:  # noqa: BLE001 - one file that cannot be read or understood must not stop the rest
+                self._skip(path, p, e)  # its conversation states, just read, stay
                 skipped += 1
                 continue
-            self._keep(path, "lorelog", stamp, new)
+            self._keep(path, "lorelog", stamps[path], new)
             indexed += 1
         return indexed, skipped
 
@@ -343,6 +366,8 @@ class Librarian:
         try:
             if self._version() != SCHEMA_VERSION:
                 raise OutdatedIndex(f"index version {self._version()}, expected {SCHEMA_VERSION}: run update")
+            if self._meta("policy") is None:  # no update has finished yet: empty, but not because nothing is there
+                raise OutdatedIndex("index not built yet: run update")
             return self._search(expr, q, int(limit), exclude_day, exclude_words)
         finally:
             self.db.rollback()  # nothing was written; ends the snapshot
@@ -387,7 +412,7 @@ class Librarian:
     def stats(self):
         """How much is indexed; outdated is True for an index of another version (not searched until update, and
         its tables may not be these, so nothing is counted)."""
-        if self._version() != SCHEMA_VERSION:
+        if self._version() != SCHEMA_VERSION or self._meta("policy") is None:  # another version, or never filled
             return {"docs": 0, "by_source": {}, "outdated": True, "files": 0}
         by = dict(self.db.execute("select source, count(*) from docs group by source"))
         return {"docs": sum(by.values()), "by_source": by, "outdated": False,

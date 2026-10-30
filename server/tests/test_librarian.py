@@ -99,6 +99,42 @@ class Search(unittest.TestCase):
         self.assertEqual([(h["title"], h["day"]) for h in hits], [("장비 점검", "2024-03-07")])
         self.assertTrue(self.find("2공장"), "where it happens is searchable too")
 
+    def test_an_events_sync_markers_are_not_part_of_it(self):
+        write(VAULT / "Events" / "2024-03-09 표지 확인.md",
+              "---\ntype: event\ntitle: 표지 확인\nstart: 2024-03-09T10:00:00\nend: 2024-03-09T11:00:00\n---\n"
+              "%% dav:begin %%\n표지옆메모수리부엉이\n%% dav:end %%\n")
+        self.lib.update()
+        hits = [h for h in self.find("수리부엉이") if h["title"] == "표지 확인"]
+        self.assertEqual(len(hits), 1)
+        self.assertNotIn("dav:", hits[0]["snippet"])
+        self.assertFalse([h for h in self.find("dav") if h["title"] == "표지 확인"])
+
+    def test_decomposed_hangul_and_fullwidth_letters_are_found(self):
+        import unicodedata
+        mail("2024-02-21-0900-nfd.md", "첨부", "본문", "2024-02-21")
+        path = VAULT / "Mail" / "2024" / "2024-02-21-0900-nfd.md"
+        text = path.read_text(encoding="utf-8").replace(
+            "attachments: []", "attachments:\n  - " + unicodedata.normalize("NFD", "분해견적서_트렌드.pdf"))
+        path.write_text(text.replace("본문", "ＡＢＣ전각상사 회신"), encoding="utf-8")
+        self.lib.update()
+        self.assertTrue([h for h in self.find("분해견적서") if h["title"] == "첨부"])
+        self.assertTrue([h for h in self.find(unicodedata.normalize("NFD", "분해견적서")) if h["title"] == "첨부"])
+        self.assertTrue([h for h in self.find("abc") if h["title"] == "첨부"])
+        self.assertIn("ＡＢＣ전각상사", self.find("전각상사")[0]["snippet"], "what is shown stays as written")
+
+    def test_an_index_never_filled_is_not_searched(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        fresh = Librarian(Path(tmp.name) / "new" / "librarian.sqlite")
+        self.addCleanup(fresh.close)
+        with self.assertRaises(OutdatedIndex, msg="empty because nothing was indexed yet, not because nothing is there"):
+            fresh.search("무엇이든")
+        self.assertTrue(fresh.stats()["outdated"])
+        if os.name == "posix":
+            self.assertEqual(oct(fresh.path.parent.stat().st_mode & 0o777), "0o700")
+        fresh.update()
+        self.assertEqual(fresh.search("아무데도없는말코끼리상어"), [])
+
     def test_only_allowed_messengers_and_confirmed_voice_are_indexed(self):
         senders.save_allow({"카카오톡: 동료사서"})
         day = "2024-03-06"
@@ -378,7 +414,8 @@ class Search(unittest.TestCase):
         self.lib.update()
         inode = self.lib.path.stat().st_ino
         self.lib.reset()
-        self.assertEqual(self.find("해달"), [])
+        with self.assertRaises(OutdatedIndex, msg="emptied, not searched as if nothing were there"):
+            self.find("해달")
         self.assertEqual(self.lib.path.stat().st_ino, inode)
         self.lib.update()
         self.assertTrue(self.find("해달"))
