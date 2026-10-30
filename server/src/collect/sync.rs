@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
-use chrono::{Duration as Days, Local};
+use chrono::{Local, TimeDelta};
 use regex::Regex;
 use serde_json::Value;
 
@@ -83,19 +83,30 @@ pub struct MailRun {
     pub folder: Option<String>,
 }
 
-fn imap_settings(paths: &Paths, run: &MailRun, out: Out, hint: &str) -> Option<settings::Imap> {
-    match settings::imap(paths, run.folder.clone()) {
-        Ok(c) => Some(c),
-        Err(need) => {
-            problem(
-                out,
-                format!(
-                    "Missing {} (env: {}, sources.toml: {}).{hint}",
-                    need.join(", "),
-                    settings::env_file(paths).display(),
-                    settings::sources_file(paths).display()
-                ),
-            );
+/// The mail settings, or a line saying what is missing (`with_hint`: name the files and how to set them up, as
+/// mail-sync always has; mail-files names the files only).
+fn imap_settings(paths: &Paths, run: &MailRun, out: Out, with_hint: bool) -> Option<settings::Imap> {
+    let need = match settings::imap(paths, run.folder.clone()) {
+        Ok(c) => return Some(c),
+        Err(need) => need.join(", "),
+    };
+    let (env, src) = (settings::env_file(paths), settings::sources_file(paths));
+    problem(
+        out,
+        if with_hint {
+            format!("Missing {need} (env: {}, sources.toml: {}). Run `life add mail`.", env.display(), src.display())
+        } else {
+            format!("Missing {need} ({}, {}).", env.display(), src.display())
+        },
+    );
+    None
+}
+
+fn connect(cfg: &settings::Imap, out: Out) -> Option<imapc::Session> {
+    match imapc::connect(&cfg.host, cfg.port, &cfg.user, &cfg.password) {
+        Ok(s) => Some(s),
+        Err(k) => {
+            problem(out, format!("IMAP connection failed: {k}"));
             None
         }
     }
@@ -116,7 +127,7 @@ fn own_addresses() -> HashSet<String> {
 /// Import mail into the vault as `Mail/` notes, read-only on the server. A mail that already has a note (by Message-ID
 /// or by a date/time/sender/subject fingerprint) is skipped; processed UIDs are remembered per folder.
 pub fn mail(paths: &Paths, run: &MailRun, out: Out) -> Outcome {
-    let Some(cfg) = imap_settings(paths, run, out, " Run `life add mail`.") else { return Outcome::NotSetUp };
+    let Some(cfg) = imap_settings(paths, run, out, true) else { return Outcome::NotSetUp };
     let _lock = if run.dry {
         None // a dry run writes nothing, so it needs no lock
     } else {
@@ -133,13 +144,7 @@ pub fn mail(paths: &Paths, run: &MailRun, out: Out) -> Outcome {
     let mut state = imapc::State::load(&state_file);
     let (mut known, mut known_fp) = mail::known_notes(&paths.vault);
     let synced = Local::now().format("%Y-%m-%dT%H:%M:%S%:z").to_string();
-    let mut s = match imapc::connect(&cfg.host, cfg.port, &cfg.user, &cfg.password) {
-        Ok(s) => s,
-        Err(k) => {
-            problem(out, format!("IMAP connection failed: {k}"));
-            return Outcome::Failed;
-        }
-    };
+    let Some(mut s) = connect(&cfg, out) else { return Outcome::Failed };
     let (mut total, mut failed) = (0usize, false);
     for folder in &cfg.folders {
         let (uidv, all) = match imapc::open(&mut s, folder, cfg.since.as_deref()) {
@@ -291,7 +296,7 @@ fn files_folder(
 
 /// Keep the attachments of the mails in the configured folders, as they are, in the raw store's vault of files.
 pub fn files(paths: &Paths, run: &MailRun, out: Out) -> Outcome {
-    let Some(cfg) = imap_settings(paths, run, out, "") else { return Outcome::NotSetUp };
+    let Some(cfg) = imap_settings(paths, run, out, false) else { return Outcome::NotSetUp };
     if cfg.folders.is_empty() {
         problem(out, "No mail folders configured.");
         return Outcome::NotSetUp;
@@ -299,13 +304,7 @@ pub fn files(paths: &Paths, run: &MailRun, out: Out) -> Outcome {
     let store = RawStore::new(&paths.data);
     let state_file = paths.data.join("mail-files-state.json");
     let mut state = imapc::State::load(&state_file);
-    let mut s = match imapc::connect(&cfg.host, cfg.port, &cfg.user, &cfg.password) {
-        Ok(s) => s,
-        Err(k) => {
-            problem(out, format!("IMAP connection failed: {k}"));
-            return Outcome::Failed;
-        }
-    };
+    let Some(mut s) = connect(&cfg, out) else { return Outcome::Failed };
     let (mut failed, mut totals) = (false, (0, 0, 0));
     for folder in &cfg.folders {
         match files_folder(&mut s, folder, &cfg.account, &store, &mut state, run, out) {
@@ -366,14 +365,14 @@ pub fn calendar_setup(paths: &Paths) -> Result<CalendarSetup, String> {
 }
 
 /// The last part of a calendar URL, at most `n` characters (how calendars are named in notes and lines).
-pub fn short(url: &str, n: usize) -> String {
+fn short(url: &str, n: usize) -> String {
     url.trim_end_matches('/').rsplit('/').next().unwrap_or("").chars().take(n).collect()
 }
 
 /// Import events from the CalDAV calendars into the vault as `Events/` notes, read-only on the server. An event is
 /// known by (dav_uid, start); only events whose etag changed are rewritten.
 pub fn calendar(paths: &Paths, dry: bool, out: Out) -> Outcome {
-    let setup = match calendar_setup(paths) {
+    let cal = match calendar_setup(paths) {
         Ok(s) => s,
         Err(missing) => {
             problem(out, missing);
@@ -392,13 +391,13 @@ pub fn calendar(paths: &Paths, dry: bool, out: Out) -> Outcome {
         }
     };
     let today = Local::now().date_naive();
-    let start = (today - Days::days(setup.past_days)).format("%Y%m%dT000000Z").to_string();
-    let end = (today + Days::days(setup.future_days)).format("%Y%m%dT000000Z").to_string();
-    let acct = &setup.account;
+    let start = (today - TimeDelta::days(cal.past_days)).format("%Y%m%dT000000Z").to_string();
+    let end = (today + TimeDelta::days(cal.future_days)).format("%Y%m%dT000000Z").to_string();
+    let acct = &cal.account;
     let mut known = calendar::existing_events(&paths.vault);
     let mut counts = Counts::default();
     let mut failed = false;
-    for url in &setup.urls {
+    for url in &cal.urls {
         let items = calendar::report(url, acct, &start, &end, true)
             .or_else(|e| match e {
                 DavError::Status(_) => calendar::report(url, acct, &start, &end, false), // cannot expand: originals only
@@ -497,7 +496,7 @@ pub fn status_file(paths: &Paths) -> PathBuf {
 
 /// The jobs of a sync, in order: mail, its attachments, calendars, and last the librarian (it indexes what was just
 /// collected and the phone and PC records that arrived since). A dry run saves nothing, the index included.
-pub fn jobs(sources: &toml::Table, dry: bool) -> Vec<Job> {
+fn jobs(sources: &toml::Table, dry: bool) -> Vec<Job> {
     let has = |t: &str, k: &str| {
         sources.get(t).and_then(|v| v.get(k)).and_then(toml::Value::as_array).map(|a| !a.is_empty()).unwrap_or(false)
     };
@@ -538,12 +537,17 @@ pub fn sync(paths: &Paths, dry: bool, done: &mut dyn FnMut(Job, Outcome, &[Line]
         let mut lines = Vec::new();
         let mut out = |l: Line| lines.push(l);
         let mail_run = |limit| MailRun { dry, limit, folder: None };
-        let outcome = match job {
+        // a job that panics is a failed job, and the next ones still run (as when each job was its own process)
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match job {
             Job::Mail => mail(paths, &mail_run(MAIL_LIMIT), &mut out),
             Job::Files => files(paths, &mail_run(SYNC_FILES_LIMIT), &mut out),
             Job::Calendar => calendar(paths, dry, &mut out),
             Job::Librarian => librarian(paths, false, &mut out),
-        };
+        }));
+        let outcome = ran.unwrap_or_else(|_| {
+            lines.push(Line::Problem(format!("{} stopped unexpectedly", job.name())));
+            Outcome::Failed
+        });
         if !dry
             && let Err(e) =
                 setup::record(&status_file(paths), job.name(), outcome == Outcome::Ok, &detail(outcome, &lines))

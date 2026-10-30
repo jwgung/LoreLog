@@ -1,5 +1,5 @@
 //! What `life` needs besides running the collectors: folder names as people read them, which folders to offer first,
-//! the jobs of a sync, and the run results kept between runs.
+//! and the run results kept between runs.
 use std::path::Path;
 
 use base64::Engine;

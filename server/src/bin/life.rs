@@ -1,10 +1,9 @@
 //! life: add, run and check collection sources from one place. See `life -h`.
 //!
-//! The collection is done by mail-sync, mail-files and calendar-sync (binaries next to this one); afterwards the
-//! librarian indexes it. Secrets live in env (mode 600); what to collect lives in sources.toml (no secrets). Passwords
+//! The collection runs in-process (`collect::sync`, the same jobs mail-sync, mail-files and calendar-sync run);
+//! afterwards the librarian indexes it. Secrets live in env (mode 600); what to collect lives in sources.toml (no secrets). Passwords
 //! are read without echo.
 use std::io::{BufRead, IsTerminal, Write};
-
 use std::process::ExitCode;
 
 use life_server::collect::{calendar, imapc, settings, setup, sync};
