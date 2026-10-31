@@ -22,6 +22,8 @@ const SAID: usize = 40;
 
 static REF_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(summary|chat):(\d{4}-\d{2}-\d{2})$|^todo:([0-9a-f]{10})$").unwrap());
+static GRAPH_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^org:([a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+)$|^edge:([0-9a-f]{16})$").unwrap());
 
 /// What a correction is about.
 #[derive(Clone, Debug, PartialEq)]
@@ -29,10 +31,21 @@ pub enum Ref {
     Summary(String),
     Chat(String),
     Todo(String),
+    /// an organization of the graph, by its mail domain (#47)
+    Org(String),
+    /// a relation of the graph, by [`crate::librarian::graph::edge_key`] (#47)
+    Edge(String),
 }
 
 impl Ref {
     pub fn parse(s: &str) -> Option<Ref> {
+        if let Some(c) = GRAPH_RE.captures(s.trim()) {
+            return Some(match (c.get(1), c.get(2)) {
+                (Some(d), _) => Ref::Org(d.as_str().into()),
+                (_, Some(k)) => Ref::Edge(k.as_str().into()),
+                _ => return None,
+            });
+        }
         let c = REF_RE.captures(s.trim())?;
         Some(match (c.get(1).map(|m| m.as_str()), c.get(2), c.get(3)) {
             (Some("summary"), Some(d), _) => Ref::Summary(d.as_str().into()),
@@ -47,6 +60,8 @@ impl Ref {
             Ref::Summary(d) => format!("summary:{d}"),
             Ref::Chat(d) => format!("chat:{d}"),
             Ref::Todo(id) => format!("todo:{id}"),
+            Ref::Org(d) => format!("org:{d}"),
+            Ref::Edge(k) => format!("edge:{k}"),
         }
     }
 }
@@ -74,10 +89,16 @@ impl Correction {
             if one.chars().count() > SAID { format!("{}…", one.chars().take(SAID).collect::<String>()) } else { one }
         };
         let (w, r) = (cut(&self.wrong), cut(&self.right));
-        match self.refers {
+        match &self.refers {
             Ref::Summary(_) => format!("정리를 고쳤어요: {w} → {r} (다시 정리할 때 반영해요)"),
             Ref::Chat(_) => format!("답을 고쳤어요: {w} → {r} (오늘 대화에 반영해요)"),
             Ref::Todo(_) => format!("할 일을 바꿨어요: {w} → {r}"),
+            Ref::Org(d) => match self.right.strip_prefix("org:") {
+                Some(other) => format!("같은 조직으로 이었어요: {d} = {other}"),
+                None => format!("조직 이름을 더했어요: {d} = {r}"),
+            },
+            Ref::Edge(_) if self.right == "-" => format!("관계를 지웠어요: {w}"),
+            Ref::Edge(_) => format!("관계를 고쳤어요: {w} → {r}"),
         }
     }
 }
@@ -106,6 +127,25 @@ pub fn about(paths: &Paths, refs: &[Ref]) -> Vec<Correction> {
                 && wanted.iter().any(|w| w == r)
                 && let (Some(refers), Some(w), Some(rt)) = (Ref::parse(r), v["wrong"].as_str(), v["right"].as_str())
                 && let Some(c) = Correction::new(w, rt, refers)
+            {
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// Every correction kept that is about the graph, oldest first.
+pub fn of_graph(paths: &Paths) -> Vec<Correction> {
+    let mut files = crate::assistant::util::files_like(&paths.raw().join("corrections"), "", ".ndjson");
+    files.sort();
+    let mut out = Vec::new();
+    for f in files {
+        let Ok(text) = std::fs::read_to_string(&f) else { continue };
+        for v in text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()) {
+            if let (Some(refers @ (Ref::Org(_) | Ref::Edge(_))), Some(w), Some(r)) =
+                (Ref::parse(v["ref"].as_str().unwrap_or("")), v["wrong"].as_str(), v["right"].as_str())
+                && let Some(c) = Correction::new(w, r, refers)
             {
                 out.push(c);
             }

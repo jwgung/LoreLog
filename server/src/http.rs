@@ -292,8 +292,23 @@ fn correction_post(app: &App, req: &Request, _: &regex::Captures) -> Result<Repl
             diary::save_user(&app.paths, day, &fix).map_err(|e| internal(req, &e))?;
         }
         Ref::Chat(_) => {}
+        Ref::Org(_) | Ref::Edge(_) => {
+            let lib = crate::librarian::Librarian::open(&app.paths, None, std::time::Duration::from_secs(5))
+                .map_err(|e| internal(req, &e.to_string()))?;
+            if !lib.graph_fix_fits(&c) {
+                return Ok(Reply::new(404, json!({"error": "not found"})));
+            }
+        }
     }
     corrections::keep(&app.paths, &c).map_err(|e| internal(req, &e))?;
+    if matches!(c.refers, Ref::Org(_) | Ref::Edge(_)) {
+        // now, if the index is free (else on its next update)
+        if let Ok(mut lib) = crate::librarian::Librarian::open(&app.paths, None, std::time::Duration::from_secs(5))
+            && let Err(e) = lib.apply_graph_fixes()
+        {
+            log::warn!("graph correction waits for the next update: {}", crate::errors::kind(&e.to_string()));
+        }
+    }
     Ok(Reply::ok(json!({"saved": true, "changed": c.changed()})))
 }
 
