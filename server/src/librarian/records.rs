@@ -222,7 +222,7 @@ pub fn mail_docs(path: &Path) -> std::io::Result<Vec<Doc>> {
         text: clean_body(body),
         people: ["from", "to", "cc"]
             .into_iter()
-            .flat_map(|role| addresses(&note::field(front, role).unwrap_or_default().to_string(), role))
+            .flat_map(|role| addresses(note::field(front, role).unwrap_or_default(), role))
             .collect(),
     }])
 }

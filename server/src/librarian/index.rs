@@ -696,7 +696,7 @@ impl Librarian {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
             })?;
         let (count, first, last) = match thread {
-            Some(t) => self.thread_span(&t.to_string())?,
+            Some(t) => self.thread_span(t)?,
             None => (1, Some(day.clone()), Some(day.clone())),
         };
         let first = first.filter(|f| !f.is_empty()).unwrap_or_else(|| day.clone());
@@ -741,7 +741,9 @@ impl Librarian {
             st.query_map([key], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
                 .collect::<rusqlite::Result<_>>()?
         };
-        let mut by: BTreeMap<String, (Vec<(i64, String)>, i64, String)> = BTreeMap::new();
+        // address -> (names with how often each was used, records, latest day)
+        type Seen = (Vec<(i64, String)>, i64, String);
+        let mut by: BTreeMap<String, Seen> = BTreeMap::new();
         for (addr, name, count, last) in rows {
             let e = by.entry(addr).or_insert_with(|| (Vec::new(), 0, String::new()));
             if !name.is_empty() {
@@ -755,11 +757,11 @@ impl Librarian {
         let mut out: Vec<Someone> = by
             .into_iter()
             .map(|(addr, (mut names, count, last))| {
-                names.sort_by(|a, b| b.0.cmp(&a.0));
+                names.sort_by_key(|n| std::cmp::Reverse(n.0));
                 Someone { addr, names: names.into_iter().map(|(_, n)| n).collect(), count, last }
             })
             .collect();
-        out.sort_by(|a, b| b.count.cmp(&a.count));
+        out.sort_by_key(|s| std::cmp::Reverse(s.count));
         Ok(out)
     }
 
