@@ -153,22 +153,24 @@ fn a_phone_contact_joins_its_addresses_and_gives_a_name_to_a_bare_address() {
     t.mail("k2.md", "2026-07-03", "old.friend@x.com", ME, "", "안부", "잘 지내?", "[]", false);
     let dir = t.p.raw().join("contacts");
     fs::create_dir_all(&dir).unwrap();
-    let line = |snap: i64, name: &str, emails: &[&str]| {
-        serde_json::json!({"type": "contact", "snap": snap, "ts": snap, "name": name, "emails": emails, "phones": ["010-1234-5678"]})
-            .to_string()
+    // the phone's clock (snap) may run ahead: the list the server received last counts
+    let line = |snap: i64, recv: &str, name: &str, emails: &[&str]| {
+        serde_json::json!({"type": "contact", "snap": snap, "ts": snap, "_recv": recv, "name": name, "emails": emails,
+                           "phones": ["010-1234-5678"]})
+        .to_string()
     };
     fs::write(
         dir.join("2026-07-01.ndjson"),
         format!(
             "{}\n{}\n",
-            line(1, "김영희 거래처", &["YH@x.com", "yh.kim@corp.com"]),
-            line(1, "옛친구", &["old.friend@x.com"])
+            line(9_999_999_999_999, "2026-07-01T09:00:00+09:00", "김영희 거래처", &["YH@x.com", "yh.kim@corp.com"]),
+            line(9_999_999_999_999, "2026-07-01T09:00:00+09:00", "옛친구", &["old.friend@x.com"])
         ),
     )
     .unwrap();
     fs::write(
         dir.join("2026-07-05.ndjson"),
-        format!("{}\n", line(2, "김영희 거래처", &["YH@x.com", "yh.kim@corp.com"])),
+        format!("{}\n", line(2, "2026-07-05T09:00:00+09:00", "김영희 거래처", &["YH@x.com", "yh.kim@corp.com"])),
     )
     .unwrap();
     let mut lib = t.lib();

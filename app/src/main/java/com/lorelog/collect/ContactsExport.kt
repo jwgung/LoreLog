@@ -69,29 +69,51 @@ object ContactsExport {
         return MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
     }
 
-    /** 내보내기 URL(…/ingest/lorelog) 옆의 …/ingest/contacts. */
+    /**
+     * 내보내기 URL(…/ingest/lorelog) 옆의 …/ingest/contacts(앞에 붙은 경로는 그대로). 주소록은 남의 연락처라 평문으로 보내지
+     * 않는다: https, 또는 WireGuard로 암호화되는 tailnet(*.ts.net, 100.64.0.0/10)·이 기기(loopback)의 http만.
+     */
     private fun url(context: Context): String? {
         val u = EndpointConfig.url(context) ?: return null
-        return runCatching { URL(u).let { "${it.protocol}://${it.authority}/ingest/contacts" } }.getOrNull()
+        val parsed = runCatching { URL(u) }.getOrNull() ?: return null
+        val host = parsed.host.lowercase()
+        val tailnet = host.endsWith(".ts.net") || host == "localhost" || host == "127.0.0.1" || host == "::1" ||
+            host.split('.').let { p -> p.size == 4 && p[0] == "100" && (p[1].toIntOrNull() ?: 0) in 64..127 }
+        if (parsed.protocol != "https" && !(parsed.protocol == "http" && tailnet)) return null
+        val path = parsed.path.trimEnd('/')
+        val prefix = if (path.endsWith("/ingest/lorelog")) path.removeSuffix("/ingest/lorelog") else ""
+        return "${parsed.protocol}://${parsed.authority}$prefix/ingest/contacts"
     }
 
-    /** 바뀐 주소록을 보낸다. 반환: 보낸 연락처 수, 0 바뀐 것 없음, -1 보내지 않음(권한·설정·주소 없음), -2 전송 실패. */
+    private fun marker(snap: Long): String = JSONObject().apply {
+        put("type", "contact"); put("snap", snap); put("ts", snap); put("name", "")
+        put("emails", JSONArray()); put("phones", JSONArray())
+    }.toString() + "\n"
+
+    /**
+     * 바뀐 주소록을 보낸다. 꺼 두었거나 권한을 거둔 뒤에는 빈 목록을 한 번 보내 서버에서도 지운다.
+     * 반환: 보낸 연락처 수, 0 바뀐 것 없음(또는 빈 목록을 보냄), -1 보내지 않음(권한·설정·주소 없음), -2 전송 실패.
+     */
     suspend fun push(context: Context): Int {
-        if (!CollectorPrefs.enabled(context, CollectorPrefs.CONTACTS)) return -1
-        if (context.checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) return -1
         val url = url(context) ?: return -1
+        val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+        val key = "$KEY_DIGEST:$url" // per server: a new server gets the list even if the phone's did not change
+        val snap = System.currentTimeMillis()
+        val allowed = CollectorPrefs.enabled(context, CollectorPrefs.CONTACTS) &&
+            context.checkSelfPermission(Manifest.permission.READ_CONTACTS) == PackageManager.PERMISSION_GRANTED
+        if (!allowed) {
+            if (prefs.getString(key, null) == null) return -1 // nothing was sent there
+            if (!HttpSink.post(url, EndpointConfig.token(context), marker(snap))) return -2
+            prefs.edit().remove(key).apply()
+            return 0
+        }
         val entries = runCatching { read(context) }.getOrElse { return -1 }
         val d = digest(entries)
-        val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
-        if (prefs.getString(KEY_DIGEST, null) == d) return 0
-        val snap = System.currentTimeMillis()
-        val body = entries.joinToString("\n", postfix = "\n") { json(it, snap).toString() }
+        if (prefs.getString(key, null) == d) return 0
         // an empty book is sent too (one marker line), so contacts deleted on the phone go from the server as well
-        val sent = if (entries.isEmpty()) {
-            JSONObject().apply { put("type", "contact"); put("snap", snap); put("ts", snap); put("name", ""); put("emails", JSONArray()); put("phones", JSONArray()) }.toString() + "\n"
-        } else body
-        if (!HttpSink.post(url, EndpointConfig.token(context), sent)) return -2
-        prefs.edit().putString(KEY_DIGEST, d).apply()
+        val body = if (entries.isEmpty()) marker(snap) else entries.joinToString("\n", postfix = "\n") { json(it, snap).toString() }
+        if (!HttpSink.post(url, EndpointConfig.token(context), body)) return -2
+        prefs.edit().putString(key, d).apply()
         return entries.size
     }
 }

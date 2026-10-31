@@ -38,7 +38,7 @@ Everything runs in one foreground service, and you toggle each source in setting
 | **Notifications** | NotificationListenerService | Title and body of notifications you receive |
 | **Calls / SMS** | CallLog · SMS · Contacts | Who and when (number → name) |
 | **Calendar** | CalendarContract (+attendees) | All calendars on the phone, local included |
-| **Contacts** | ContactsContract | Name, email, phone and company only (no photos, notes or birthdays). The whole list is sent to the server's `/ingest/contacts`, only when it changed. The librarian uses it to recognize people. Can be turned off in the collectors |
+| **Contacts** | ContactsContract | Name, email, phone and company only (no photos, notes or birthdays). The whole list is sent to the server's `/ingest/contacts`, only when it changed. The librarian uses it to recognize people. Sent only over https or to a tailnet address. Turning it off in the collectors sends an empty list once, so it leaves the server's index too |
 
 ## Voice
 

@@ -117,6 +117,7 @@ create virtual table if not exists fts using fts5(terms);
 create table if not exists people(n integer, role text, name text, key text, addr text);
 create table if not exists contacts(person integer, name text, key text, addr text);
 create index if not exists contacts_addr on contacts(addr);
+create index if not exists contacts_person on contacts(person);
 create index if not exists people_n on people(n);
 create index if not exists people_addr on people(addr);
 ";
@@ -807,7 +808,8 @@ impl Librarian {
             .into_iter()
             .map(|(addr, (mut names, count, last))| {
                 names.sort_by_key(|n| std::cmp::Reverse(n.0));
-                names.dedup_by(|a, b| a.1 == b.1);
+                let mut seen = HashSet::new();
+                names.retain(|n| seen.insert(n.1.clone()));
                 Someone { addr, names: names.into_iter().map(|(_, n)| n).collect(), count, last }
             })
             .collect();

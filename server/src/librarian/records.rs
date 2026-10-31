@@ -462,11 +462,12 @@ pub fn phone_key(number: &str) -> Option<String> {
         Some(rest) if number.trim_start().starts_with('+') || digits.len() >= 11 => format!("0{rest}"),
         _ => digits,
     };
-    (digits.len() >= 7).then(|| format!("tel:{digits}"))
+    (7..=15).contains(&digits.len()).then(|| format!("tel:{digits}"))
 }
 
-/// The newest address book in these files: the lines of the highest `snap` (a list sent whole; an older list, or a
-/// contact deleted since, does not count).
+/// The newest address book in these files: the list the server received last (by `_recv`, not the phone's clock: a
+/// phone once set ahead must not pin an old list), all of its lines (same `snap`). An older list, or a contact deleted
+/// since, does not count.
 pub fn newest_contacts(files: &[PathBuf]) -> Vec<Contact> {
     let mut lines: Vec<Value> = Vec::new();
     for f in files {
@@ -475,7 +476,9 @@ pub fn newest_contacts(files: &[PathBuf]) -> Vec<Contact> {
             text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).filter(|v| v["type"] == "contact"),
         );
     }
-    let Some(snap) = lines.iter().filter_map(|v| as_int(v.get("snap"))).max() else { return Vec::new() };
+    let received = |v: &Value| v.get("_recv").and_then(Value::as_str).unwrap_or("").to_string();
+    let newest = lines.iter().filter_map(|v| Some((received(v), as_int(v.get("snap"))?))).max();
+    let Some((_, snap)) = newest else { return Vec::new() };
     let list = |v: &Value, k: &str| -> Vec<String> {
         v.get(k)
             .and_then(Value::as_array)
@@ -486,9 +489,13 @@ pub fn newest_contacts(files: &[PathBuf]) -> Vec<Contact> {
         .iter()
         .filter(|v| as_int(v.get("snap")) == Some(snap))
         .map(|v| {
-            let mut addrs: Vec<String> =
-                list(v, "emails").iter().map(|e| e.trim().to_lowercase()).filter(|e| e.contains('@')).collect();
-            addrs.extend(list(v, "phones").iter().filter_map(|p| phone_key(p)));
+            let mut addrs: Vec<String> = list(v, "emails")
+                .iter()
+                .map(|e| e.trim().to_lowercase())
+                .filter(|e| e.contains('@') && e.len() <= 254)
+                .take(20)
+                .collect();
+            addrs.extend(list(v, "phones").iter().take(20).filter_map(|p| phone_key(p)));
             addrs.dedup();
             Contact { name: pystr(v.get("name")).trim().chars().take(100).collect(), addrs }
         })
