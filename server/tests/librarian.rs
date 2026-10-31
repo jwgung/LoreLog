@@ -920,3 +920,30 @@ fn a_matter_the_user_took_part_in_comes_before_a_notice_that_says_more_of_the_wo
         hits.iter().map(|h| &h["title"]).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn a_mail_written_more_than_once_into_the_vault_is_indexed_once_and_stays_while_any_copy_is_there() {
+    let mut t = T::new();
+    // the same message (one mail_id) in three notes, as a collector that wrote it again on every sync leaves it
+    let copy = |name: &str| {
+        t.mail_full(name, "복제견적", "여러벌물개 견적", "2024-05-01", Some("<same@x>"), "[]", "", "철수 <a@x.com>")
+    };
+    let a = copy("2024-05-01-0900-a.md");
+    let b = copy("2024-05-01-0900-a-1.md");
+    let c = copy("2024-05-01-0900-a-2.md");
+    t.mail("2024-05-02-0900-other.md", "다른견적", "여러벌물개 다른 메일", "2024-05-02");
+    assert_eq!(t.update().docs, 2, "one document for the three copies, one for the other mail");
+    let found = t.find("여러벌물개");
+    let hits = titled(&found, "복제견적");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0]["count"], 1, "the matter is one mail, not three");
+    // whichever copy goes, the mail stays while one is left
+    for gone in [&b, &a] {
+        fs::remove_file(gone).unwrap();
+        assert_eq!(t.update().docs, 2);
+        assert_eq!(titled(&t.find("여러벌물개"), "복제견적").len(), 1);
+    }
+    fs::remove_file(&c).unwrap();
+    assert_eq!(t.update().docs, 1);
+    assert!(titled(&t.find("여러벌물개"), "복제견적").is_empty(), "gone with its last copy");
+}
