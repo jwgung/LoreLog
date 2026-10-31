@@ -626,6 +626,106 @@ pub fn org_key(name: &str) -> String {
         .collect()
 }
 
+/// How a name sounds, coarsely: its consonants (alike ones as one: ㄱ/ㅋ/ㄲ and g/k/c/q are `k`, ㄹ and r/l are `l`, a
+/// final ㅇ and `ng` are `N`; one where two of a kind follow each other) and its vowels (a, e, i, o, u; a syllable of
+/// ㅡ only carries a consonant, as in 스 of 디키스트). Hangul only; None for anything else.
+fn hangul_sound(name: &str) -> Option<(String, Vec<char>)> {
+    const LEAD: [&str; 19] =
+        ["k", "k", "n", "t", "t", "l", "m", "p", "p", "s", "s", "", "j", "j", "j", "k", "t", "p", "h"];
+    const TAIL: [&str; 28] = [
+        "", "k", "k", "k", "n", "n", "n", "t", "l", "l", "l", "l", "l", "l", "l", "l", "m", "p", "p", "t", "t", "N",
+        "t", "t", "k", "t", "p", "",
+    ];
+    const VOWEL: [char; 21] =
+        ['a', 'e', 'a', 'e', 'o', 'e', 'o', 'e', 'o', 'a', 'e', 'e', 'o', 'u', 'o', 'e', 'i', 'u', '-', 'i', 'i'];
+    let (mut cons, mut vowels) = (String::new(), Vec::new());
+    for c in name.chars().filter(|c| !c.is_whitespace()) {
+        let o = c as u32;
+        if !(0xAC00..=0xD7A3).contains(&o) {
+            return None;
+        }
+        let s = o - 0xAC00;
+        let (lead, vowel, tail) = ((s / 588) as usize, ((s % 588) / 28) as usize, (s % 28) as usize);
+        cons += LEAD[lead];
+        if lead == 11 && [9, 10, 11, 14, 15, 16].contains(&vowel) {
+            cons.push('w'); // 위, 와, 웨: the w of wehago
+        }
+        cons += TAIL[tail];
+        if VOWEL[vowel] != '-' {
+            vowels.push(VOWEL[vowel]);
+        }
+    }
+    Some((collapse(&cons), vowels))
+}
+
+/// [`hangul_sound`] of a word in Latin letters, read as Korean reads it (`maxted` as 맥스테드, `cumulocity` as
+/// 큐물로시티).
+fn latin_sound(word: &str) -> Option<(String, Vec<char>)> {
+    let w: String = word.to_lowercase().chars().filter(char::is_ascii_lowercase).collect();
+    if w.is_empty() {
+        return None;
+    }
+    let w = w.replace("ph", "f").replace("sh", "s").replace("th", "t").replace("ck", "k").replace("ch", "j");
+    let w: Vec<char> = w.replace("ng", "N").chars().collect();
+    let vowel = |c: char| "aeiouy".contains(c);
+    let (mut cons, mut vowels) = (String::new(), Vec::new());
+    for (i, &c) in w.iter().enumerate() {
+        let next = w.get(i + 1).copied().unwrap_or(' ');
+        if vowel(c) {
+            if i == 0 || !vowel(w[i - 1]) {
+                vowels.push(if c == 'y' { 'i' } else { c });
+            }
+            continue;
+        }
+        match c {
+            'c' if "eiy".contains(next) => cons.push('s'),
+            'c' | 'q' | 'g' | 'k' => cons.push('k'),
+            'x' => cons += "ks",
+            'd' | 't' => cons.push('t'),
+            'b' | 'f' | 'v' | 'p' => cons.push('p'),
+            'r' | 'l' => cons.push('l'),
+            'z' => cons.push('j'),
+            'h' if i > 0 && !vowel(w[i - 1]) => {}
+            c => cons.push(c),
+        }
+    }
+    Some((collapse(&cons), vowels))
+}
+
+fn collapse(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        if !out.ends_with(c) {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Whether a name in Hangul is how a word in Latin letters (a label of a mail domain) is said: 디키스트 is dekist,
+/// 위하고 is wehago. The consonants must be the same and at least three, the vowels as many and at most one of them
+/// other, and the name long enough (three vowels or four consonants) that a common word does not fit by chance.
+pub fn sounds_like(name: &str, word: &str) -> bool {
+    let (Some((a, av)), Some((b, bv))) = (hangul_sound(name), latin_sound(word)) else { return false };
+    a.chars().count() >= 3
+        && a == b
+        && av.len() == bv.len()
+        && av.iter().zip(&bv).filter(|(x, y)| x != y).count() <= 1
+        && (av.len() >= 3 || a.chars().count() >= 4)
+}
+
+/// The labels of a mail domain that can be a name (`kumulo` of kumulo.atlassian.net and of kumulo.com).
+fn name_labels(domain: &str) -> impl Iterator<Item = &str> {
+    domain.split('.').filter(|l| l.len() >= 3 && !["com", "net", "org", "www", "mail", "biz", "info"].contains(l))
+}
+
+/// Whether an organization known by its mail domain sounds like this name (and is not the user's own).
+fn sounds_like_org(id: &str, name: &str, own: &HashSet<String>) -> bool {
+    id.strip_prefix("org:")
+        .filter(|d| !d.starts_with('~') && !own.contains(*d))
+        .is_some_and(|d| name_labels(d).any(|l| sounds_like(name, l)))
+}
+
 /// Short names the model guessed for organizations (org id -> names). Kept apart from the aliases: a guess is no
 /// fact of the records, only a way to understand the user.
 fn short_names(paths: &Paths) -> std::collections::HashMap<String, Vec<String>> {
@@ -748,6 +848,7 @@ impl Librarian {
             return Ok(Vec::new());
         }
         let short = short_names(&self.paths);
+        let own = own_domains(&self.db)?;
         let mut out: Vec<String> = {
             let mut st = self.db.prepare("select id, name, aliases from nodes where kind = 'org'")?;
             st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
@@ -766,6 +867,7 @@ impl Librarian {
                                 || k.contains(&key) && key.chars().count() >= 3
                                 || (k.chars().count() >= 3 && key.contains(&k))
                         })
+                        || sounds_like_org(id, name, &own) // 디키스트 for dekist.com
                 })
                 .map(|(id, _, _)| id)
                 .collect()
@@ -925,6 +1027,7 @@ impl Librarian {
             return Ok(None);
         }
         let short = short_names(&self.paths);
+        let own = own_domains(&self.db)?;
         let mut st =
             self.db.prepare("select id, name, aliases from nodes where kind = 'org' and id not like 'org:~%'")?;
         let rows: Vec<(String, String, String)> =
@@ -938,10 +1041,19 @@ impl Librarian {
                     .chain(serde_json::from_str::<Vec<String>>(a).unwrap_or_default())
                     .chain(short.get(id).cloned().unwrap_or_default())
                     .any(|x| org_key(&x) == key)
+                    || sounds_like_org(id, name, &own)
             })
             .map(|(id, ..)| id)
             .collect();
-        Ok((hits.len() == 1).then(|| hits[0].clone()))
+        // one organization, or the domains of one (kumulo.com and kumulo.atlassian.net)
+        let labels = |id: &str| -> HashSet<String> {
+            name_labels(id.strip_prefix("org:").unwrap_or(id)).map(str::to_string).collect()
+        };
+        let one = hits.split_first().is_some_and(|(first, rest)| {
+            let common = labels(first);
+            rest.iter().all(|h| !labels(h).is_disjoint(&common))
+        });
+        Ok(one.then(|| hits[0].clone()))
     }
 
     /// The matters this question asks the graph about, as hits: the user's own and the latest first. A name the

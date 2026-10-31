@@ -79,15 +79,16 @@ fn org(name: &str) -> Picked {
 #[test]
 fn the_users_name_for_an_organization_finds_it_and_stays_through_a_rebuild() {
     let (s, mut lib) = world();
-    assert!(!titles(&mut lib, org("디키스트")).contains(&"소음센서 결선도".to_string()));
+    // a name of the user's own, not how the domain sounds
+    assert!(!titles(&mut lib, org("결선업체")).contains(&"소음센서 결선도".to_string()));
     let (status, body) =
-        s.post_json("/corrections", &json!({"ref": "org:dekist.com", "wrong": "dekist.com", "right": "디키스트"}));
+        s.post_json("/corrections", &json!({"ref": "org:dekist.com", "wrong": "dekist.com", "right": "결선업체"}));
     assert_eq!(status, 200, "{body}");
-    assert_eq!(body["changed"], "조직 이름을 더했어요: dekist.com = 디키스트");
+    assert_eq!(body["changed"], "조직 이름을 더했어요: dekist.com = 결선업체");
     lib.update(false).unwrap();
-    assert!(titles(&mut lib, org("디키스트")).contains(&"소음센서 결선도".to_string()));
+    assert!(titles(&mut lib, org("결선업체")).contains(&"소음센서 결선도".to_string()));
     lib.update(true).unwrap();
-    assert!(titles(&mut lib, org("디키스트")).contains(&"소음센서 결선도".to_string()), "after a rebuild too");
+    assert!(titles(&mut lib, org("결선업체")).contains(&"소음센서 결선도".to_string()), "after a rebuild too");
 }
 
 #[test]
