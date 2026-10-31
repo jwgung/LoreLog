@@ -390,17 +390,31 @@ class LogStore(context: Context, password: ByteArray) {
     /** 증분 내보내기용 새 행(각 테이블에서 id > 마지막 내보낸 id). 줄마다 type 이 붙은 NDJSON. */
     data class NewRows(val lines: List<String>, val newLastIds: Map<String, Long>)
 
-    fun newRows(lastIds: Map<String, Long>, includeSummary: Boolean = true): NewRows {
+    /**
+     * [lastIds] 이후 새 행을 줄로. [maxBytes]를 넘기 전까지만 담는다(한 줄은 넘어도 담는다): 커서는 담은 행까지만
+     * 전진하므로, 나머지는 다음 호출에 이어서 나온다. 테이블마다 id 순이라 끊어도 빠지는 행이 없다.
+     */
+    fun newRows(lastIds: Map<String, Long>, includeSummary: Boolean = true, maxBytes: Long = Long.MAX_VALUE): NewRows {
         val lines = ArrayList<String>()
         val newIds = HashMap(lastIds)
+        var bytes = 0L
+        var full = false
         fun emit(type: String, table: String, cols: Array<String>) {
+            if (full) return
             val last = lastIds[table] ?: 0L
             db.query(table, cols, "id > ?", arrayOf(last.toString()), null, null, "id ASC").use { c ->
                 while (c.moveToNext()) {
                     val o = JSONObject()
                     o.put("type", type)
                     for (i in cols.indices) o.put(cols[i], valueAt(c, i))
-                    lines.add(o.toString())
+                    val line = o.toString()
+                    val size = line.toByteArray(Charsets.UTF_8).size + 1L
+                    if (lines.isNotEmpty() && bytes + size > maxBytes) {
+                        full = true
+                        return
+                    }
+                    lines.add(line)
+                    bytes += size
                     val id = c.getLong(0)
                     if (id > (newIds[table] ?: 0L)) newIds[table] = id
                 }

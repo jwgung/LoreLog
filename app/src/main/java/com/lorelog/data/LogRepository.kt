@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
@@ -259,25 +260,40 @@ object LogRepository {
 
     /**
      * HTTP 엔드포인트로 증분 전송. 설정된 URL 로 지난 전송 이후 새 기록만 NDJSON 으로 POST.
-     * 성공(2xx) 시에만 전송 커서를 전진시킨다(실패하면 다음에 다시 보냄).
-     * 반환: 보낸 줄 수(>=0), -1 미설정, -2 전송 실패.
+     * 성공(2xx) 시에만 전송 커서를 전진시킨다(실패하면 다음에 다시 보냄). 오래 쌓였으면 [PUSH_CHUNK_BYTES]씩 나눠
+     * 보내고, 한 번에 [PUSH_MAX_CHUNKS]개까지만 보낸다(나머지는 다음 주기에).
+     * 반환: 보낸 줄 수(>=0), [PUSH_UNSET] 미설정, [PUSH_FAILED] 전송 실패(앞서 보낸 조각은 커서에 반영됨).
      */
-    suspend fun pushToHttp(context: Context): Int = withContext(Dispatchers.IO) {
-        val url = EndpointConfig.url(context) ?: return@withContext -1
+    suspend fun pushToHttp(context: Context): Int = withContext(Dispatchers.IO) { pushLock.withLock { push(context) } }
+
+    /** 대화 화면과 주기 작업이 겹쳐도 같은 줄을 두 번 보내지 않게: 커서를 읽고 전진시키는 동안 하나만. */
+    private val pushLock = kotlinx.coroutines.sync.Mutex()
+
+    private suspend fun push(context: Context): Int {
+        val url = EndpointConfig.url(context) ?: return PUSH_UNSET
         val prefs = context.getSharedPreferences("http_state", Context.MODE_PRIVATE)
-        val lastIds = store.tables().associateWith { prefs.getLong("last_$it", 0L) }
-        val result = store.newRows(lastIds, includeSummary = SummaryPrefs.enabled(context))
         com.lorelog.collect.ContactsExport.push(context) // only when the address book changed; its result is its own
-        if (result.lines.isEmpty()) return@withContext 0
-        val body = result.lines.joinToString("\n", postfix = "\n")
-        val ok = HttpSink.post(url, EndpointConfig.token(context), body)
-        if (!ok) return@withContext -2
-        prefs.edit().apply {
-            result.newLastIds.forEach { (table, id) -> putLong("last_$table", id) }
-        }.apply()
-        pruneVoiceAudio(context)
-        result.lines.size
+        var sent = 0
+        repeat(PUSH_MAX_CHUNKS) {
+            val lastIds = store.tables().associateWith { prefs.getLong("last_$it", 0L) }
+            val result = store.newRows(lastIds, includeSummary = SummaryPrefs.enabled(context), maxBytes = PUSH_CHUNK_BYTES)
+            if (result.lines.isEmpty()) return@repeat
+            val body = result.lines.joinToString("\n", postfix = "\n")
+            if (!HttpSink.post(url, EndpointConfig.token(context), body)) return PUSH_FAILED
+            prefs.edit().apply {
+                result.newLastIds.forEach { (table, id) -> putLong("last_$table", id) }
+            }.commit()
+            sent += result.lines.size
+        }
+        if (sent > 0) pruneVoiceAudio(context)
+        return sent
     }
+
+    const val PUSH_UNSET = -1
+    const val PUSH_FAILED = -2
+    /** 서버 본문 한도(1MB)의 절반 */
+    const val PUSH_CHUNK_BYTES = 500_000L
+    const val PUSH_MAX_CHUNKS = 40
 
     /**
      * 최근 [days]일 대화의 현재 상태(참석자·status)를 통째로 다시 보낸다. 증분 전송은 새 행만 보내므로
