@@ -95,7 +95,7 @@ pub fn view(paths: &Paths) -> SourcesView {
     }
 }
 
-fn write_sources(paths: &Paths, src: &toml::Table) -> std::io::Result<()> {
+pub fn write_sources(paths: &Paths, src: &toml::Table) -> std::io::Result<()> {
     let text = format!("{SOURCES_HEADER}{}", toml::to_string(src).unwrap_or_default());
     write_private_atomic(&settings::sources_file(paths), text.as_bytes())
 }

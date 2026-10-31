@@ -244,6 +244,30 @@ async fn vault_forget(
     blocking(move || life_server::vault::forget(&paths, &source, &span).map_err(|e| e.to_string())).await
 }
 
+/// Where the daily sealed copy goes, and the result of the last one (#16).
+#[tauri::command]
+fn backup_status(slot: tauri::State<HostSlot>) -> Result<serde_json::Value, String> {
+    Ok(life_server::backup::status(&host_paths(&slot)?))
+}
+
+/// Set the folder (outside the vault) and the password of the copies.
+#[tauri::command]
+fn backup_set(dir: String, password: String, slot: tauri::State<HostSlot>) -> Result<(), String> {
+    life_server::backup::set(&host_paths(&slot)?, std::path::Path::new(dir.trim()), &password)
+}
+
+/// Make a copy now (the hourly sync makes one a day).
+#[tauri::command]
+async fn backup_now(slot: tauri::State<'_, HostSlot>) -> Result<String, String> {
+    let paths = host_paths(&slot)?;
+    blocking(move || {
+        life_server::backup::run(&paths)
+            .map(|d| format!("파일 {}개를 봉인하고 확인했습니다: {}", d.files, d.file.display()))
+            .map_err(|e| format!("백업하지 못했습니다: {e}"))
+    })
+    .await
+}
+
 /// Network calls (IMAP, CalDAV) off the UI thread.
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
@@ -468,6 +492,9 @@ pub fn run() {
             vault_holdings,
             vault_plan,
             vault_forget,
+            backup_status,
+            backup_set,
+            backup_now,
             asks_set
         ])
         .manage(HostSlot::default())

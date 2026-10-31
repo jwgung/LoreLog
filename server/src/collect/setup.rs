@@ -67,6 +67,9 @@ pub fn configured(sources: &toml::Table) -> Vec<&'static str> {
     if !out.is_empty() {
         out.push("librarian"); // sync indexes whatever it collected
     }
+    if sources.contains_key("backup") {
+        out.push("backup");
+    }
     out
 }
 

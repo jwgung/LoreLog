@@ -520,6 +520,8 @@ pub enum Job {
     Calendar,
     Books,
     Librarian,
+    /// the day's sealed copy of the vault (#16), last
+    Backup,
 }
 
 impl Job {
@@ -530,6 +532,7 @@ impl Job {
             Job::Calendar => "calendar",
             Job::Books => "contacts",
             Job::Librarian => "librarian",
+            Job::Backup => "backup",
         }
     }
 }
@@ -543,9 +546,10 @@ pub fn status_file(paths: &Paths) -> PathBuf {
     paths.data.join("status.json")
 }
 
-/// The jobs of a sync, in order: mail, its attachments, calendars, and last the librarian (it indexes what was just
-/// collected and the phone and PC records that arrived since). A dry run saves nothing, the index included.
-fn jobs(sources: &toml::Table, dry: bool) -> Vec<Job> {
+/// The jobs of a sync, in order: mail, its attachments, calendars, the librarian (it indexes what was just collected
+/// and the phone and PC records that arrived since), and once a day the backup. A dry run saves nothing, the index
+/// included.
+fn jobs(sources: &toml::Table, dry: bool, backup_due: bool) -> Vec<Job> {
     let has = |t: &str, k: &str| {
         sources.get(t).and_then(|v| v.get(k)).and_then(toml::Value::as_array).map(|a| !a.is_empty()).unwrap_or(false)
     };
@@ -562,7 +566,33 @@ fn jobs(sources: &toml::Table, dry: bool) -> Vec<Job> {
     if !jobs.is_empty() && !dry {
         jobs.push(Job::Librarian);
     }
+    if backup_due && !dry {
+        jobs.push(Job::Backup);
+    }
     jobs
+}
+
+/// The day's copy: made, sealed and checked, or why not.
+fn backup(paths: &Paths, out: Out) -> Outcome {
+    match crate::backup::run(paths) {
+        Ok(d) => {
+            say(
+                out,
+                format!(
+                    "{} files ({} MB) sealed and checked: {}{}",
+                    d.files,
+                    d.bytes / 1_000_000,
+                    d.file.display(),
+                    if d.removed > 0 { format!(" · {} old copies taken away", d.removed) } else { String::new() }
+                ),
+            );
+            Outcome::Ok
+        }
+        Err(e) => {
+            problem(out, format!("backup failed: {e}"));
+            Outcome::Failed
+        }
+    }
 }
 
 /// What `life status` shows for a run: the last thing it said when it worked; the last problem (else the last line)
@@ -580,7 +610,7 @@ pub fn detail(outcome: Outcome, lines: &[Line]) -> String {
 /// Run every configured job, record each result (not for a dry run) and hand each to `done` with what it said.
 /// -> whether all of them worked
 pub fn sync(paths: &Paths, dry: bool, done: &mut dyn FnMut(Job, Outcome, &[Line])) -> Result<bool, NoSources> {
-    let jobs = jobs(&settings::read_sources(paths), dry);
+    let jobs = jobs(&settings::read_sources(paths), dry, crate::backup::due(paths, chrono::Local::now()));
     if jobs.is_empty() {
         return Err(NoSources);
     }
@@ -596,6 +626,7 @@ pub fn sync(paths: &Paths, dry: bool, done: &mut dyn FnMut(Job, Outcome, &[Line]
             Job::Calendar => calendar(paths, dry, &mut out),
             Job::Books => books(paths, dry, &mut out),
             Job::Librarian => librarian(paths, false, &mut out),
+            Job::Backup => backup(paths, &mut out),
         }));
         let outcome = ran.unwrap_or_else(|_| {
             lines.push(Line::Problem(format!("{} stopped unexpectedly", job.name())));
@@ -620,10 +651,12 @@ mod tests {
     #[test]
     fn the_librarian_indexes_after_collecting_and_a_dry_run_leaves_the_index_alone() {
         let src: toml::Table = "[mail]\nfolders = [\"INBOX\"]\n[calendar]\nurls = [\"x\"]\n".parse().unwrap();
-        assert_eq!(jobs(&src, false), [Job::Mail, Job::Files, Job::Calendar, Job::Librarian]);
-        assert_eq!(jobs(&src, true), [Job::Mail, Job::Files, Job::Calendar]);
+        assert_eq!(jobs(&src, false, false), [Job::Mail, Job::Files, Job::Calendar, Job::Librarian]);
+        assert_eq!(jobs(&src, true, true), [Job::Mail, Job::Files, Job::Calendar]);
         let with_books: toml::Table = "[contacts]\nurls = [\"x\"]\n".parse().unwrap();
-        assert_eq!(jobs(&with_books, false), [Job::Books, Job::Librarian]);
-        assert!(jobs(&toml::Table::new(), false).is_empty());
+        assert_eq!(jobs(&with_books, false, false), [Job::Books, Job::Librarian]);
+        assert!(jobs(&toml::Table::new(), false, false).is_empty());
+        assert_eq!(jobs(&src, false, true).last(), Some(&Job::Backup), "the copy holds what was just collected");
+        assert_eq!(jobs(&toml::Table::new(), false, true), [Job::Backup], "a vault fed only by devices is copied too");
     }
 }
