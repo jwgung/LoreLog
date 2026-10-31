@@ -109,3 +109,24 @@ fn a_case_without_its_target_is_refused() {
     fs::write(&f, "[[case]]\nkind = \"weird\"\nq = \"뭐지\"\n").unwrap();
     assert!(eval::load(&f).is_err());
 }
+
+#[test]
+fn a_question_about_several_matters_is_found_only_when_all_of_them_are_and_at_the_rank_of_the_last() {
+    let (_d, p, lib) = setup();
+    let (a, b) = (thread(&lib, &p.vault, "b1.md"), thread(&lib, &p.vault, "b2.md"));
+    let other = thread(&lib, &p.vault, "a1.md");
+    let cs = cases(
+        &p,
+        &format!(
+            "[[case]]\nkind = \"graph\"\nq = \"영희\"\nthreads = [\"{a}\", \"{b}\"]\n\n[[case]]\nkind = \"graph\"\nq = \"영희\"\nthreads = [\"{a}\", \"{other}\"]\n"
+        ),
+    );
+    let mut lib = lib;
+    let out = eval::run(&mut lib, None, &p.vault, &cs, 8).unwrap();
+    assert_eq!(out[0].raw_rank, Some(2), "both found: counted at the rank of the later one");
+    assert_eq!(out[1].raw_rank, None, "one of them not found: a miss");
+    assert_eq!(eval::summary(&out)[&Kind::Graph].raw, (1, 2));
+    let f = p.data.join("bad.toml");
+    fs::write(&f, "[[case]]\nkind = \"graph\"\nq = \"뭐지\"\nthreads = []\n").unwrap();
+    assert!(eval::load(&f).unwrap_err().to_string().contains("threads"));
+}
