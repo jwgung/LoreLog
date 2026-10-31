@@ -56,6 +56,8 @@ pub struct Doc {
     pub thread: Option<String>,
     /// who the record is with: mail headers, event attendees (#22)
     pub people: Vec<Person>,
+    /// the mail's own id (lower case): of a mail, and of a file that came with one, which joins its thread (#15)
+    pub mid: Option<String>,
 }
 
 /// Someone a record names: their role in it, the name it gives them (may be empty) and their address (lower case).
@@ -119,6 +121,8 @@ pub enum Kind {
     Diary,
     /// the phone's address book, sent as whole lists (`snap`): no documents, only who is who (#22)
     Contacts,
+    /// the files that went through mail, with the text read out of them (#15)
+    MailFile,
 }
 
 impl Kind {
@@ -130,6 +134,7 @@ impl Kind {
             Kind::Pc => "pc",
             Kind::Diary => "diary",
             Kind::Contacts => "contacts",
+            Kind::MailFile => "mailfile",
         }
     }
 }
@@ -139,9 +144,13 @@ pub fn sources(paths: &Paths) -> Vec<(Kind, PathBuf)> {
     let mut out: Vec<(Kind, PathBuf)> =
         files_like_nested(&paths.vault.join("Mail"), "", ".md").into_iter().map(|p| (Kind::Mail, p)).collect();
     out.extend(files_like(&paths.vault.join("Events"), "", ".md").into_iter().map(|p| (Kind::Event, p)));
-    for (kind, name) in
-        [(Kind::Lorelog, "lorelog"), (Kind::Pc, "pc"), (Kind::Diary, "diary"), (Kind::Contacts, "contacts")]
-    {
+    for (kind, name) in [
+        (Kind::Lorelog, "lorelog"),
+        (Kind::Pc, "pc"),
+        (Kind::Diary, "diary"),
+        (Kind::Contacts, "contacts"),
+        (Kind::MailFile, "mailfile"),
+    ] {
         out.extend(files_like(&paths.raw().join(name), "", ".ndjson").into_iter().map(|p| (kind, p)));
     }
     out.sort_by(|a, b| a.1.cmp(&b.1));
@@ -233,6 +242,7 @@ pub fn mail_docs(path: &Path) -> std::io::Result<Vec<Doc>> {
             .into_iter()
             .flat_map(|role| addresses(note::field(front, role).unwrap_or_default(), role))
             .collect(),
+        mid: MSG_ID_RE.find(&front_value(front, "mail_id")).map(|m| m.as_str().to_lowercase()),
     }])
 }
 
@@ -255,6 +265,7 @@ pub fn event_docs(path: &Path) -> std::io::Result<Vec<Doc>> {
         thread: None,
         text: parts.join("\n"),
         people: list_items(front, "attendees").iter().flat_map(|a| addresses(a, "attendee")).collect(),
+        mid: None,
     }])
 }
 
@@ -273,6 +284,7 @@ fn trace_docs(day: &str, groups: Vec<(&str, Vec<String>)>) -> Vec<Doc> {
             extra: String::new(),
             thread: None,
             people: Vec::new(),
+            mid: None,
         })
         .collect()
 }
@@ -341,6 +353,81 @@ pub fn pc_docs(path: &Path) -> std::io::Result<Vec<Doc>> {
     Ok(trace_docs(&stem(path), vec![("PC", lines)]))
 }
 
+// ---------- the files that went through mail (#15) ----------
+
+/// The attachments seen in one `raw/mailfile/<day>.ndjson`: a document per file (the same file twice in a day is
+/// one), with the text read out of it. The text is kept by the file's hash under `<data>/cache` (a copy made again
+/// when missing: a file is read once, not on every rebuild). A file of a kind not read is still found by its name.
+pub fn mailfile_docs(path: &Path) -> anyhow::Result<Vec<Doc>> {
+    let data = path.parent().and_then(Path::parent).and_then(Path::parent).unwrap_or(Path::new("."));
+    let records = crate::assistant::context::read_records(path, None)?;
+    let file_day = stem(path);
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for d in &records {
+        let sha = pystr(d.get("sha256"));
+        if d.get("type").and_then(Value::as_str) != Some("file")
+            || sha.len() != 64
+            || !sha.bytes().all(|b| b.is_ascii_hexdigit())
+            || !seen.insert(sha.clone())
+        {
+            continue;
+        }
+        let name = pystr(d.get("name"));
+        let day = as_int(d.get("ts"))
+            .and_then(local)
+            .map(|t| t.format("%Y-%m-%d").to_string())
+            .unwrap_or_else(|| day_of("", &file_day));
+        let text = if super::extract::readable(&name) { attachment_text(data, &sha, &name) } else { String::new() };
+        out.push(Doc {
+            source: "file",
+            kind: "첨부".into(),
+            day,
+            title: if name.is_empty() { "(이름 없는 첨부)".into() } else { name },
+            text,
+            extra: String::new(),
+            thread: None,
+            people: Vec::new(),
+            mid: Some(pystr(d.get("mail_id")).trim().trim_matches(['<', '>']).to_lowercase()).filter(|m| !m.is_empty()),
+        });
+    }
+    Ok(out)
+}
+
+/// The text of the file of this hash, from the cache, else read and kept there ("" for none: kept too, so a file
+/// with nothing to read is not read again; but not when every reader was busy, to be read on a later update).
+fn attachment_text(data: &Path, sha: &str, name: &str) -> String {
+    use super::extract::{MAX_FILE, Read1, VERSION, ext, read_file};
+    // what is read depends on the kind of file as well as its bytes
+    let cache =
+        data.join("cache").join(format!("attach-text-{VERSION}")).join(&sha[..2]).join(format!("{sha}.{}", ext(name)));
+    if let Ok(t) = std::fs::read_to_string(&cache) {
+        return t;
+    }
+    let blob = crate::store::blob_path(data, sha);
+    let Ok(meta) = std::fs::metadata(&blob) else { return String::new() }; // not here yet
+    let got = if meta.len() > MAX_FILE as u64 {
+        Read1::Nothing
+    } else {
+        match std::fs::read(&blob) {
+            Ok(bytes) => read_file(name, bytes),
+            Err(_) => return String::new(),
+        }
+    };
+    let text = match got {
+        Read1::Text(t) => t,
+        Read1::Nothing => String::new(),
+        Read1::Busy => return String::new(),
+    };
+    if let Some(dir) = cache.parent()
+        && crate::fsutil::ensure_private_dir(dir).is_ok()
+        && let Err(e) = crate::fsutil::write_private_atomic(&cache, text.as_bytes())
+    {
+        log::warn!("librarian: keeping an attachment's text failed: {:?}", e.kind());
+    }
+    text
+}
+
 // ---------- the user's words ----------
 
 fn word(kind: &str, day: &str, text: String) -> Doc {
@@ -353,6 +440,7 @@ fn word(kind: &str, day: &str, text: String) -> Doc {
         extra: String::new(),
         thread: None,
         people: Vec::new(),
+        mid: None,
     }
 }
 
@@ -444,6 +532,7 @@ pub fn docs(kind: Kind, path: &Path) -> anyhow::Result<Vec<Doc>> {
         Kind::Pc => pc_docs(path)?,
         Kind::Diary | Kind::Lorelog => word_docs(path)?,
         Kind::Contacts => Vec::new(), // read as a whole by the index (only the newest list counts)
+        Kind::MailFile => mailfile_docs(path)?,
     })
 }
 

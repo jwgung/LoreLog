@@ -769,3 +769,52 @@ fn a_search_is_not_broken_by_an_update_that_lands_meanwhile() {
     assert_eq!(t.find("코알라").len(), 2, "the search sees the index as it was when it started");
     assert!(t.find("코알라").is_empty(), "and the next one sees the update");
 }
+
+// ---------- the text of attachments (#15) ----------
+
+fn attachment(t: &T, day: &str, name: &str, bytes: &[u8]) -> String {
+    let (sha, _) = life_server::store::put_blob(&t.p.data, bytes).unwrap();
+    let line = json!({"type": "file", "ts": ms(day[..4].parse().unwrap(), day[5..7].parse().unwrap(), day[8..].parse().unwrap(), 10, 0), "sha256": sha, "name": name,
+                      "mime": "application/octet-stream", "size": bytes.len(), "mail_id": "<M@x>",
+                      "mail_source": "account/INBOX", "direction": "received"});
+    let dir = t.p.raw().join("mailfile");
+    fs::create_dir_all(&dir).unwrap();
+    let f = dir.join(format!("{day}.ndjson"));
+    let before = fs::read_to_string(&f).unwrap_or_default();
+    fs::write(&f, format!("{before}{line}\n")).unwrap();
+    sha
+}
+
+#[test]
+fn the_words_inside_an_attachment_are_found_and_the_file_is_read_once() {
+    let mut t = T::new();
+    let sha = attachment(&t, "2026-03-04", "단가표.csv", "품목,단가\n첨부속문구두더지,7700\n".as_bytes());
+    attachment(&t, "2026-03-04", "단가표 사본.csv", "품목,단가\n첨부속문구두더지,7700\n".as_bytes()); // the same file
+    attachment(&t, "2026-03-04", "현장사진.jpg", b"\xff\xd8\xff\xe0");
+    t.update();
+    let hits = t.find("첨부속문구두더지");
+    assert_eq!(hits.len(), 1, "the same file twice in a day is one: {hits:?}");
+    assert_eq!((hits[0]["kind"].as_str(), hits[0]["day"].as_str()), (Some("첨부"), Some("2026-03-04")));
+    assert!(hits[0]["snippet"].as_str().unwrap().contains("7700"));
+    assert_eq!(titled(&t.find("현장사진"), "현장사진.jpg").len(), 1, "a file not read is found by its name");
+    // the text is kept by the file's hash: a rebuild does not need the file again
+    fs::remove_file(life_server::store::blob_path(&t.p.data, &sha)).unwrap();
+    t.lib.update(true).unwrap();
+    assert_eq!(t.find("첨부속문구두더지").len(), 1);
+}
+
+#[test]
+fn a_file_that_came_with_a_mail_is_found_as_that_mails_thread() {
+    let mut t = T::new();
+    t.mail_full("q1.md", "견적 요청", "견적 부탁드립니다", "2026-03-04", Some("<M@x>"), "[]", "", "철수 <a@x.com>");
+    t.mail_full("q2.md", "RE: 견적 요청", "확인했습니다", "2026-03-05", Some("<r@x>"), "[<M@x>]", "", "나 <me@x.com>");
+    attachment(&t, "2026-03-04", "견적서.csv", "품목,단가\n메일첨부문구수달,9900\n".as_bytes());
+    t.update();
+    let hits = t.find("메일첨부문구수달");
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert_eq!(hits[0]["title"], "견적 요청 (첨부 견적서.csv)");
+    assert_eq!(hits[0]["count"], 2, "the thread's mails, the file not counted as one");
+    assert!(hits[0]["ref"].as_str().unwrap().ends_with("q1.md"), "where the user finds it: the mail");
+    assert!(hits[0]["snippet"].as_str().unwrap().contains("9900"));
+    assert_eq!(t.find("견적").len(), 1, "the mail and its file are one hit");
+}

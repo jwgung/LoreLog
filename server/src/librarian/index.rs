@@ -100,15 +100,18 @@ const SNIPPET_AFTER: usize = 140;
 const WINDOW: i64 = 400;
 /// Bump when the tables or what goes in them change: an index of another version is built again. (6 was the last
 /// Python version; the Rust index is built anew once.)
-pub const SCHEMA_VERSION: &str = "10"; // 8: who each record is with, 9: the phone's address book (#22), 10: its company (#9)
+pub const SCHEMA_VERSION: &str = "11"; // 8: who each record is with, 9: the phone's address book (#22), 10: its company (#9), 11: attachments and the mail they came with (#15)
 
 /// A mail sent to more people than this is a mass mail: not counted as with any one of them.
 pub const MASS_MAIL: i64 = 10;
+/// how much an attachment's match counts against a mail's (#15)
+pub const FILE_WEIGHT: f64 = 0.5;
 
 const TABLES: &str = "
 create table if not exists meta(key text primary key, value text);
 create table if not exists files(path text primary key, kind text, stamp text);
-create table if not exists docs(n integer primary key, file text, source text, kind text, day text, title text, thread text, text text);
+create table if not exists docs(n integer primary key, file text, source text, kind text, day text, title text, thread text, text text, mid text);
+create index if not exists docs_mid on docs(mid);
 create index if not exists docs_file on docs(file);
 create index if not exists docs_thread on docs(thread);
 create table if not exists convs(file text, seq integer, id text, data text);
@@ -377,8 +380,8 @@ impl Librarian {
 
     fn add(&self, path: &str, d: &Doc) -> rusqlite::Result<()> {
         self.db.execute(
-            "insert into docs(file, source, kind, day, title, thread, text) values (?, ?, ?, ?, ?, ?, ?)",
-            params![path, d.source, d.kind, d.day, d.title, d.thread, d.text],
+            "insert into docs(file, source, kind, day, title, thread, text, mid) values (?, ?, ?, ?, ?, ?, ?, ?)",
+            params![path, d.source, d.kind, d.day, d.title, d.thread, d.text, d.mid],
         )?;
         let n = self.db.last_insert_rowid();
         self.db.execute(
@@ -654,8 +657,12 @@ impl Librarian {
     }
 
     fn search_in(&mut self, expr: &str, q: &str, limit: usize, exclude: Option<Exclude>) -> anyhow::Result<Vec<Value>> {
+        // a file that came with a mail is in that mail's thread: one hit with it, not a hit of its own
         let mut sql =
-            "select d.n, d.thread, d.source from fts join docs d on d.n = fts.rowid where fts match ?".to_string();
+            "select d.n, coalesce(d.thread, (select m.thread from docs m where d.source = 'file' and m.mid = d.mid
+                                                    and m.source = 'mail' and m.day = d.day order by m.n limit 1)), d.source
+             from fts join docs d on d.n = fts.rowid where fts match ?"
+                .to_string();
         let mut args: Vec<String> = vec![expr.to_string()];
         match exclude {
             Some(Exclude::Day(day)) => {
@@ -677,7 +684,11 @@ impl Librarian {
             }
             None => {}
         }
-        sql += &format!(" order by fts.rank limit {WINDOW}");
+        // a long attachment matches many words: it counts for less than a mail or a message (rank is negative, lower
+        // is better)
+        sql += &format!(
+            " order by case when d.source = 'file' then fts.rank * {FILE_WEIGHT} else fts.rank end limit {WINDOW}"
+        );
         let rows: Vec<(i64, Option<String>, String)> = {
             let mut st = self.db.prepare(&sql)?;
             st.query_map(params_from_iter(args.iter()), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
@@ -716,12 +727,34 @@ impl Librarian {
         Ok(out)
     }
 
-    /// One hit as the assistant gets it: `{source, kind, day, title, snippet, ref, count, first, last}`.
+    /// One hit as the assistant gets it: `{source, kind, day, title, snippet, ref, count, first, last}`. A file that came
+    /// with a mail is shown as that mail's (its title and where it is), the file named: what the user knows is the mail.
     fn hit(&self, n: i64, thread: Option<&str>, q: &str) -> anyhow::Result<Value> {
-        let (source, kind, day, title, text, file): (String, String, String, String, String, String) =
-            self.db.query_row("select source, kind, day, title, text, file from docs where n = ?", [n], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
-            })?;
+        let (source, kind, day, mut title, text, mut file, mid): (
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+        ) = self.db.query_row("select source, kind, day, title, text, file, mid from docs where n = ?", [n], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?))
+        })?;
+        if source == "file"
+            && let Some(mid) = mid
+            && let Some((mail_title, mail_file)) = self
+                .db
+                .query_row(
+                    "select title, file from docs where mid = ? and source = 'mail' and day = ? order by n limit 1",
+                    [&mid, &day],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                )
+                .optional()?
+        {
+            title = format!("{mail_title} (첨부 {title})");
+            file = mail_file;
+        }
         let (count, first, last) = match thread {
             Some(t) => self.thread_span(t)?,
             None => (1, Some(day.clone()), Some(day.clone())),
