@@ -13,59 +13,101 @@ import java.security.MessageDigest
 
 /**
  * 폰 주소록을 금고로 보낸다(#22). 서버의 사서가 "이 사람이 누구인지"(이름과 메일·전화를 한 사람으로 묶기)에 쓴다.
- * 바뀌었을 때만, 목록 전체를 한 번에 보낸다(줄마다 같은 snap). 서버는 가장 새 목록만 쓰므로 폰에서 지운 연락처는 사라진다.
- * 보내는 것은 이름·메일·전화·회사뿐이다(사진, 메모, 생일은 보내지 않는다). 권한이 없거나 꺼 두면 보내지 않는다.
+ * 바뀌었을 때만, 목록 전체를 한 번에 보낸다(줄마다 같은 snap). 서버는 마지막으로 받은 목록만 쓰므로 폰에서 지운 연락처는 사라진다.
+ * 주소록이 가진 것은 다 보낸다(CardDAV 주소록과 같은 모양): 이름, 별명, 메일, 전화, 회사·부서·직함, 주소, 웹사이트, 메모,
+ * 생일·기념일, 관계, 메신저, 그룹, 그리고 원본으로 연락처 데이터 행 그대로(사진만 뺀다). 권한이 없거나 꺼 두면 보내지 않는다.
  */
 object ContactsExport {
     private const val PREF = "contacts_export"
     private const val KEY_DIGEST = "digest"
+    private const val MAX_EACH = 50
 
     private class Entry(val name: String) {
-        val emails = sortedSetOf<String>()
-        val phones = sortedSetOf<String>()
-        var org = ""
+        var nickname = ""
+        val emails = JSONArray()
+        val phones = JSONArray()
+        val orgs = JSONArray()
+        val addresses = JSONArray()
+        val urls = JSONArray()
+        val notes = JSONArray()
+        val events = JSONArray()
+        val relations = JSONArray()
+        val ims = JSONArray()
+        val groups = JSONArray()
+        /** 데이터 행 그대로: {mime, data1..data14} (data15는 사진이라 뺀다) */
+        val raw = JSONArray()
+    }
+
+    private fun add(list: JSONArray, v: Any) {
+        if (list.length() >= MAX_EACH) return
+        for (i in 0 until list.length()) if (list.get(i).toString() == v.toString()) return
+        list.put(v)
+    }
+
+    private fun typed(type: String, value: String) = JSONObject().put("type", type).put("value", value)
+
+    private fun groupTitles(context: Context): Map<Long, String> {
+        val out = mutableMapOf<Long, String>()
+        context.contentResolver.query(
+            ContactsContract.Groups.CONTENT_URI, arrayOf(ContactsContract.Groups._ID, ContactsContract.Groups.TITLE), null, null, null,
+        )?.use { c -> while (c.moveToNext()) c.getString(1)?.let { out[c.getLong(0)] = it } }
+        return out
     }
 
     private fun read(context: Context): List<Entry> {
         val byId = sortedMapOf<Long, Entry>()
-        val cols = arrayOf(
-            ContactsContract.Data.CONTACT_ID,
-            ContactsContract.Data.DISPLAY_NAME,
-            ContactsContract.Data.MIMETYPE,
-            ContactsContract.Data.DATA1,
-        )
-        val kinds = arrayOf(
-            ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE,
-            ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE,
-            ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE,
-        )
-        context.contentResolver.query(
-            ContactsContract.Data.CONTENT_URI, cols,
-            "${ContactsContract.Data.MIMETYPE} IN (?, ?, ?)", kinds, null,
-        )?.use { c ->
+        val data = (1..14).map { "data$it" }
+        val cols = arrayOf(ContactsContract.Data.CONTACT_ID, ContactsContract.Data.DISPLAY_NAME, ContactsContract.Data.MIMETYPE) + data
+        val groups = groupTitles(context)
+        context.contentResolver.query(ContactsContract.Data.CONTENT_URI, cols, null, null, null)?.use { c ->
             while (c.moveToNext()) {
                 val id = c.getLong(0)
-                val value = c.getString(3)?.trim().orEmpty()
-                if (value.isEmpty()) continue
+                val mime = c.getString(2) ?: continue
+                if (mime == ContactsContract.CommonDataKinds.Photo.CONTENT_ITEM_TYPE) continue
                 val e = byId.getOrPut(id) { Entry(c.getString(1)?.trim().orEmpty()) }
-                when (c.getString(2)) {
-                    kinds[0] -> e.emails.add(value.lowercase())
-                    kinds[1] -> e.phones.add(value)
-                    kinds[2] -> if (e.org.isEmpty()) e.org = value
+                val v = (0 until 14).map { i -> runCatching { c.getString(3 + i) }.getOrNull()?.trim().orEmpty() }
+                val row = JSONObject().put("mime", mime)
+                v.forEachIndexed { i, x -> if (x.isNotEmpty()) row.put("data${i + 1}", x) }
+                add(e.raw, row)
+                val label = { typeCol: Int, labelCol: Int, names: (Int) -> String ->
+                    val t = v[typeCol].toIntOrNull()
+                    if (t == 0) v[labelCol].lowercase() else if (t == null) "" else names(t)
+                }
+                when (mime) {
+                    ContactsContract.CommonDataKinds.Nickname.CONTENT_ITEM_TYPE -> if (e.nickname.isEmpty()) e.nickname = v[0]
+                    ContactsContract.CommonDataKinds.Email.CONTENT_ITEM_TYPE -> if (v[0].isNotEmpty()) add(e.emails, typed(
+                        label(1, 2) { when (it) { 1 -> "home"; 2 -> "work"; 4 -> "mobile"; else -> "other" } }, v[0].lowercase()))
+                    ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE -> if (v[0].isNotEmpty()) add(e.phones, typed(
+                        label(1, 2) { when (it) { 1 -> "home"; 2 -> "cell"; 3 -> "work"; 4, 5 -> "fax"; else -> "other" } }, v[0]))
+                    ContactsContract.CommonDataKinds.Organization.CONTENT_ITEM_TYPE -> add(e.orgs,
+                        JSONObject().put("company", v[0]).put("department", v[4]).put("title", v[3]))
+                    ContactsContract.CommonDataKinds.StructuredPostal.CONTENT_ITEM_TYPE -> if (v[0].isNotEmpty()) add(e.addresses, typed(
+                        label(1, 2) { when (it) { 1 -> "home"; 2 -> "work"; else -> "other" } }, v[0].replace('\n', ' ')))
+                    ContactsContract.CommonDataKinds.Website.CONTENT_ITEM_TYPE -> if (v[0].isNotEmpty()) add(e.urls, v[0])
+                    ContactsContract.CommonDataKinds.Note.CONTENT_ITEM_TYPE -> if (v[0].isNotEmpty()) add(e.notes, v[0])
+                    ContactsContract.CommonDataKinds.Event.CONTENT_ITEM_TYPE -> if (v[0].isNotEmpty()) add(e.events,
+                        JSONObject().put("type", label(1, 2) { when (it) { 1 -> "anniversary"; 3 -> "birthday"; else -> "other" } }).put("date", v[0]))
+                    ContactsContract.CommonDataKinds.Relation.CONTENT_ITEM_TYPE -> if (v[0].isNotEmpty()) add(e.relations,
+                        JSONObject().put("type", label(1, 2) { "type$it" }).put("name", v[0]))
+                    ContactsContract.CommonDataKinds.Im.CONTENT_ITEM_TYPE -> if (v[0].isNotEmpty()) add(e.ims, typed(v[4].ifEmpty { v[5] }, v[0]))
+                    ContactsContract.CommonDataKinds.GroupMembership.CONTENT_ITEM_TYPE ->
+                        v[0].toLongOrNull()?.let { g -> groups[g]?.let { add(e.groups, it) } }
                 }
             }
         }
-        return byId.values.filter { it.emails.isNotEmpty() || it.phones.isNotEmpty() }
+        return byId.values.toList()
     }
 
     private fun json(e: Entry, snap: Long): JSONObject = JSONObject().apply {
         put("type", "contact"); put("snap", snap); put("ts", snap)
-        put("name", e.name); put("org", e.org)
-        put("emails", JSONArray(e.emails.toList())); put("phones", JSONArray(e.phones.toList()))
+        put("name", e.name); put("nickname", e.nickname)
+        put("emails", e.emails); put("phones", e.phones); put("orgs", e.orgs); put("addresses", e.addresses)
+        put("urls", e.urls); put("notes", e.notes); put("events", e.events); put("relations", e.relations)
+        put("ims", e.ims); put("groups", e.groups); put("raw", e.raw)
     }
 
     private fun digest(entries: List<Entry>): String {
-        val text = entries.joinToString("\n") { "${it.name}|${it.org}|${it.emails}|${it.phones}" }
+        val text = entries.joinToString("\n") { json(it, 0).toString() }
         return MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
     }
 
