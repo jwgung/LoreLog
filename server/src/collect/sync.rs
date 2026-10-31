@@ -432,6 +432,49 @@ pub fn calendar(paths: &Paths, dry: bool, out: Out) -> Outcome {
     if failed { Outcome::Failed } else { Outcome::Ok }
 }
 
+// ---------- address books ----------
+
+/// Read the configured CardDAV address books and keep each in the raw store when it changed (read-only on the server).
+pub fn books(paths: &Paths, dry: bool, out: Out) -> Outcome {
+    let urls = super::sources::view(paths).books;
+    let acct = match super::sources::calendar_account(paths) {
+        Ok(a) => a,
+        Err(e) => {
+            problem(out, e);
+            return Outcome::NotSetUp;
+        }
+    };
+    let (mut cards, mut changed, mut failed) = (0usize, 0usize, false);
+    for url in &urls {
+        match super::carddav::fetch(url, &acct) {
+            Ok(c) => {
+                cards += c.len();
+                if dry {
+                    continue;
+                }
+                match super::carddav::keep(paths, url, &c) {
+                    Ok(true) => changed += 1,
+                    Ok(false) => {}
+                    Err(e) => {
+                        problem(out, format!("keeping the address book failed: {:?}", e.kind()));
+                        failed = true;
+                    }
+                }
+            }
+            Err(e) => {
+                let why = match &e {
+                    DavError::Status(c) => format!("HTTP {c}"),
+                    DavError::Other(k) => k.clone(),
+                };
+                problem(out, format!("CardDAV request failed ({why}): {}", super::calendar::shown(url)));
+                failed = true;
+            }
+        }
+    }
+    say(out, format!("{}{} address books, {cards} contacts, {changed} changed", dry_mark(dry), urls.len()));
+    if failed { Outcome::Failed } else { Outcome::Ok }
+}
+
 // ---------- librarian ----------
 
 /// Bring the librarian's index up to date with the records (`rebuild`: throw it away and build it again, in one
@@ -475,6 +518,7 @@ pub enum Job {
     Mail,
     Files,
     Calendar,
+    Books,
     Librarian,
 }
 
@@ -484,6 +528,7 @@ impl Job {
             Job::Mail => "mail",
             Job::Files => "files",
             Job::Calendar => "calendar",
+            Job::Books => "contacts",
             Job::Librarian => "librarian",
         }
     }
@@ -510,6 +555,9 @@ fn jobs(sources: &toml::Table, dry: bool) -> Vec<Job> {
     }
     if has("calendar", "urls") {
         jobs.push(Job::Calendar);
+    }
+    if has("contacts", "urls") {
+        jobs.push(Job::Books);
     }
     if !jobs.is_empty() && !dry {
         jobs.push(Job::Librarian);
@@ -546,6 +594,7 @@ pub fn sync(paths: &Paths, dry: bool, done: &mut dyn FnMut(Job, Outcome, &[Line]
             Job::Mail => mail(paths, &mail_run(MAIL_LIMIT), &mut out),
             Job::Files => files(paths, &mail_run(SYNC_FILES_LIMIT), &mut out),
             Job::Calendar => calendar(paths, dry, &mut out),
+            Job::Books => books(paths, dry, &mut out),
             Job::Librarian => librarian(paths, false, &mut out),
         }));
         let outcome = ran.unwrap_or_else(|_| {
@@ -573,6 +622,8 @@ mod tests {
         let src: toml::Table = "[mail]\nfolders = [\"INBOX\"]\n[calendar]\nurls = [\"x\"]\n".parse().unwrap();
         assert_eq!(jobs(&src, false), [Job::Mail, Job::Files, Job::Calendar, Job::Librarian]);
         assert_eq!(jobs(&src, true), [Job::Mail, Job::Files, Job::Calendar]);
+        let with_books: toml::Table = "[contacts]\nurls = [\"x\"]\n".parse().unwrap();
+        assert_eq!(jobs(&with_books, false), [Job::Books, Job::Librarian]);
         assert!(jobs(&toml::Table::new(), false).is_empty());
     }
 }

@@ -14,7 +14,7 @@
 //! References header, else In-Reply-To, else its own id; replies of one thread come back as one hit, mails that only
 //! share a subject do not). Traces (phone, PC) become one document per day and kind; mail, events and words are one
 //! document each.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
@@ -465,9 +465,9 @@ pub fn phone_key(number: &str) -> Option<String> {
     (7..=15).contains(&digits.len()).then(|| format!("tel:{digits}"))
 }
 
-/// The newest address book in these files: the list the server received last (by `_recv`, not the phone's clock: a
-/// phone once set ahead must not pin an old list), all of its lines (same `snap`). An older list, or a contact deleted
-/// since, does not count.
+/// The newest address books in these files: for each source (`origin`: the phone when absent, or one CardDAV book),
+/// the list the server received last (by `_recv`, not the sender's clock: a phone once set ahead must not pin an old
+/// list), all of its lines (same `snap`). An older list, or a contact deleted since, does not count.
 pub fn newest_contacts(files: &[PathBuf]) -> Vec<Contact> {
     let mut lines: Vec<Value> = Vec::new();
     for f in files {
@@ -477,8 +477,16 @@ pub fn newest_contacts(files: &[PathBuf]) -> Vec<Contact> {
         );
     }
     let received = |v: &Value| v.get("_recv").and_then(Value::as_str).unwrap_or("").to_string();
-    let newest = lines.iter().filter_map(|v| Some((received(v), as_int(v.get("snap"))?))).max();
-    let Some((_, snap)) = newest else { return Vec::new() };
+    let origin = |v: &Value| v.get("origin").and_then(Value::as_str).unwrap_or("phone").to_string();
+    // source -> (received, snap) of its newest list
+    let mut newest: BTreeMap<String, (String, i64)> = BTreeMap::new();
+    for v in &lines {
+        let Some(snap) = as_int(v.get("snap")) else { continue };
+        let e = newest.entry(origin(v)).or_insert((String::new(), i64::MIN));
+        if (received(v), snap) > *e {
+            *e = (received(v), snap);
+        }
+    }
     let list = |v: &Value, k: &str| -> Vec<String> {
         v.get(k)
             .and_then(Value::as_array)
@@ -487,7 +495,7 @@ pub fn newest_contacts(files: &[PathBuf]) -> Vec<Contact> {
     };
     lines
         .iter()
-        .filter(|v| as_int(v.get("snap")) == Some(snap))
+        .filter(|v| newest.get(&origin(v)).map(|(_, snap)| *snap) == as_int(v.get("snap")))
         .map(|v| {
             let mut addrs: Vec<String> = list(v, "emails")
                 .iter()

@@ -96,6 +96,15 @@
     <div id="cMsg" class="msg"></div>
 
     <hr />
+    <h2>주소록</h2>
+    <p class="sub">CardDAV 주소록에서 이름·메일·전화·회사만 가져와 사람을 알아보는 데 씁니다(메모·생일·주소는 가져오지 않음). 계정은 메일과 같습니다.</p>
+    <label for="bServer">CardDAV 서버</label><input id="bServer" type="text" placeholder="https://carddav.example.com/" />
+    <div class="row"><button id="bFind" class="secondary">주소록 찾기</button><button id="bOff" class="secondary" hidden>주소록 모으지 않기</button></div>
+    <ul id="bList" class="checks"></ul>
+    <button id="bSave" hidden>주소록 저장</button>
+    <div id="bMsg" class="msg"></div>
+
+    <hr />
     <h2>모델</h2>
     <p class="sub">대화와 음성 인식에 쓸 모델(OpenAI 호환 주소). 내 기록이 이 주소로 가므로, 내가 정한 곳만 넣으세요.</p>
     <div class="grid">

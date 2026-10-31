@@ -36,6 +36,8 @@ pub struct MailView {
 pub struct SourcesView {
     pub mail: Option<MailView>,
     pub calendars: Vec<String>,
+    /// CardDAV address books
+    pub books: Vec<String>,
 }
 
 /// A folder the server has, for choosing.
@@ -86,7 +88,11 @@ pub fn view(paths: &Paths) -> SourcesView {
             folders,
         }
     });
-    SourcesView { mail, calendars: strings(&table(&src, "calendar"), "urls") }
+    SourcesView {
+        mail,
+        calendars: strings(&table(&src, "calendar"), "urls"),
+        books: strings(&table(&src, "contacts"), "urls"),
+    }
 }
 
 fn write_sources(paths: &Paths, src: &toml::Table) -> std::io::Result<()> {
@@ -178,8 +184,8 @@ pub fn save_mail(paths: &Paths, m: &MailSetup) -> Result<(), String> {
     write_sources(paths, &src).map_err(fail)
 }
 
-/// The account (the mail account's, unless CALDAV_* are set) for calendars.
-fn calendar_account(paths: &Paths) -> Result<Account, String> {
+/// The account (the mail account's, unless CALDAV_* are set) for calendars and address books.
+pub fn calendar_account(paths: &Paths) -> Result<Account, String> {
     let env = read_env_file(&settings::env_file(paths));
     let get =
         |a: &str, b: &str| env.get(a).filter(|v| !v.is_empty()).or_else(|| env.get(b)).cloned().unwrap_or_default();
@@ -220,6 +226,43 @@ pub fn save_calendars(paths: &Paths, urls: &[String]) -> Result<(), String> {
         t.entry("past_days").or_insert(toml::Value::Integer(400));
         t.entry("future_days").or_insert(toml::Value::Integer(400));
         src.insert("calendar".into(), toml::Value::Table(t));
+    }
+    crate::fsutil::ensure_private_dir(&paths.conf).map_err(|e| format!("저장하지 못했습니다: {:?}", e.kind()))?;
+    write_sources(paths, &src).map_err(|e| format!("저장하지 못했습니다: {:?}", e.kind()))
+}
+
+/// An address book the account has, for choosing.
+#[derive(Clone, Debug, Serialize)]
+pub struct Book {
+    pub name: String,
+    pub url: String,
+    pub chosen: bool,
+}
+
+/// The address books on a CardDAV server, the configured ones (else all) chosen. Nothing is saved.
+pub fn books(paths: &Paths, server: &str) -> Result<Vec<Book>, String> {
+    let acct = calendar_account(paths)?;
+    let found = super::carddav::list_books(server.trim(), &acct)?;
+    if found.is_empty() {
+        return Err("주소록을 찾지 못했습니다".into());
+    }
+    let configured = view(paths).books;
+    let any = found.iter().any(|(_, u)| configured.contains(u));
+    Ok(found.into_iter().map(|(name, url)| Book { chosen: !any || configured.contains(&url), name, url }).collect())
+}
+
+/// Save the address books to collect (https). An empty list stops collecting them.
+pub fn save_books(paths: &Paths, urls: &[String]) -> Result<(), String> {
+    for u in urls {
+        calendar::check_url(u).map_err(|e| format!("{u}: {e}"))?;
+    }
+    let mut src = settings::read_sources(paths);
+    if urls.is_empty() {
+        src.remove("contacts");
+    } else {
+        let mut t = table(&src, "contacts");
+        t.insert("urls".into(), toml::Value::Array(urls.iter().cloned().map(toml::Value::String).collect()));
+        src.insert("contacts".into(), toml::Value::Table(t));
     }
     crate::fsutil::ensure_private_dir(&paths.conf).map_err(|e| format!("저장하지 못했습니다: {:?}", e.kind()))?;
     write_sources(paths, &src).map_err(|e| format!("저장하지 못했습니다: {:?}", e.kind()))

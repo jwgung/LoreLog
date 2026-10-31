@@ -164,6 +164,21 @@ fn calendar_save(urls: Vec<String>, slot: tauri::State<HostSlot>) -> Result<(), 
     Ok(())
 }
 
+/// The address books on a CardDAV server, with the mail account (nothing saved).
+#[tauri::command]
+async fn book_list(server: String, slot: tauri::State<'_, HostSlot>) -> Result<Vec<sources::Book>, String> {
+    let paths = host_paths(&slot)?;
+    blocking(move || sources::books(&paths, &server)).await
+}
+
+/// Save the address books to collect, then sync.
+#[tauri::command]
+fn book_save(urls: Vec<String>, slot: tauri::State<HostSlot>) -> Result<(), String> {
+    sources::save_books(&host_paths(&slot)?, &urls)?;
+    hosting(&slot, |h| h.sync_now());
+    Ok(())
+}
+
 /// The model addresses written in the settings.
 #[tauri::command]
 fn models_get(slot: tauri::State<HostSlot>) -> Result<Models, String> {
@@ -402,6 +417,8 @@ pub fn run() {
             mail_save,
             calendar_list,
             calendar_save,
+            book_list,
+            book_save,
             models_get,
             models_save,
             asks_get,
