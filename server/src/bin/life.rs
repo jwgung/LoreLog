@@ -26,6 +26,10 @@ commands:
   export [FILE]     everything the vault holds of your records in one zip, in open formats, to take elsewhere
                     (default: lorelog-export-<date>.zip here); the index, caches and secrets stay behind
   verify FILE       check an export against its list of hashes
+  backup set DIR    where the daily sealed copy goes (outside the vault: an external disk, a NAS) and its password
+                    (asked twice, hidden). `life sync` then makes one a day, checks it and keeps 7 days and 4 weeks.
+  backup            make a copy now
+  restore FILE OUT  open a copy with its password into OUT (a zip like `life export`'s) and check it
   held              what the vault holds, by source: files, size, first and last day
   forget SOURCE FROM TO [--yes]
                     forget those days (YYYY-MM-DD, both included) of a source (mail, calendar, phone, pc, diary,
@@ -296,6 +300,69 @@ fn main() -> ExitCode {
                 }
                 Err(e) => {
                     eprintln!("life: export failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        "backup" => match args.get(1).map(String::as_str) {
+            None => match life_server::backup::run(&paths) {
+                Ok(d) => {
+                    println!("{} files ({} MB) sealed and checked: {}", d.files, d.bytes / 1_000_000, d.file.display());
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("life: backup failed: {e}");
+                    ExitCode::FAILURE
+                }
+            },
+            Some("set") => {
+                let Some(dir) = args.get(2) else {
+                    eprintln!("usage: life backup set DIR");
+                    return ExitCode::from(2);
+                };
+                if let Err(c) = need_tty() {
+                    return c;
+                }
+                let pw = rpassword::prompt_password("password for the copies (8+ letters; keep it elsewhere too): ")
+                    .unwrap_or_default();
+                if rpassword::prompt_password("again: ").unwrap_or_default() != pw {
+                    eprintln!("life: the two did not match; nothing changed");
+                    return ExitCode::FAILURE;
+                }
+                match life_server::backup::set(&paths, std::path::Path::new(dir), &pw) {
+                    Ok(()) => {
+                        println!(
+                            "copies go to {dir}; the first is made on the next `life sync` (or `life backup` now)"
+                        );
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("life: {e}");
+                        ExitCode::FAILURE
+                    }
+                }
+            }
+            Some(other) => {
+                eprintln!("usage: life backup [set DIR]\nlife: error: unrecognized arguments: {other}");
+                ExitCode::from(2)
+            }
+        },
+        "restore" => {
+            let (Some(file), Some(out)) = (args.get(1), args.get(2)) else {
+                eprintln!("usage: life restore FILE OUT");
+                return ExitCode::from(2);
+            };
+            if let Err(c) = need_tty() {
+                return c;
+            }
+            let pw = rpassword::prompt_password("password: ").unwrap_or_default();
+            match life_server::backup::restore(std::path::Path::new(file), &pw, std::path::Path::new(out)) {
+                Ok(n) => {
+                    println!("ok: {n} files match their hashes; unzip {out} to see them");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("life: restore failed (wrong password or a damaged copy): {e}");
                     ExitCode::FAILURE
                 }
             }

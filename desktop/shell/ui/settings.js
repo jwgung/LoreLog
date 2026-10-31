@@ -43,7 +43,7 @@ async function loadHost() {
     const failed = info.failed.length ? " · 열지 못한 주소: " + info.failed.join(", ") : "";
     $("hostNote").textContent = "받는 곳: " + info.listening.join(", ") + failed + " · 노트: " + info.notes_dir;
   }
-  await Promise.all([loadSources(), loadModels(), loadSync(), loadHeld()]);
+  await Promise.all([loadSources(), loadModels(), loadSync(), loadHeld(), loadBackup()]);
   try { $("asks").checked = await invoke("asks_get"); }
   catch (e) { $("asks").disabled = true; $("asksMsg").textContent = "설정을 읽지 못했습니다: " + e; }
 }
@@ -202,7 +202,7 @@ $("modelSave").onclick = async () => {
 };
 
 // ---------- sync ----------
-const JOB = { mail: "메일", files: "첨부", calendar: "일정", contacts: "주소록", librarian: "색인" };
+const JOB = { mail: "메일", files: "첨부", calendar: "일정", contacts: "주소록", librarian: "색인", backup: "백업" };
 let polling = null;
 async function loadSync() {
   const st = await invoke("sync_status").catch(() => null);
@@ -270,6 +270,30 @@ $("forgetGo").onclick = async () => {
   } catch (e) { $("forgetMsg").textContent = String(e); }
   planned = null;
   await loadHeld();
+};
+
+// ---------- the daily sealed copy ----------
+async function loadBackup() {
+  let st;
+  try { st = await invoke("backup_status"); } catch (e) { $("backupMsg").textContent = String(e); return; }
+  if (st.folder) $("backupDir").value = st.folder;
+  $("backupNow").disabled = !st.folder;
+  const when = (t) => (t || "").replace("T", " ").slice(0, 16);
+  $("backupMsg").textContent = !st.folder ? "아직 설정하지 않았습니다."
+    : st.error ? `마지막 시도(${when(st.last_run)})가 실패했습니다: ${st.error}`
+    : st.last_ok ? `마지막 백업: ${when(st.last_ok)} · ${st.file}` : "다음 동기화 때 첫 백업을 만듭니다.";
+}
+$("backupSave").onclick = async () => {
+  const dir = $("backupDir").value.trim(), password = $("backupPw").value;
+  if (!password) { $("backupMsg").textContent = "비밀번호를 넣어 주세요(바꾸지 않아도 다시 넣습니다)."; return; }
+  try { await invoke("backup_set", { dir, password }); $("backupPw").value = ""; await loadBackup(); }
+  catch (e) { $("backupMsg").textContent = String(e); }
+};
+$("backupNow").onclick = async () => {
+  $("backupNow").disabled = true;
+  $("backupMsg").textContent = "백업하는 중… 기록이 많으면 몇 분 걸립니다.";
+  try { $("backupMsg").textContent = await invoke("backup_now"); } catch (e) { $("backupMsg").textContent = String(e); }
+  $("backupNow").disabled = false;
 };
 
 $("exportVault").onclick = async () => {

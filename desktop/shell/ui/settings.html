@@ -136,6 +136,17 @@
       <button id="forgetGo" class="secondary" disabled>지우기</button>
     </div>
     <p id="forgetMsg" class="note"></p>
+    <h2>백업</h2>
+    <p class="sub">하루 한 번, 동기화할 때 금고 전체를 비밀번호로 봉인해 고른 폴더(외장 디스크, NAS 등)에 둡니다. 만든 뒤 다시 열어 해시로 확인하고, 최근 7일과 4주를 남깁니다. 비밀번호는 이 PC에만 저장되니 다른 곳에도 적어 두세요. 잃으면 백업을 열 수 없습니다.</p>
+    <label for="backupDir">백업 폴더 (금고 밖)</label>
+    <input id="backupDir" type="text" placeholder="예: E:\LoreLog 백업" />
+    <label for="backupPw">비밀번호 (8자 이상)</label>
+    <input id="backupPw" type="password" placeholder="저장되어 있으면 바꿀 때만 입력" />
+    <div class="row">
+      <button id="backupSave" class="secondary">백업 설정 저장</button>
+      <button id="backupNow" class="secondary">지금 백업</button>
+    </div>
+    <p id="backupMsg" class="note"></p>
     <h2>내보내기</h2>
     <p class="sub">이 금고가 가진 기록 전부를 zip 하나로 내려받기 폴더에 담습니다: 원본 기록(NDJSON), 보관한 파일, 노트(Markdown), 할 일, 확인용 해시 목록. 검색 색인과 비밀번호·토큰은 넣지 않습니다.</p>
     <button id="exportVault" class="secondary">금고 내보내기</button>
