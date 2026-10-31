@@ -1,0 +1,257 @@
+//! The assistant asks the graph (#46): an organization by any name it goes by, people by the role they have in a
+//! matter, matters by how they stand ("견적은 나갔는데 계약은 안 된"), requests not answered. What the graph finds comes
+//! first, then what the words find; a question without anything the graph knows is searched as before.
+mod common;
+
+use std::fs;
+use std::sync::Arc;
+use std::time::Duration;
+
+use common::FakeModel;
+use life_server::assistant::recall::{self, Named, Picked};
+use life_server::config::Paths;
+use life_server::librarian::Librarian;
+use life_server::librarian::graph;
+use serde_json::{Value, json};
+
+struct T {
+    _dir: tempfile::TempDir,
+    p: Paths,
+}
+
+const ME: &str = "나 <me@mine.co.kr>";
+
+impl T {
+    fn new() -> T {
+        let dir = tempfile::tempdir().unwrap();
+        let p = Paths::under(dir.path());
+        fs::create_dir_all(p.vault.join("Events")).unwrap();
+        T { _dir: dir, p }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn mail(&self, name: &str, day: &str, from: &str, to: &str, subject: &str, body: &str, sent: bool, refs: &str) {
+        let path = self.p.vault.join("Mail").join(&day[..4]).join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let source = if sent { "account/Sent Messages" } else { "account/INBOX" };
+        fs::write(
+            path,
+            format!("---\ntype: mail\nmail_id: <{name}@x>\nmail_source: {source}\ndate: {day}\ntime: 09:00\nfrom: {from}\nto: [{to}]\ncc: []\nsubject: \"{subject}\"\nreferences: {refs}\n---\n## Message\n{body}\n"),
+        )
+        .unwrap();
+    }
+}
+
+/// The model's reading of each mail, by a word in it.
+fn reader() -> Arc<FakeModel> {
+    FakeModel::new(|msgs| {
+        let text = msgs.last().unwrap()["content"].as_str().unwrap_or("").to_string();
+        let r = if text.contains("견적서 송부") {
+            json!([["설비 점검:case", "state", "2026-03-02", "견적 발송", "2026-03-02", "견적서 송부"]])
+        } else if text.contains("계약 체결") {
+            json!([["설비 점검:case", "state", "2026-03-10", "계약", "2026-03-10", "계약 체결"]])
+        } else if text.contains("배관 견적") {
+            json!([["배관 교체:case", "state", "2026-03-05", "견적서 발송", "2026-03-05", "배관 견적"]])
+        } else if text.contains("포트폴리오") {
+            json!([
+                ["정다운:person", "role", "연구원 채용:case", "지원자", "2026-04-10", "지원자 정다운"],
+                ["인사팀:org", "sent", "포트폴리오:doc", "포트폴리오", "2026-04-10", "포트폴리오 송부"]
+            ])
+        } else if text.contains("자료 요청") {
+            json!([[
+                "박고객 <park@client.co.kr>:person",
+                "requested",
+                "측정 자료:doc",
+                "측정 자료",
+                "2026-03-20",
+                "자료 요청"
+            ]])
+        } else if text.contains("지원사업") {
+            json!([["제조 AI 지원사업:case", "about", "공고문:doc", "", "2026-09-29", "지원사업"]])
+        } else {
+            json!([])
+        };
+        Ok(json!({"r": r}).to_string())
+    })
+}
+
+fn world() -> (T, Librarian) {
+    let t = T::new();
+    // an organization the mails name only in their subjects
+    t.mail(
+        "k1.md",
+        "2026-10-21",
+        "담당자 <a@ksa.or.kr>",
+        ME,
+        "[한국표준협회] 1차 워크숍 계획",
+        "워크숍 일정 공유",
+        false,
+        "[]",
+    );
+    t.mail("k2.md", "2026-10-22", "다른 담당 <b@ksa.or.kr>", ME, "개발 회의 줌 링크", "회의 링크입니다", false, "[]");
+    t.mail(
+        "k3.md",
+        "2026-10-23",
+        ME,
+        "담당자 <a@ksa.or.kr>",
+        "RE: [한국표준협회] 1차 워크숍 계획",
+        "참석합니다",
+        true,
+        "[<k1.md@x>]",
+    );
+    // matters by how they stand
+    t.mail("q1.md", "2026-03-02", ME, "고객 <c@client.co.kr>", "설비 점검 견적", "견적서 송부드립니다", true, "[]");
+    t.mail(
+        "q2.md",
+        "2026-03-10",
+        "고객 <c@client.co.kr>",
+        ME,
+        "RE: 설비 점검 견적",
+        "계약 체결 진행하겠습니다",
+        false,
+        "[<q1.md@x>]",
+    );
+    t.mail("q3.md", "2026-03-05", ME, "다른고객 <d@other.co.kr>", "배관 교체 견적", "배관 견적 보냅니다", true, "[]");
+    // a person known by a role, in a mail someone else sent
+    t.mail(
+        "h1.md",
+        "2026-04-10",
+        "인사팀 <hr@mine-hr.co.kr>",
+        ME,
+        "[2차 면접 자료] 지원자 정다운 포트폴리오",
+        "포트폴리오 송부드립니다",
+        false,
+        "[]",
+    );
+    // requests: one answered, one not
+    t.mail(
+        "r1.md",
+        "2026-03-20",
+        "박고객 <park@client.co.kr>",
+        ME,
+        "측정 자료 요청",
+        "측정 자료 요청드립니다",
+        false,
+        "[]",
+    );
+    t.mail(
+        "r2.md",
+        "2026-03-21",
+        "박고객 <park@client.co.kr>",
+        ME,
+        "설치 사진 요청",
+        "사진 자료 요청드립니다",
+        false,
+        "[]",
+    );
+    t.mail(
+        "r3.md",
+        "2026-03-22",
+        ME,
+        "박고객 <park@client.co.kr>",
+        "RE: 측정 자료 요청",
+        "보내드립니다",
+        true,
+        "[<r1.md@x>]",
+    );
+    t.mail(
+        "s1.md",
+        "2026-09-29",
+        "공고 <n@trust.co.kr>",
+        ME,
+        "제조 AI 현장 적용 지원사업 모집 공고",
+        "지원사업 안내",
+        false,
+        "[]",
+    );
+    let mut lib = Librarian::open(&t.p, None, Duration::from_secs(5)).unwrap();
+    lib.update(false).unwrap();
+    graph::extract(&mut lib, reader().as_ref(), &graph::Run { limit: 50, workers: 2 }).unwrap();
+    (t, lib)
+}
+
+fn titles(hits: &[Value]) -> Vec<String> {
+    hits.iter().map(|h| h["title"].as_str().unwrap_or("").trim_start_matches("RE: ").to_string()).collect()
+}
+
+fn ask(lib: &mut Librarian, p: Picked) -> Vec<Value> {
+    match recall::lookup(lib, &p, 8, "2026-10-31", &[]).unwrap() {
+        Named::Hits(h) => h,
+        Named::Ask(_) => panic!("asked back"),
+    }
+}
+
+#[test]
+fn an_organization_named_only_in_subjects_is_found_by_its_mail_domain_with_all_its_matters() {
+    let (_t, mut lib) = world();
+    let hits = ask(&mut lib, Picked { orgs: vec!["한국표준협회".into()], ..Picked::default() });
+    let mut got = titles(&hits);
+    got.sort();
+    assert_eq!(got[..2], ["[한국표준협회] 1차 워크숍 계획".to_string(), "개발 회의 줌 링크".to_string()], "{got:?}");
+    assert!(!got.iter().any(|t| t.contains("견적")), "{got:?}");
+}
+
+#[test]
+fn a_person_with_a_role_is_found_in_what_someone_else_sent_about_them() {
+    let (_t, mut lib) = world();
+    let hits =
+        ask(&mut lib, Picked { people: vec!["정다운".into()], roles: vec!["지원자".into()], ..Picked::default() });
+    assert_eq!(titles(&hits).first().map(String::as_str), Some("[2차 면접 자료] 지원자 정다운 포트폴리오"));
+}
+
+#[test]
+fn matters_are_found_by_how_they_stand_and_what_did_not_follow() {
+    let (_t, mut lib) = world();
+    let hits = ask(&mut lib, Picked { states: vec!["견적".into()], absent: vec!["계약".into()], ..Picked::default() });
+    let got = titles(&hits);
+    assert_eq!(got.first().map(String::as_str), Some("배관 교체 견적"), "{got:?}");
+    assert!(!got.iter().take(1).any(|t| t.contains("설비")), "a quote followed by a contract is not one: {got:?}");
+    assert!(hits[0]["state"].as_str().unwrap().contains("견적서 발송"), "{:?}", hits[0]);
+}
+
+#[test]
+fn a_request_with_no_mail_of_the_users_after_it_is_open() {
+    let (_t, mut lib) = world();
+    let hits = ask(&mut lib, Picked { open_requests: true, ..Picked::default() });
+    assert_eq!(titles(&hits), ["설치 사진 요청"], "the answered one is not open");
+}
+
+#[test]
+fn the_graph_and_the_words_take_turns_and_a_plain_question_is_searched_as_before() {
+    let (_t, mut lib) = world();
+    let hits =
+        ask(&mut lib, Picked { things: vec!["지원사업".into()], words: vec!["워크숍".into()], ..Picked::default() });
+    let got = titles(&hits);
+    let mut top: Vec<String> = got[..2].to_vec();
+    top.sort();
+    assert_eq!(
+        top,
+        ["[한국표준협회] 1차 워크숍 계획".to_string(), "제조 AI 현장 적용 지원사업 모집 공고".to_string()],
+        "what the graph found and what the words found, both at the top: {got:?}"
+    );
+    let n = got.iter().filter(|t| t.contains("워크숍")).count();
+    assert_eq!(n, 1, "one matter is one hit: {got:?}");
+    let plain = ask(&mut lib, Picked { words: vec!["배관".into()], ..Picked::default() });
+    assert_eq!(titles(&plain), titles(&lib.search("배관", 8, None).unwrap()));
+}
+
+#[test]
+fn the_words_picked_for_the_graph_are_read_from_the_model() {
+    let m = FakeModel::new(|_| {
+        Ok(r#"{"search": true, "people": [], "words": ["견적"], "orgs": ["한국표준협회"], "things": ["FMS"],
+               "roles": ["담당"], "states": ["견적"], "absent": ["계약"], "open_requests": true}"#
+            .into())
+    });
+    let p = recall::pick(m.as_ref(), "한국표준협회 쪽 견적만 나간 거", None).unwrap();
+    assert_eq!(
+        (p.orgs, p.things, p.roles, p.states, p.absent, p.open_requests),
+        (
+            vec!["한국표준협회".to_string()],
+            vec!["FMS".to_string()],
+            vec!["담당".to_string()],
+            vec!["견적".to_string()],
+            vec!["계약".to_string()],
+            true
+        )
+    );
+}

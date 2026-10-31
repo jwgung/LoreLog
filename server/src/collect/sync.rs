@@ -593,16 +593,17 @@ pub fn graph(paths: &Paths, limit: usize, out: Out) -> Outcome {
     let result = (|| -> anyhow::Result<String> {
         let mut lib = Librarian::open(paths, None, Duration::from_secs(30))?;
         let t = Instant::now();
-        let d = crate::librarian::graph::extract(
-            &mut lib,
-            &model_of(paths),
-            &crate::librarian::graph::Run { limit, workers: 4 },
-        )?;
+        let model = model_of(paths);
+        let d =
+            crate::librarian::graph::extract(&mut lib, &model, &crate::librarian::graph::Run { limit, workers: 4 })?;
+        // the new role and state names, put with the ones of the same meaning (a failure waits for the next run)
+        let grouped = crate::librarian::graph::group_labels(&lib, &model).unwrap_or(0);
         Ok(format!(
-            "read {} records ({} failed, tried again next time), {} relations, {} waiting ({:.0}s)",
+            "read {} records ({} failed, tried again next time), {} relations, {} names grouped, {} waiting ({:.0}s)",
             d.asked,
             d.failed,
             d.edges,
+            grouped,
             d.left,
             t.elapsed().as_secs_f64()
         ))
