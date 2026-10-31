@@ -370,8 +370,8 @@ pub fn lookup(lib: &mut dyn Index, p: &Picked, limit: usize, day: &str, said: &[
     {
         return Ok(match named {
             Named::Hits(h) => Named::Hits(merged(graph, h, limit)),
-            Named::Ask(c) if graph.is_empty() => Named::Ask(c),
-            Named::Ask(_) => Named::Hits(graph), // the role told who was meant
+            Named::Ask(_) if !p.roles.is_empty() && !graph.is_empty() => Named::Hits(graph), // the role told who
+            Named::Ask(c) => Named::Ask(c),
         });
     }
     let all: Vec<String> = p.people.iter().chain(&p.orgs).chain(&p.things).chain(&p.words).cloned().collect();
