@@ -329,3 +329,68 @@ fn a_name_the_picker_took_for_a_person_or_a_word_is_tried_as_an_organization_whe
     let p = Picked { words: vec!["센서".into()], ..Picked::default() };
     assert_eq!(titles(&ask(&mut lib, p)), titles(&lib.search("센서", 8, None).unwrap()));
 }
+
+#[test]
+fn an_organization_is_found_by_how_its_domain_sounds_in_korean_when_no_name_of_it_fits() {
+    let (t, mut lib) = world();
+    t.mail("d1.md", "2026-06-02", "고대원 <ben@dekist.com>", ME, "HTTP 헤더 문의", "헤더 값 확인 부탁", false, "[]");
+    t.mail("w1.md", "2026-06-03", "알림 <noreply@wehago.com>", ME, "전자세금계산서 발행", "발행 안내", false, "[]");
+    lib.update(false).unwrap();
+    for p in [
+        Picked { people: vec!["디키스트".into()], ..Picked::default() },
+        Picked { orgs: vec!["디키스트".into()], ..Picked::default() },
+    ] {
+        assert!(titles(&ask(&mut lib, p)).contains(&"HTTP 헤더 문의".to_string()), "디키스트 is dekist");
+    }
+    let p = Picked { words: vec!["위하고".into()], ..Picked::default() };
+    assert!(titles(&ask(&mut lib, p)).contains(&"전자세금계산서 발행".to_string()), "위하고 is wehago");
+    // a common word that only sounds like no domain stays a word
+    let p = Picked { words: vec!["헤더".into()], ..Picked::default() };
+    assert_eq!(titles(&ask(&mut lib, p)), titles(&lib.search("헤더", 8, None).unwrap()));
+}
+
+#[test]
+fn the_domains_that_carry_an_organizations_name_are_asked_about_with_it() {
+    let (t, mut lib) = world();
+    t.mail("a1.md", "2026-07-01", "영업 <s@kumulo.com>", ME, "플랫폼 견적", "견적 회신", false, "[]");
+    t.mail(
+        "a2.md",
+        "2026-07-02",
+        "지라 <jira@kumulo.atlassian.net>",
+        ME,
+        "CST-1 패치 가이드",
+        "티켓 갱신",
+        false,
+        "[]",
+    );
+    t.mail(
+        "a3.md",
+        "2026-07-03",
+        "지라 <jira@other.atlassian.net>",
+        ME,
+        "OT-9 다른 회사 티켓",
+        "티켓 갱신",
+        false,
+        "[]",
+    );
+    lib.update(false).unwrap();
+    let got = titles(&ask(&mut lib, Picked { orgs: vec!["쿠물로".into()], ..Picked::default() }));
+    assert!(got.contains(&"플랫폼 견적".to_string()), "{got:?}");
+    assert!(got.contains(&"CST-1 패치 가이드".to_string()), "its tickets come from kumulo.atlassian.net: {got:?}");
+    assert!(!got.contains(&"OT-9 다른 회사 티켓".to_string()), "not every atlassian.net: {got:?}");
+}
+
+#[test]
+fn a_korean_name_sounds_like_a_domain_only_when_its_consonants_and_vowels_go_along() {
+    for (name, word) in
+        [("디키스트", "dekist"), ("맥스테드", "maxted"), ("위하고", "wehago"), ("큐물로시티", "cumulocity")]
+    {
+        assert!(graph::sounds_like(name, word), "{name} ~ {word}");
+    }
+    // common words a few consonants away from a domain, or with other vowels, are not it
+    for (name, word) in
+        [("오프라인", "fairino"), ("진천", "junjin"), ("미츠비시", "machbase"), ("공고", "konkuk"), ("헤더", "hd")]
+    {
+        assert!(!graph::sounds_like(name, word), "{name} !~ {word}");
+    }
+}
