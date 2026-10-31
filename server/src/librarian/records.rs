@@ -54,6 +54,60 @@ pub struct Doc {
     pub text: String,
     pub extra: String,
     pub thread: Option<String>,
+    /// who the record is with: mail headers, event attendees (#22)
+    pub people: Vec<Person>,
+}
+
+/// Someone a record names: their role in it, the name it gives them (may be empty) and their address (lower case).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Person {
+    /// "from", "to", "cc" (mail) or "attendee" (event)
+    pub role: &'static str,
+    pub name: String,
+    pub addr: String,
+}
+
+/// At most this many people are kept of one header (a mail to more is a mass mail either way).
+const MAX_PEOPLE: usize = 200;
+
+/// The `name <addr>` (or bare `addr`) entries of a header value or list.
+pub fn addresses(value: &str, role: &'static str) -> Vec<Person> {
+    static ENTRY: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(?:([^<>,\[\]]*?)\s*<([^<>\s,]+@[^<>\s,]+)>|([^\s<>,\[\]"']+@[^\s<>,\[\]"']+))"#).unwrap()
+    });
+    ENTRY
+        .captures_iter(value)
+        .filter_map(|c| {
+            let addr =
+                c.get(2).or_else(|| c.get(3))?.as_str().trim_matches(|ch| ch == '"' || ch == '\'').to_lowercase();
+            let name =
+                c.get(1).map(|m| m.as_str().trim().trim_matches(|ch| ch == '"' || ch == '\'').trim()).unwrap_or("");
+            Some(Person { role, name: name.chars().take(100).collect(), addr })
+        })
+        .take(MAX_PEOPLE)
+        .collect()
+}
+
+/// The lines of a YAML list under `key:` (`  - item`), up to the next key.
+fn list_items(front: &str, key: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut inside = false;
+    for line in front.lines() {
+        if inside {
+            match line.trim_start().strip_prefix("- ") {
+                Some(item) if line.starts_with(' ') || line.starts_with('-') => out.push(item.trim().to_string()),
+                _ if line.trim().is_empty() => {}
+                _ => break,
+            }
+        } else if line.strip_prefix(key).is_some_and(|r| r.starts_with(':')) {
+            inside = true;
+            let rest = line[key.len() + 1..].trim();
+            if !rest.is_empty() {
+                out.push(rest.to_string()); // an inline value: `key: [a, b]`
+            }
+        }
+    }
+    out
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -170,6 +224,10 @@ pub fn mail_docs(path: &Path) -> std::io::Result<Vec<Doc>> {
         thread: Some(thread_of(front, path)),
         extra: NOISE_KEYS.replace_all(front, "").trim().to_string(), // who, to whom, attachments: searched, not shown
         text: clean_body(body),
+        people: ["from", "to", "cc"]
+            .into_iter()
+            .flat_map(|role| addresses(note::field(front, role).unwrap_or_default(), role))
+            .collect(),
     }])
 }
 
@@ -191,6 +249,7 @@ pub fn event_docs(path: &Path) -> std::io::Result<Vec<Doc>> {
         extra: NOISE_KEYS.replace_all(front, "").trim().to_string(),
         thread: None,
         text: parts.join("\n"),
+        people: list_items(front, "attendees").iter().flat_map(|a| addresses(a, "attendee")).collect(),
     }])
 }
 
@@ -208,6 +267,7 @@ fn trace_docs(day: &str, groups: Vec<(&str, Vec<String>)>) -> Vec<Doc> {
             text: lines.join("\n"),
             extra: String::new(),
             thread: None,
+            people: Vec::new(),
         })
         .collect()
 }
@@ -287,6 +347,7 @@ fn word(kind: &str, day: &str, text: String) -> Doc {
         text,
         extra: String::new(),
         thread: None,
+        people: Vec::new(),
     }
 }
 
