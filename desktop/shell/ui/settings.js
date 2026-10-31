@@ -202,7 +202,7 @@ $("modelSave").onclick = async () => {
 };
 
 // ---------- sync ----------
-const JOB = { mail: "메일", files: "첨부", calendar: "일정", contacts: "주소록", librarian: "색인", backup: "백업" };
+const JOB = { mail: "메일", files: "첨부", calendar: "일정", contacts: "주소록", librarian: "색인", graph: "그래프", backup: "백업" };
 let polling = null;
 async function loadSync() {
   const st = await invoke("sync_status").catch(() => null);

@@ -520,6 +520,8 @@ pub enum Job {
     Calendar,
     Books,
     Librarian,
+    /// the graph (#45): the next records read by the model, after the index is up to date
+    Graph,
     /// the day's sealed copy of the vault (#16), last
     Backup,
 }
@@ -532,6 +534,7 @@ impl Job {
             Job::Calendar => "calendar",
             Job::Books => "contacts",
             Job::Librarian => "librarian",
+            Job::Graph => "graph",
             Job::Backup => "backup",
         }
     }
@@ -564,12 +567,56 @@ fn jobs(sources: &toml::Table, dry: bool, backup_due: bool) -> Vec<Job> {
         jobs.push(Job::Books);
     }
     if !jobs.is_empty() && !dry {
-        jobs.push(Job::Librarian);
+        jobs.extend([Job::Librarian, Job::Graph]);
     }
     if backup_due && !dry {
         jobs.push(Job::Backup);
     }
     jobs
+}
+
+/// records the model reads in one sync: about ten minutes of four asks at once; a first full run spreads over a day
+pub const GRAPH_LIMIT: usize = 300;
+
+/// The chat model of these places (the home server's when none is set).
+pub fn model_of(paths: &Paths) -> crate::llm::Http {
+    let m = crate::host::Models::load(paths);
+    let d = crate::llm::Http::from_env();
+    crate::llm::Http {
+        url: if m.chat_url.is_empty() { d.url } else { m.chat_url },
+        model: if m.chat_model.is_empty() { d.model } else { m.chat_model },
+    }
+}
+
+/// The graph: the model reads up to `limit` records not read yet (newest first).
+pub fn graph(paths: &Paths, limit: usize, out: Out) -> Outcome {
+    let result = (|| -> anyhow::Result<String> {
+        let mut lib = Librarian::open(paths, None, Duration::from_secs(30))?;
+        let t = Instant::now();
+        let d = crate::librarian::graph::extract(
+            &mut lib,
+            &model_of(paths),
+            &crate::librarian::graph::Run { limit, workers: 4 },
+        )?;
+        Ok(format!(
+            "read {} records ({} failed, tried again next time), {} relations, {} waiting ({:.0}s)",
+            d.asked,
+            d.failed,
+            d.edges,
+            d.left,
+            t.elapsed().as_secs_f64()
+        ))
+    })();
+    match result {
+        Ok(line) => {
+            say(out, line);
+            Outcome::Ok
+        }
+        Err(e) => {
+            problem(out, format!("graph: {e}"));
+            Outcome::Failed
+        }
+    }
 }
 
 /// The day's copy: made, sealed and checked, or why not.
@@ -626,6 +673,7 @@ pub fn sync(paths: &Paths, dry: bool, done: &mut dyn FnMut(Job, Outcome, &[Line]
             Job::Calendar => calendar(paths, dry, &mut out),
             Job::Books => books(paths, dry, &mut out),
             Job::Librarian => librarian(paths, false, &mut out),
+            Job::Graph => graph(paths, GRAPH_LIMIT, &mut out),
             Job::Backup => backup(paths, &mut out),
         }));
         let outcome = ran.unwrap_or_else(|_| {
@@ -651,10 +699,10 @@ mod tests {
     #[test]
     fn the_librarian_indexes_after_collecting_and_a_dry_run_leaves_the_index_alone() {
         let src: toml::Table = "[mail]\nfolders = [\"INBOX\"]\n[calendar]\nurls = [\"x\"]\n".parse().unwrap();
-        assert_eq!(jobs(&src, false, false), [Job::Mail, Job::Files, Job::Calendar, Job::Librarian]);
+        assert_eq!(jobs(&src, false, false), [Job::Mail, Job::Files, Job::Calendar, Job::Librarian, Job::Graph]);
         assert_eq!(jobs(&src, true, true), [Job::Mail, Job::Files, Job::Calendar]);
         let with_books: toml::Table = "[contacts]\nurls = [\"x\"]\n".parse().unwrap();
-        assert_eq!(jobs(&with_books, false, false), [Job::Books, Job::Librarian]);
+        assert_eq!(jobs(&with_books, false, false), [Job::Books, Job::Librarian, Job::Graph]);
         assert!(jobs(&toml::Table::new(), false, false).is_empty());
         assert_eq!(jobs(&src, false, true).last(), Some(&Job::Backup), "the copy holds what was just collected");
         assert_eq!(jobs(&toml::Table::new(), false, true), [Job::Backup], "a vault fed only by devices is copied too");

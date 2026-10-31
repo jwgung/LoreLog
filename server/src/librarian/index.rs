@@ -100,7 +100,7 @@ const SNIPPET_AFTER: usize = 140;
 const WINDOW: i64 = 400;
 /// Bump when the tables or what goes in them change: an index of another version is built again. (6 was the last
 /// Python version; the Rust index is built anew once.)
-pub const SCHEMA_VERSION: &str = "13"; // 8: who each record is with, 9: the phone's address book (#22), 10: its company (#9), 11: attachments and the mail they came with (#15), 12: one matter beyond a thread (#8), 13: the matters the user took part in
+pub const SCHEMA_VERSION: &str = "14"; // 14: the graph (#45), 8: who each record is with, 9: the phone's address book (#22), 10: its company (#9), 11: attachments and the mail they came with (#15), 12: one matter beyond a thread (#8), 13: the matters the user took part in
 
 /// A mail sent to more people than this is a mass mail: not counted as with any one of them.
 pub const MASS_MAIL: i64 = 10;
@@ -130,6 +130,13 @@ create index if not exists contacts_addr on contacts(addr);
 create index if not exists contacts_person on contacts(person);
 create index if not exists people_n on people(n);
 create index if not exists people_addr on people(addr);
+create table if not exists nodes(id text primary key, kind text, name text, aliases text);
+create table if not exists edges(src text, rel text, dst text, label text, since text, until text, n integer, file text, evidence text, origin text);
+create index if not exists edges_src on edges(src, rel);
+create index if not exists edges_dst on edges(dst, rel);
+create index if not exists edges_file on edges(file);
+create table if not exists graph_seen(file text, n integer, sha text);
+create index if not exists graph_seen_file on graph_seen(file);
 ";
 
 /// A matter's (records, first day, last day, latest title).
@@ -294,8 +301,8 @@ pub type AllowSource = Box<dyn FnMut(&Paths) -> BTreeSet<String> + Send>;
 
 pub struct Librarian {
     pub path: PathBuf,
-    paths: Paths,
-    db: Connection,
+    pub(crate) paths: Paths,
+    pub(crate) db: Connection,
     /// Where the allowed senders come from: the user's list. A seam: a test changes it during an update.
     pub allowed: AllowSource,
     /// Called once after a search made its first hit. A seam: a test lands another update there.
@@ -344,7 +351,7 @@ impl Librarian {
 
     /// Drop every table and make them again; the caller holds the write lock.
     fn make_tables(&self) -> rusqlite::Result<()> {
-        for t in ["docs", "files", "convs", "fts", "meta", "people", "contacts"] {
+        for t in ["docs", "files", "convs", "fts", "meta", "people", "contacts", "nodes", "edges", "graph_seen"] {
             self.db.execute_batch(&format!("drop table if exists {t}"))?;
         }
         self.db.execute_batch(TABLES)?;
@@ -352,7 +359,7 @@ impl Librarian {
         Ok(())
     }
 
-    fn in_write<T>(&mut self, f: impl FnOnce(&mut Self) -> anyhow::Result<T>) -> anyhow::Result<T> {
+    pub(crate) fn in_write<T>(&mut self, f: impl FnOnce(&mut Self) -> anyhow::Result<T>) -> anyhow::Result<T> {
         self.db.execute_batch("begin immediate")?;
         match f(self) {
             Ok(v) => {
@@ -382,6 +389,9 @@ impl Librarian {
     }
 
     fn forget(&self, path: &str) -> rusqlite::Result<()> {
+        // what the model said of it goes with it (its answer stays cached: the record may come back)
+        self.db.execute("delete from edges where file = ?", [path])?;
+        self.db.execute("delete from graph_seen where file = ?", [path])?;
         self.db.execute("delete from fts where rowid in (select n from docs where file = ?)", [path])?;
         self.db.execute("delete from people where n in (select n from docs where file = ?)", [path])?;
         self.db.execute("delete from docs where file = ?", [path])?;
@@ -638,6 +648,8 @@ impl Librarian {
             }
             if relink {
                 super::cases::relink(&me.db)?; // in the same write: a search never sees a matter half made
+                super::graph::rules(&me.db)?;
+                super::graph::restore(&me.db, &super::graph::cache_dir(&me.paths))?; // the model's answers kept
             }
             me.db.execute("insert or replace into meta(key, value) values ('policy', ?)", [&policy])?;
             Ok((indexed, skipped, removed.len()))

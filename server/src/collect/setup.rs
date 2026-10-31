@@ -65,7 +65,7 @@ pub fn configured(sources: &toml::Table) -> Vec<&'static str> {
         out.push("contacts");
     }
     if !out.is_empty() {
-        out.push("librarian"); // sync indexes whatever it collected
+        out.extend(["librarian", "graph"]); // sync indexes whatever it collected, then the model reads some of it
     }
     if sources.contains_key("backup") {
         out.push("backup");
