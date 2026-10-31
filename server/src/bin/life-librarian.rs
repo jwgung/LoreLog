@@ -20,7 +20,7 @@ Command line of the librarian (사서): keep the index of every record and searc
   search WORDS... [--limit N]
                          what the librarian finds for these words, across all days
   stats                  how much is indexed
-  graph [--limit N]      the model reads up to N records not read yet (default 300; life sync does this each run) and
+  graph [--limit N]      the model reads up to N records not read yet (default 2000; life sync does this each run) and
                          puts what they say into the graph: who and what they are about, roles, states, documents
   graph show NODE        a node (org:<domain>, person:<address>, case:<n>, …) with its names and relations, each with
                          the key to correct it by (POST /corrections, ref edge:<key>)
