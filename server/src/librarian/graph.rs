@@ -123,6 +123,11 @@ fn domain(addr: &str) -> Option<&str> {
     addr.rsplit_once('@').map(|(_, d)| d).filter(|d| !d.is_empty() && !PUBLIC_MAIL.contains(d))
 }
 
+/// The mail domains of the user's own addresses: their own organization, never the one a name stands for.
+fn own_domains(db: &Connection) -> rusqlite::Result<HashSet<String>> {
+    Ok(mine(db)?.iter().filter_map(|a| domain(a).map(str::to_string)).collect())
+}
+
 fn mine(db: &Connection) -> rusqlite::Result<HashSet<String>> {
     let mut st = db.prepare(
         "select distinct p.addr from people p join docs d on d.n = p.n where d.kind = '보낸 메일' and p.role = 'from'",
@@ -574,6 +579,112 @@ pub fn backlog(db: &Connection) -> rusqlite::Result<usize> {
 
 // ---------- asking the graph (#46) ----------
 
+/// A name as organizations are compared: [`name_key`], without what says it is a company ((주), 주식회사, Inc …), and
+/// with the vowels people spell either way made one (ㅐ/ㅔ, ㅒ/ㅖ, ㅙ/ㅞ/ㅚ): `(주)설악이앤씨` and `설악이엔씨` alike.
+pub fn org_key(name: &str) -> String {
+    let mut k = name_key(name);
+    for mark in [
+        "(주)",
+        "㈜",
+        "주식회사",
+        "(유)",
+        "유한회사",
+        "co.,ltd",
+        "co.ltd",
+        "co,ltd",
+        "ltd",
+        "inc",
+        "corp",
+        "corporation",
+        "company",
+    ] {
+        k = k.replace(mark, "");
+    }
+    k.chars()
+        .map(|c| {
+            let o = c as u32;
+            if !(0xAC00..=0xD7A3).contains(&o) {
+                return c;
+            }
+            let s = o - 0xAC00;
+            let (lead, vowel, tail) = (s / 588, (s % 588) / 28, s % 28);
+            let vowel = match vowel {
+                1 => 5,        // ㅐ -> ㅔ
+                3 => 7,        // ㅒ -> ㅖ
+                10 | 11 => 15, // ㅙ, ㅚ -> ㅞ
+                v => v,
+            };
+            char::from_u32(0xAC00 + lead * 588 + vowel * 28 + tail).unwrap_or(c)
+        })
+        .collect()
+}
+
+/// Short names the model guessed for organizations (org id -> names). Kept apart from the aliases: a guess is no
+/// fact of the records, only a way to understand the user.
+fn short_names(paths: &Paths) -> std::collections::HashMap<String, Vec<String>> {
+    std::fs::read_to_string(cache_dir(paths).join("orgs-short.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+/// Ask the model what the organizations the records know by full name are also called (initials, the name without
+/// its kind, the English name), a batch of those not asked yet with the most records. -> organizations asked about
+pub fn abbreviate_orgs(lib: &Librarian, model: &dyn Model) -> anyhow::Result<usize> {
+    let mut known = short_names(&lib.paths);
+    let rows: Vec<(String, String, String)> = {
+        let mut st = lib.db.prepare(
+            "select n.id, n.name, n.aliases from nodes n where n.kind = 'org' and n.id not like 'org:~%'
+             order by (select count(*) from edges e where e.dst = n.id and e.rel = 'member') desc",
+        )?;
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?
+    };
+    let todo: Vec<(String, Vec<String>)> = rows
+        .into_iter()
+        .filter(|(id, ..)| !known.contains_key(id))
+        .map(|(id, name, a)| {
+            let names: Vec<String> =
+                std::iter::once(name).chain(serde_json::from_str::<Vec<String>>(&a).unwrap_or_default()).collect();
+            (id, names)
+        })
+        .take(40)
+        .collect();
+    if todo.is_empty() {
+        return Ok(0);
+    }
+    let system = "회사·기관마다, 사람들이 대화나 메일에서 줄여 부르는 이름만 적는다: 영문 약자(한국표준협회 → KSA, 한국산업기술기획평가원 → KEIT), 앞뒤를 뗀 이름(한국표준협회 → 표준협회, CJ올리브네트웍스 → CJ올리브, 씨제이올리브), 한글·영어 바꿔 쓴 이름(SL 코퍼레이션 → 에스엘). 이미 적힌 이름은 다시 적지 않는다. 널리 쓰이는 줄임말이 아니면 적지 않는다. JSON 만: {\"a\": {\"org:도메인\": [\"이름\", ...]}}";
+    let user: String = todo.iter().map(|(id, names)| format!("{id}: {}\n", names.join(" / "))).collect();
+    let answer = model.complete(
+        &[json!({"role": "system", "content": system}), json!({"role": "user", "content": user})],
+        Ask::new(0.0, 3000, true, 300),
+    )?;
+    let v = crate::llm::parse_json(&answer)?;
+    for (id, _) in &todo {
+        // the answer's map may be under "a" or not, keyed with or without the "org:"
+        let map = if v.get("a").is_some_and(Value::is_object) { &v["a"] } else { &v };
+        let bare = id.trim_start_matches("org:");
+        let names: Vec<String> = [id.as_str(), bare]
+            .iter()
+            .find_map(|k| map.get(*k).and_then(Value::as_array))
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(|s| s.trim().chars().take(40).collect::<String>())
+                    .filter(|s| s.chars().count() >= 2)
+                    .take(6)
+                    .collect()
+            })
+            .unwrap_or_default();
+        known.insert(id.clone(), names); // asked: an empty list is not asked again
+    }
+    crate::fsutil::ensure_private_dir(&cache_dir(&lib.paths))?;
+    crate::fsutil::write_private_atomic(
+        &cache_dir(&lib.paths).join("orgs-short.json"),
+        json!(known).to_string().as_bytes(),
+    )?;
+    Ok(todo.len())
+}
+
 /// What a question asks the graph: who and what it is about, and how the matters it wants stand.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Ask1 {
@@ -623,30 +734,57 @@ impl Librarian {
     /// The organizations a name is: by name, alias or the address book; else the mail domains of whoever sends the
     /// mails that name it (an organization named only in its subjects, `[한국표준협회]`).
     fn orgs_named(&self, name: &str) -> anyhow::Result<Vec<String>> {
-        let key = name_key(name);
+        let key = org_key(name);
         if key.chars().count() < 2 {
             return Ok(Vec::new());
         }
+        let short = short_names(&self.paths);
         let mut out: Vec<String> = {
             let mut st = self.db.prepare("select id, name, aliases from nodes where kind = 'org'")?;
             st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
                 .filter_map(Result::ok)
-                .filter(|(_, n, a)| {
+                .filter(|(id, n, a)| {
                     let names: Vec<String> = std::iter::once(n.clone())
                         .chain(serde_json::from_str::<Vec<String>>(a).unwrap_or_default())
+                        .chain(short.get(id).cloned().unwrap_or_default())
                         .collect();
-                    names.iter().any(|x| {
-                        let k = name_key(x);
-                        k.contains(&key) || (k.chars().count() >= 3 && key.contains(&k))
-                    })
+                    // the domain's first part is a name too (ksa of ksa.or.kr)
+                    let label = id.strip_prefix("org:").and_then(|d| d.split('.').next()).unwrap_or("");
+                    org_key(label) == key
+                        || names.iter().any(|x| {
+                            let k = org_key(x);
+                            k == key
+                                || k.contains(&key) && key.chars().count() >= 3
+                                || (k.chars().count() >= 3 && key.contains(&k))
+                        })
                 })
                 .map(|(id, _, _)| id)
                 .collect()
         };
-        if out.is_empty() {
-            let expr = super::index::to_query(name);
+        // a name-only organization is the one whose people send the records it is named in
+        let named_only: Vec<String> = out.iter().filter(|id| id.starts_with("org:~")).cloned().collect();
+        for id in named_only {
+            if let Some(d) = self.domain_of_named(&id)? {
+                out.push(format!("org:{d}"));
+            }
+        }
+        out.sort();
+        out.dedup();
+        // no organization with a domain yet: the domain of whoever sends the records that name it, by this name and
+        // by the spellings the records use for it
+        if !out.iter().any(|id| !id.starts_with("org:~")) {
+            let spellings: Vec<String> = std::iter::once(name.to_string())
+                .chain(out.iter().filter_map(|id| self.node(id).map(|n| n.name)))
+                .collect();
+            let expr = spellings
+                .iter()
+                .map(|n| super::index::to_query(n))
+                .filter(|e| !e.is_empty())
+                .collect::<Vec<_>>()
+                .join(" OR ");
             if !expr.is_empty() {
                 let me = mine(&self.db)?;
+                let own = own_domains(&self.db)?;
                 let mut count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
                 let mut st = self.db.prepare(
                     "select p.addr from fts join docs d on d.n = fts.rowid join people p on p.n = d.n
@@ -655,6 +793,7 @@ impl Librarian {
                 for a in st.query_map([&expr], |r| r.get::<_, String>(0))?.flatten() {
                     if !me.contains(&a)
                         && let Some(d) = domain(&a)
+                        && !own.contains(d)
                     {
                         *count.entry(d.to_string()).or_default() += 1;
                     }
@@ -671,6 +810,26 @@ impl Librarian {
             }
         }
         Ok(out)
+    }
+
+    /// The mail domain most of the records naming a name-only organization come from, if most do.
+    fn domain_of_named(&self, id: &str) -> anyhow::Result<Option<String>> {
+        let me = mine(&self.db)?;
+        let own = own_domains(&self.db)?;
+        let mut st = self.db.prepare(
+            "select p.addr from edges e join people p on p.n = e.n where (e.src = ?1 or e.dst = ?1) and p.role = 'from'",
+        )?;
+        let mut count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for a in st.query_map([id], |r| r.get::<_, String>(0))?.flatten() {
+            if !me.contains(&a)
+                && let Some(d) = domain(&a)
+                && !own.contains(d)
+            {
+                *count.entry(d.to_string()).or_default() += 1;
+            }
+        }
+        let total: usize = count.values().sum();
+        Ok(count.into_iter().max_by_key(|(_, n)| *n).filter(|(_, n)| n * 2 > total).map(|(d, _)| d))
     }
 
     /// The nodes of other kinds a name is (people, things, matters by the name the model gave them).

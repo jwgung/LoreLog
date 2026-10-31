@@ -598,6 +598,7 @@ pub fn graph(paths: &Paths, limit: usize, out: Out) -> Outcome {
             crate::librarian::graph::extract(&mut lib, &model, &crate::librarian::graph::Run { limit, workers: 4 })?;
         // the new role and state names, put with the ones of the same meaning (a failure waits for the next run)
         let grouped = crate::librarian::graph::group_labels(&lib, &model).unwrap_or(0);
+        let _ = crate::librarian::graph::abbreviate_orgs(&lib, &model); // short names for the new organizations
         Ok(format!(
             "read {} records ({} failed, tried again next time), {} relations, {} names grouped, {} waiting ({:.0}s)",
             d.asked,
