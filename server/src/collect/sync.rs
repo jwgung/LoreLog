@@ -575,8 +575,11 @@ fn jobs(sources: &toml::Table, dry: bool, backup_due: bool) -> Vec<Job> {
     jobs
 }
 
-/// records the model reads in one sync: about ten minutes of four asks at once; a first full run spreads over a day
-pub const GRAPH_LIMIT: usize = 300;
+/// records the model reads in one sync: under an hour of [`GRAPH_WORKERS`] asks at once, so a first full run of a few
+/// thousand mails is done in a few syncs (a sync still running when the next is due makes that one wait)
+pub const GRAPH_LIMIT: usize = 2000;
+/// asks at once
+pub const GRAPH_WORKERS: usize = 6;
 
 /// The chat model of these places (the home server's when none is set).
 pub fn model_of(paths: &Paths) -> crate::llm::Http {
@@ -590,12 +593,20 @@ pub fn model_of(paths: &Paths) -> crate::llm::Http {
 
 /// The graph: the model reads up to `limit` records not read yet (newest first).
 pub fn graph(paths: &Paths, limit: usize, out: Out) -> Outcome {
+    // one reader at a time: two would ask about the same records and put their edges in twice
+    let Some(_lock) = settings::lock("graph") else {
+        say(out, "the graph is being read by another run; skipping this one");
+        return Outcome::Ok;
+    };
     let result = (|| -> anyhow::Result<String> {
         let mut lib = Librarian::open(paths, None, Duration::from_secs(30))?;
         let t = Instant::now();
         let model = model_of(paths);
-        let d =
-            crate::librarian::graph::extract(&mut lib, &model, &crate::librarian::graph::Run { limit, workers: 4 })?;
+        let d = crate::librarian::graph::extract(
+            &mut lib,
+            &model,
+            &crate::librarian::graph::Run { limit, workers: GRAPH_WORKERS },
+        )?;
         // the new role and state names, put with the ones of the same meaning (a failure waits for the next run)
         let grouped = crate::librarian::graph::group_labels(&lib, &model).unwrap_or(0);
         let _ = crate::librarian::graph::abbreviate_orgs(&lib, &model); // short names for the new organizations
