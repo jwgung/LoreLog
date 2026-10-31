@@ -159,6 +159,8 @@ static ROUTES: LazyLock<Vec<(Method, Regex, Handler)>> = LazyLock::new(|| {
         }),
         (Method::POST, r(&format!("/diary/{DAY}/chat")), chat_post),
         (Method::POST, r("/corrections"), correction_post),
+        (Method::GET, r("/graph/search\\?q=([^&]{0,300})"), graph_search),
+        (Method::GET, r("/graph/node\\?id=([^&]{1,600})"), graph_node),
         (Method::GET, r(&format!("/diary/{DAY}(\\?refresh=1)?")), draft_get),
         (Method::POST, r(&format!("/diary/{DAY}")), diary_post),
         (Method::POST, r("/transcribe"), transcribe),
@@ -310,6 +312,28 @@ fn correction_post(app: &App, req: &Request, _: &regex::Captures) -> Result<Repl
         }
     }
     Ok(Reply::ok(json!({"saved": true, "changed": c.changed()})))
+}
+
+fn decoded(s: &str) -> String {
+    percent_encoding::percent_decode_str(&s.replace('+', " ")).decode_utf8_lossy().into_owned()
+}
+
+/// Nodes of the graph a name finds (the desktop's graph screen).
+fn graph_search(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {
+    let lib = crate::librarian::Librarian::open(&app.paths, None, std::time::Duration::from_secs(5))
+        .map_err(|e| internal(req, &e.to_string()))?;
+    let found = lib.graph_search(&decoded(&caps[1]), 30).map_err(|e| internal(req, &e.to_string()))?;
+    Ok(Reply::ok(json!({"nodes": found})))
+}
+
+/// One node of the graph and its relations, with the keys to correct them by.
+fn graph_node(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {
+    let lib = crate::librarian::Librarian::open(&app.paths, None, std::time::Duration::from_secs(5))
+        .map_err(|e| internal(req, &e.to_string()))?;
+    match lib.graph_node(&decoded(&caps[1])).map_err(|e| internal(req, &e.to_string()))? {
+        Some(v) => Ok(Reply::ok(v)),
+        None => Ok(Reply::new(404, json!({"error": "not found"}))),
+    }
 }
 
 fn draft_get(app: &App, _: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {

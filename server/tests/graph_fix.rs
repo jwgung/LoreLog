@@ -135,3 +135,28 @@ fn a_correction_of_something_not_there_is_refused_and_nothing_is_kept() {
     }
     assert!(!s.paths.raw().join("corrections").exists(), "nothing kept of a refused one");
 }
+
+// ---------- what the desktop's graph screen reads ----------
+
+#[test]
+fn the_screen_finds_nodes_by_any_of_their_names_and_reads_one_with_its_relations_and_keys() {
+    let (s, mut lib) = world();
+    s.post_json("/corrections", &json!({"ref": "org:dekist.com", "wrong": "dekist.com", "right": "디키스트"}));
+    lib.update(false).unwrap();
+    let (status, found) = s.get("/graph/search?q=%EB%94%94%ED%82%A4%EC%8A%A4%ED%8A%B8"); // 디키스트
+    assert_eq!(status, 200, "{found}");
+    assert_eq!(found["nodes"][0]["id"], "org:dekist.com", "{found}");
+    let (status, node) = s.get("/graph/node?id=person%3Aa%40dekist.com");
+    assert_eq!(status, 200, "{node}");
+    assert_eq!(node["node"]["name"], "담당");
+    let edges = node["edges"].as_array().unwrap();
+    let role = edges.iter().find(|e| e["rel"] == "role").unwrap();
+    assert_eq!(role["key"].as_str().unwrap().len(), 16);
+    assert_eq!(role["label"], "고객");
+    assert!(role["other_name"].as_str().is_some_and(|n| !n.is_empty()), "the other end by name: {role}");
+    assert!(role["title"].as_str().unwrap().contains("소음센서"), "the record it came from: {role}");
+    let (_, org) = s.get("/graph/node?id=org%3Adekist.com");
+    assert!(org["node"]["aliases"].as_array().unwrap().iter().any(|a| a == "디키스트"));
+    assert_eq!(s.get("/graph/node?id=org%3Anowhere.example").0, 404);
+    assert_eq!(s.get("/graph/search?q=").1["nodes"], json!([]));
+}
