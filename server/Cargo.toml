@@ -15,10 +15,12 @@ anyhow = "1.0.104"
 axum = "0.8.9"
 axum-server = { version = "0.8.0", features = ["tls-rustls"] }
 base64 = "0.23.1"
+cfb = "0.15"
 chrono = "0.4.45"
 chrono-tz = "0.10.4"
 dirs = "7.0.0"
 encoding_rs = "0.8.42"
+flate2 = "1"
 getrandom = "0.3.4"
 hex = "0.4.3"
 html-escape = "0.3.0"
@@ -26,6 +28,7 @@ imap = { version = "3.0.0-alpha.15", default-features = false, features = ["rust
 indexmap = "2.14.2"
 log = { version = "0.4.34", features = ["std"] }
 mail-parser = { version = "0.11.9", features = ["full_encoding"] }
+pdf-extract = "0.12"
 percent-encoding = "2.3.2"
 regex = "1.13.1"
 roxmltree = "0.21.2"
@@ -42,6 +45,7 @@ toml = "1.1.8"
 unicode-normalization = "0.1.26"
 ureq = { version = "3.5.0", features = ["json"] }
 url = "2.5.8"
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
