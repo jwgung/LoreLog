@@ -212,6 +212,18 @@ pub fn rename(paths: &Paths, id: &str, title: &str) -> std::io::Result<Acted> {
     Ok(Acted::Changed)
 }
 
+/// Take these to-dos out (the vault forgot what they came from, #12).
+pub fn remove(paths: &Paths, ids: &[String]) -> std::io::Result<usize> {
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut d = load(paths);
+    let list = items(&mut d);
+    let before = list.len();
+    list.retain(|i| !i.get("id").and_then(Value::as_str).is_some_and(|id| ids.iter().any(|x| x == id)));
+    let removed = before - list.len();
+    save(paths, &d)?;
+    Ok(removed)
+}
+
 /// The user's own to-do.
 pub fn add_user(paths: &Paths, text: &str, day: &str) -> std::io::Result<bool> {
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());

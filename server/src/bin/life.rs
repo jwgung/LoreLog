@@ -26,6 +26,11 @@ commands:
   export [FILE]     everything the vault holds of your records in one zip, in open formats, to take elsewhere
                     (default: lorelog-export-<date>.zip here); the index, caches and secrets stay behind
   verify FILE       check an export against its list of hashes
+  held              what the vault holds, by source: files, size, first and last day
+  forget SOURCE FROM TO [--yes]
+                    forget those days (YYYY-MM-DD, both included) of a source (mail, calendar, phone, pc, diary,
+                    contacts): records, notes, files nothing else names, untaken to-dos. Without --yes it only says
+                    what would go. Cannot be undone.
 
 First-time setup:
   life add mail            mail account and folders to collect
@@ -291,6 +296,52 @@ fn main() -> ExitCode {
                 }
                 Err(e) => {
                     eprintln!("life: export failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        "held" => {
+            for h in life_server::vault::holdings(&paths) {
+                println!(
+                    "{:<9} {:<14} {:>6} files {:>8} MB  {} ~ {}",
+                    h.source,
+                    h.label,
+                    h.files,
+                    h.bytes / 1_000_000,
+                    h.first,
+                    h.last
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        "forget" => {
+            let (Some(src), Some(from), Some(to)) = (args.get(1), args.get(2), args.get(3)) else {
+                eprintln!("usage: life forget SOURCE FROM TO [--yes]");
+                return ExitCode::from(2);
+            };
+            let span = life_server::vault::Span { from: from.clone(), to: to.clone() };
+            let yes = args.get(4).map(String::as_str) == Some("--yes");
+            let run = if yes {
+                life_server::vault::forget(&paths, src, &span)
+            } else {
+                life_server::vault::plan(&paths, src, &span)
+            };
+            match run {
+                Ok(p) => {
+                    let verb = if yes { "forgot" } else { "would forget (run again with --yes)" };
+                    println!(
+                        "{verb}: {} files ({} MB), {} proposed to-dos",
+                        p.files.len(),
+                        p.bytes / 1_000_000,
+                        p.todos
+                    );
+                    if p.comes_back {
+                        println!("note: this source is read whole again on every sync; what is still there comes back");
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("life: forget failed: {e}");
                     ExitCode::FAILURE
                 }
             }

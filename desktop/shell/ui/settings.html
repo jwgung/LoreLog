@@ -124,6 +124,18 @@
     <div id="syncMsg" class="msg"></div>
     <label class="check plain"><input id="asks" type="checkbox" /> 비서가 사서에게 물은 질문 남기기 (질문·검색어·찾은 기록의 위치만, 90일)</label>
     <p id="asksMsg" class="note">사서가 무엇을 놓치는지 재려고 남깁니다. 기록의 내용과 비서의 답은 남기지 않습니다.</p>
+    <h2>금고가 가진 것</h2>
+    <p class="sub">이 금고가 나에 대해 가진 기록입니다. 출처와 날짜를 골라 지울 수 있습니다. 지우면 원본, 노트, 다른 기록이 쓰지 않는 첨부, 아직 받지 않은 할 일 제안이 함께 지워지고 검색에서도 빠집니다.</p>
+    <table><thead><tr><th>출처</th><th>파일</th><th>크기</th><th>기간</th></tr></thead><tbody id="heldRows"></tbody></table>
+    <div class="row">
+      <select id="forgetSource"></select>
+      <input id="forgetFrom" type="date" /> ~ <input id="forgetTo" type="date" />
+    </div>
+    <div class="row">
+      <button id="forgetPlan" class="secondary">무엇이 지워지는지 보기</button>
+      <button id="forgetGo" class="secondary" disabled>지우기</button>
+    </div>
+    <p id="forgetMsg" class="note"></p>
     <h2>내보내기</h2>
     <p class="sub">이 금고가 가진 기록 전부를 zip 하나로 내려받기 폴더에 담습니다: 원본 기록(NDJSON), 보관한 파일, 노트(Markdown), 할 일, 확인용 해시 목록. 검색 색인과 비밀번호·토큰은 넣지 않습니다.</p>
     <button id="exportVault" class="secondary">금고 내보내기</button>

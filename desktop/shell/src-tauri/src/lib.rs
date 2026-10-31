@@ -215,6 +215,35 @@ async fn export_vault(slot: tauri::State<'_, HostSlot>) -> Result<String, String
     .await
 }
 
+/// What the vault holds, by source (#12).
+#[tauri::command]
+async fn vault_holdings(slot: tauri::State<'_, HostSlot>) -> Result<Vec<life_server::vault::Held>, String> {
+    let paths = host_paths(&slot)?;
+    blocking(move || Ok(life_server::vault::holdings(&paths))).await
+}
+
+/// What forgetting those days of a source would take (deletes nothing).
+#[tauri::command]
+async fn vault_plan(
+    source: String,
+    span: life_server::vault::Span,
+    slot: tauri::State<'_, HostSlot>,
+) -> Result<life_server::vault::Plan, String> {
+    let paths = host_paths(&slot)?;
+    blocking(move || life_server::vault::plan(&paths, &source, &span).map_err(|e| e.to_string())).await
+}
+
+/// Forget those days of a source (the screen asked the user first; cannot be undone).
+#[tauri::command]
+async fn vault_forget(
+    source: String,
+    span: life_server::vault::Span,
+    slot: tauri::State<'_, HostSlot>,
+) -> Result<life_server::vault::Plan, String> {
+    let paths = host_paths(&slot)?;
+    blocking(move || life_server::vault::forget(&paths, &source, &span).map_err(|e| e.to_string())).await
+}
+
 /// Network calls (IMAP, CalDAV) off the UI thread.
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
@@ -436,6 +465,9 @@ pub fn run() {
             models_save,
             asks_get,
             export_vault,
+            vault_holdings,
+            vault_plan,
+            vault_forget,
             asks_set
         ])
         .manage(HostSlot::default())
