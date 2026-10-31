@@ -212,7 +212,14 @@ pub fn run(
                         recall::Named::Ask(_) => Vec::new(),
                     };
                     let r = score(lib, &hits);
-                    let shown = p.people.iter().map(|n| format!("@{n}")).chain(p.words.iter().cloned()).collect();
+                    let shown = p
+                        .people
+                        .iter()
+                        .map(|n| format!("@{n}"))
+                        .chain(p.orgs.iter().map(|o| format!("#{o}")))
+                        .chain(p.things.iter().map(|t| format!("^{t}")))
+                        .chain(p.words.iter().cloned())
+                        .collect();
                     (Some(shown), r)
                 }
             },

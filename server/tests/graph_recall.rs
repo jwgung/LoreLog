@@ -66,6 +66,8 @@ fn reader() -> Arc<FakeModel> {
                 "2026-03-20",
                 "자료 요청"
             ]])
+        } else if text.contains("설악이앤씨") {
+            json!([["(주)설악이앤씨:org", "role", "센서 결선:case", "공급", "2026-05-01", "(주)설악이앤씨"]])
         } else if text.contains("지원사업") {
             json!([["제조 AI 지원사업:case", "about", "공고문:doc", "", "2026-09-29", "지원사업"]])
         } else {
@@ -254,4 +256,58 @@ fn the_words_picked_for_the_graph_are_read_from_the_model() {
             true
         )
     );
+}
+
+// ---------- abbreviations and spellings ----------
+
+#[test]
+fn an_organization_is_found_by_its_domain_by_a_guessed_short_name_and_by_another_spelling() {
+    let (t, mut lib) = world();
+    t.mail("x1.md", "2026-05-01", "담당 <a@seolakenc.com>", ME, "센서 결선도", "(주)설악이앤씨 입니다", false, "[]");
+    lib.update(false).unwrap();
+    graph::extract(&mut lib, reader().as_ref(), &graph::Run { limit: 50, workers: 1 }).unwrap();
+    let orgs = |lib: &mut Librarian, name: &str| -> Vec<String> {
+        titles(&ask(lib, Picked { orgs: vec![name.into()], ..Picked::default() }))
+    };
+    assert!(orgs(&mut lib, "KSA").contains(&"[한국표준협회] 1차 워크숍 계획".to_string()), "the domain is a name");
+    let guess = FakeModel::new(|_| {
+        Ok(r#"{"a": {"org:ksa.or.kr": ["표준협회", "KSA"], "org:seolakenc.com": ["설악ENC"]}}"#.into())
+    });
+    graph::abbreviate_orgs(&lib, guess.as_ref()).unwrap();
+    assert!(orgs(&mut lib, "표준협회").contains(&"[한국표준협회] 1차 워크숍 계획".to_string()), "a short name guessed");
+    assert!(orgs(&mut lib, "설악ENC").contains(&"센서 결선도".to_string()));
+    assert!(orgs(&mut lib, "설악이엔씨").contains(&"센서 결선도".to_string()), "ㅐ and ㅔ alike");
+    assert!(
+        lib.node("org:ksa.or.kr").unwrap().aliases.iter().all(|a| a != "표준협회"),
+        "a guess is no fact of the records"
+    );
+}
+
+#[test]
+fn a_company_named_in_a_colleagues_mail_is_not_the_users_own_company() {
+    let (t, mut lib) = world();
+    t.mail(
+        "c1.md",
+        "2026-05-02",
+        "동료 <col@mine.co.kr>",
+        ME,
+        "협력사 소개",
+        "다른상사 담당 홍길동 소개드립니다",
+        false,
+        "[]",
+    );
+    t.mail("c2.md", "2026-05-03", "동료 <col@mine.co.kr>", ME, "점심 메뉴", "오늘 점심", false, "[]");
+    lib.update(false).unwrap();
+    let m = FakeModel::new(|msgs| {
+        let text = msgs.last().unwrap()["content"].as_str().unwrap_or("");
+        let r = if text.contains("다른상사") {
+            json!([["홍길동:person", "member", "다른상사:org", "", "2026-05-02", "다른상사 담당 홍길동"]])
+        } else {
+            json!([])
+        };
+        Ok(json!({"r": r}).to_string())
+    });
+    graph::extract(&mut lib, m.as_ref(), &graph::Run { limit: 50, workers: 1 }).unwrap();
+    let got = titles(&ask(&mut lib, Picked { orgs: vec!["다른상사".into()], ..Picked::default() }));
+    assert!(!got.contains(&"점심 메뉴".to_string()), "the user's own company is not the one named: {got:?}");
 }
