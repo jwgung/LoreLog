@@ -100,7 +100,7 @@ const SNIPPET_AFTER: usize = 140;
 const WINDOW: i64 = 400;
 /// Bump when the tables or what goes in them change: an index of another version is built again. (6 was the last
 /// Python version; the Rust index is built anew once.)
-pub const SCHEMA_VERSION: &str = "8"; // 8: who each record is with (#22)
+pub const SCHEMA_VERSION: &str = "9"; // 8: who each record is with, 9: the phone's address book (#22)
 
 /// A mail sent to more people than this is a mass mail: not counted as with any one of them.
 pub const MASS_MAIL: i64 = 10;
@@ -115,6 +115,9 @@ create table if not exists convs(file text, seq integer, id text, data text);
 create index if not exists convs_file on convs(file);
 create virtual table if not exists fts using fts5(terms);
 create table if not exists people(n integer, role text, name text, key text, addr text);
+create table if not exists contacts(person integer, name text, key text, addr text);
+create index if not exists contacts_addr on contacts(addr);
+create index if not exists contacts_person on contacts(person);
 create index if not exists people_n on people(n);
 create index if not exists people_addr on people(addr);
 ";
@@ -324,7 +327,7 @@ impl Librarian {
 
     /// Drop every table and make them again; the caller holds the write lock.
     fn make_tables(&self) -> rusqlite::Result<()> {
-        for t in ["docs", "files", "convs", "fts", "meta", "people"] {
+        for t in ["docs", "files", "convs", "fts", "meta", "people", "contacts"] {
             self.db.execute_batch(&format!("drop table if exists {t}"))?;
         }
         self.db.execute_batch(TABLES)?;
@@ -566,13 +569,33 @@ impl Librarian {
                 me.make_tables()?;
             }
             let (dirty, removed) = me.changes(&mut found, &policy)?;
+            let book_removed = removed.iter().any(|p: &String| {
+                me.db
+                    .query_row("select kind from files where path = ?", [p], |r| r.get::<_, String>(0))
+                    .is_ok_and(|k| k == Kind::Contacts.name())
+            });
             for path in &removed {
                 me.forget(path)?;
                 me.db.execute("delete from files where path = ?", [path])?;
             }
             let (mut indexed, mut skipped) = me.update_phone(&found, &dirty, &allow)?;
+            let books: Vec<&(String, Kind, PathBuf)> = found.iter().filter(|f| f.1 == Kind::Contacts).collect();
+            let book_changed = book_removed || books.iter().any(|f| dirty.contains(&f.0));
+            if book_changed {
+                let files: Vec<PathBuf> = books.iter().map(|f| f.2.clone()).collect();
+                me.keep_contacts(&records::newest_contacts(&files))?;
+                for (path, _, p) in &books {
+                    if let Ok(s) = stamp(p) {
+                        me.db.execute(
+                            "insert or replace into files(path, kind, stamp) values (?, 'contacts', ?)",
+                            params![path, s],
+                        )?;
+                    }
+                }
+                indexed += books.iter().filter(|f| dirty.contains(&f.0)).count();
+            }
             for (path, kind, p) in &found {
-                if *kind == Kind::Lorelog || !dirty.contains(path) {
+                if *kind == Kind::Lorelog || *kind == Kind::Contacts || !dirty.contains(path) {
                     continue;
                 }
                 match stamp(p).map_err(anyhow::Error::from).and_then(|s| records::docs(*kind, p).map(|d| (s, d))) {
@@ -719,6 +742,18 @@ impl Librarian {
         Ok(())
     }
 
+    /// Replace the address book: one person per contact, each address of it a row.
+    fn keep_contacts(&self, contacts: &[records::Contact]) -> rusqlite::Result<()> {
+        self.db.execute("delete from contacts", [])?;
+        let mut st = self.db.prepare_cached("insert into contacts(person, name, key, addr) values (?, ?, ?, ?)")?;
+        for (i, c) in contacts.iter().enumerate() {
+            for a in &c.addrs {
+                st.execute(params![i as i64, c.name, name_key(&c.name), a])?;
+            }
+        }
+        Ok(())
+    }
+
     /// The people whose name contains `name` (compared as [`name_key`]), one per address: a name alone never makes
     /// two addresses one person. The user's own addresses (the senders of their sent mail) are left out. Most
     /// records first.
@@ -731,7 +766,13 @@ impl Librarian {
         let sql = format!(
             "with mine as (select distinct p.addr from people p join docs d on d.n = p.n where d.kind = '보낸 메일' and p.role = 'from'),
                   mass as (select n from people where role in ('to', 'cc') group by n having count(*) > {MASS_MAIL}),
-                  who as (select distinct addr from people where instr(key, ?) > 0 and addr not in (select addr from mine))
+                  named as (select addr from people where instr(key, ?1) > 0
+                            union select addr from contacts where instr(key, ?1) > 0),
+                  -- an address book entry puts its addresses together: one of them named, all of them asked about
+                  who as (select addr from named
+                          union select c2.addr from contacts c1 join contacts c2 on c2.person = c1.person
+                                where c1.addr in (select addr from named)
+                          except select addr from mine)
              select p.addr, p.name, count(distinct p.n), max(d.day) from people p join docs d on d.n = p.n
              where p.addr in (select addr from who) and p.n not in (select n from mass)
              group by p.addr, p.name"
@@ -744,6 +785,10 @@ impl Librarian {
         // address -> (names with how often each was used, records, latest day)
         type Seen = (Vec<(i64, String)>, i64, String);
         let mut by: BTreeMap<String, Seen> = BTreeMap::new();
+        let book: Vec<(String, String)> = {
+            let mut st = self.db.prepare("select addr, name from contacts where name != ''")?;
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+        };
         for (addr, name, count, last) in rows {
             let e = by.entry(addr).or_insert_with(|| (Vec::new(), 0, String::new()));
             if !name.is_empty() {
@@ -754,10 +799,17 @@ impl Librarian {
                 e.2 = last;
             }
         }
+        for (addr, name) in book {
+            if let Some(e) = by.get_mut(&addr) {
+                e.0.push((i64::MAX, name)); // the name the user saved them under comes first
+            }
+        }
         let mut out: Vec<Someone> = by
             .into_iter()
             .map(|(addr, (mut names, count, last))| {
                 names.sort_by_key(|n| std::cmp::Reverse(n.0));
+                let mut seen = HashSet::new();
+                names.retain(|n| seen.insert(n.1.clone()));
                 Someone { addr, names: names.into_iter().map(|(_, n)| n).collect(), count, last }
             })
             .collect();

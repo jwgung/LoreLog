@@ -38,6 +38,7 @@
 | **알림** | NotificationListenerService | 받은 알림 제목·본문 |
 | **통화·문자** | CallLog · SMS · 연락처 | 누구와 언제(번호→이름 매칭) |
 | **캘린더** | CalendarContract (+참석자) | 폰의 모든 캘린더(로컬 포함) |
+| **주소록** | ContactsContract | 이름·메일·전화·회사만(사진·메모·생일은 안 보냄). 바뀌었을 때만 목록 전체를 서버의 `/ingest/contacts`로. 사서가 사람을 알아보는 데 쓴다. https나 tailnet 주소로만 보낸다. 수집 항목에서 끄면 빈 목록을 한 번 보내 서버에서도 빠진다 |
 
 ## 음성
 
