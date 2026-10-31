@@ -24,12 +24,15 @@ import java.util.Locale
 import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
-/** 사용자가 정한 시각에 "오늘의 일기" 알림을 띄우고 다음 날 같은 시각으로 다시 예약한다. */
+/**
+ * 비서가 먼저 말을 거는 자리(#13): 하루 한 번, 사용자가 정한 저녁 시각에 그날 정리를 미리 만들어 두고
+ * 오늘의 질문 하나를 알림으로 건넨다. 누르면 정리와 질문이 바로 보인다. 다음 날 같은 시각으로 다시 예약한다.
+ */
 class DiaryReminderWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         if (DiaryPrefs.enabled(applicationContext)) {
-            val ready = runCatching { prepareDraft(applicationContext) }.getOrDefault(false)
-            notifyNow(applicationContext, ready)
+            val draft = runCatching { prepareDraft(applicationContext) }.getOrNull()
+            notifyNow(applicationContext, draft)
         }
         schedule(applicationContext)
         return Result.success()
@@ -61,22 +64,30 @@ class DiaryReminderWorker(context: Context, params: WorkerParameters) : Coroutin
             WorkManager.getInstance(context).enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.REPLACE, request)
         }
 
-        /** 알림을 누르는 순간 바로 보이도록 오늘 정리를 미리 만들어 둔다. 서버에 못 닿으면 false. */
-        private suspend fun prepareDraft(context: Context): Boolean {
+        /** 알림을 누르는 순간 바로 보이도록 오늘 정리를 미리 만들어 둔다. 서버에 못 닿으면 null. */
+        private suspend fun prepareDraft(context: Context): DiaryClient.Draft.Ready? {
             LogRepository.pushToHttp(context)
             LogRepository.pushConversations(context)
             val day = DiaryPrefs.diaryDay()
             repeat(60) {
-                when (DiaryClient.fetchDraft(context, day)) {
-                    is DiaryClient.Draft.Ready -> return true
-                    is DiaryClient.Draft.Error -> return false
+                when (val d = DiaryClient.fetchDraft(context, day)) {
+                    is DiaryClient.Draft.Ready -> return d
+                    is DiaryClient.Draft.Error -> return null
                     DiaryClient.Draft.Generating -> delay(3_000)
                 }
             }
-            return false
+            return null
         }
 
-        private fun notifyNow(context: Context, ready: Boolean) {
+        /** 알림의 말: 정리가 됐으면 오늘의 질문(없으면 정리를 봐 달라는 말), 아니면 같이 돌아보자는 말. */
+        fun words(draft: DiaryClient.Draft.Ready?): String = when {
+            draft == null -> "오늘 하루를 같이 돌아볼까요?"
+            draft.question.isNotBlank() -> draft.question.trim()
+            draft.summary.isEmpty() -> "오늘은 기록이 거의 없어요. 남기고 싶은 말이 있으면 들려주세요."
+            else -> "오늘 하루, 이렇게 정리해 봤어요. 틀린 데가 있으면 알려 주세요."
+        }
+
+        private fun notifyNow(context: Context, draft: DiaryClient.Draft.Ready?) {
             val nm = context.getSystemService(NotificationManager::class.java)
             nm.createNotificationChannel(NotificationChannel(CHANNEL, "일기 알림", NotificationManager.IMPORTANCE_DEFAULT))
             val open = PendingIntent.getActivity(
@@ -89,10 +100,8 @@ class DiaryReminderWorker(context: Context, params: WorkerParameters) : Coroutin
             val n = NotificationCompat.Builder(context, CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat_logging)
                 .setContentTitle("오늘의 일기")
-                .setContentText(
-                    if (ready) "오늘 하루, 이렇게 정리해 봤어요. 틀린 데가 있으면 알려 주세요."
-                    else "오늘 하루를 같이 돌아볼까요?",
-                )
+                .setContentText(words(draft))
+                .setStyle(NotificationCompat.BigTextStyle().bigText(words(draft)))
                 .setContentIntent(open)
                 .setAutoCancel(true)
                 .build()

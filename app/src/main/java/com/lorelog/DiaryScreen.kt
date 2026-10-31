@@ -153,7 +153,7 @@ internal fun DiaryReminderSettings() {
     // 알림을 켜는 순간 권한이 없으면 묻는다(없으면 알림이 조용히 사라진다).
     fun ensurePermission() { if (!notifGranted()) askNotif.launch(Manifest.permission.POST_NOTIFICATIONS) }
     Text(
-        "정한 시각에 하루를 정리한 초안을 확인하고 한마디 남기라는 알림을 보냅니다.",
+        "하루 한 번, 정한 시각에 비서가 그날 정리를 미리 만들어 두고 오늘의 질문 하나로 먼저 말을 겁니다. 끄면 먼저 말을 걸지 않아요.",
         style = MaterialTheme.typography.bodySmall,
     )
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
