@@ -141,6 +141,34 @@ fn the_model_is_asked_once_per_record_and_a_rebuild_or_a_forgotten_record_needs_
 }
 
 #[test]
+fn a_run_cut_off_midway_keeps_what_the_model_already_answered() {
+    let t = world();
+    let mut lib = t.lib();
+    // the model answers the first mails, then the run is cut off (the machine goes down) on the last one
+    let answer =
+        json!({"r": [["설비 점검:case", "role", "김담당 <kim@client.co.kr>:person", "고객", "2026-03-03", "견적"]]});
+    let cut_off = FakeModel::new(move |msgs| {
+        if msgs[1]["content"].as_str().unwrap_or("").contains("점검 견적서 보내 주세요") {
+            panic!("cut off")
+        }
+        Ok(answer.to_string())
+    });
+    let gone = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        graph::extract(&mut lib, cut_off.as_ref(), &graph::Run { limit: 10, workers: 1 })
+    }));
+    assert!(gone.is_err());
+    drop(lib);
+    let mut lib = t.lib();
+    let again = model(json!([]));
+    graph::extract(&mut lib, again.as_ref(), &graph::Run { limit: 10, workers: 1 }).unwrap();
+    let asked: Vec<String> =
+        again.asked.lock().unwrap().iter().map(|m| m[1]["content"].as_str().unwrap_or("").to_string()).collect();
+    assert_eq!(asked.len(), 1, "only the mail the run was cut off on is asked again: {asked:?}");
+    assert!(asked[0].contains("점검 견적서 보내 주세요"));
+    assert!(!lib.edges_from("person:kim@client.co.kr", Some("role")).is_empty(), "the kept answers are in the graph");
+}
+
+#[test]
 fn a_model_that_fails_or_says_nonsense_leaves_the_graph_as_it_was() {
     let t = world();
     let mut lib = t.lib();
