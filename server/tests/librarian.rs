@@ -884,3 +884,39 @@ fn a_matter_follows_new_mail_and_is_kept_apart_again_when_a_mail_goes() {
     t.update();
     assert_eq!(t.find("건문구")[0]["count"], 1);
 }
+
+#[test]
+fn a_matter_the_user_took_part_in_comes_before_a_notice_that_says_more_of_the_words() {
+    let mut t = T::new();
+    for i in 0..3 {
+        t.mail_full(
+            &format!("n{i}.md"),
+            &format!("소식지 {i}호: 순위문구담비 순위문구담비 안내"),
+            "순위문구담비 순위문구담비 순위문구담비 소식",
+            &format!("2026-07-0{}", i + 1),
+            None,
+            "[]",
+            "",
+            "소식 <news@y.com>",
+        );
+    }
+    t.mail_full(
+        "q1.md",
+        "순위문구담비 문의",
+        "순위문구담비 가능할까요",
+        "2026-07-05",
+        None,
+        "[]",
+        "",
+        "거래처 <b@y.com>",
+    );
+    sent(&t, "q2.md", "RE: 순위문구담비 문의", "2026-07-06", "거래처 <b@y.com>");
+    t.update();
+    let hits = t.find("순위문구담비");
+    assert_eq!(
+        hits[0]["count"],
+        2,
+        "the user's own matter first: {:?}",
+        hits.iter().map(|h| &h["title"]).collect::<Vec<_>>()
+    );
+}

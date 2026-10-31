@@ -142,11 +142,24 @@ pub fn relink(db: &Connection) -> rusqlite::Result<usize> {
             joined.insert(f.n);
         }
     }
+    // the matters the user took part in: one of their own mails is in it
+    let kinds: HashMap<i64, bool> = {
+        let mut st = db.prepare("select n, kind = '보낸 메일' from docs where source = 'mail'")?;
+        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+    };
+    let mut theirs: HashSet<i64> = HashSet::new();
+    for r in recs.iter().filter(|r| kinds.get(&r.n) == Some(&true)) {
+        theirs.insert(sets.root(r.n));
+    }
     let mut written = 0;
-    let mut st = db.prepare_cached("update docs set case_key = ? where n = ? and case_key is not ?")?;
+    let mut st = db.prepare_cached(
+        "update docs set case_key = ?1, involved = ?2 where n = ?3 and (case_key is not ?1 or involved is not ?2)",
+    )?;
     for r in &recs {
-        let key = (r.source == "mail" || joined.contains(&r.n)).then(|| format!("case:{}", sets.root(r.n)));
-        written += st.execute(params![key, r.n, key])?;
+        let linked = r.source == "mail" || joined.contains(&r.n);
+        let key = linked.then(|| format!("case:{}", sets.root(r.n)));
+        let involved = linked && theirs.contains(&sets.root(r.n));
+        written += st.execute(params![key, involved as i64, r.n])?;
     }
     Ok(written)
 }
