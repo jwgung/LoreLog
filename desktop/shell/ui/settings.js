@@ -230,6 +230,14 @@ $("syncNow").onclick = async () => {
   catch (e) { say("syncMsg", String(e), false); }
 };
 
+$("exportVault").onclick = async () => {
+  $("exportVault").disabled = true;
+  $("exportMsg").textContent = "내보내는 중… 기록이 많으면 몇 분 걸립니다.";
+  try { $("exportMsg").textContent = "내보냈습니다: " + await invoke("export_vault"); }
+  catch (e) { $("exportMsg").textContent = String(e); }
+  finally { $("exportVault").disabled = false; }
+};
+
 $("asks").onchange = async () => {
   const on = $("asks").checked;
   try { await invoke("asks_set", { on }); $("asksMsg").textContent = on ? "질문을 남깁니다." : "질문을 남기지 않습니다. 이미 남은 것은 90일이 지나면 지워집니다."; }

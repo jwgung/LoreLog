@@ -23,6 +23,9 @@ commands:
   sync [--dry-run]  collect from every configured source; last, the librarian's index is brought up to date
                     (`life-librarian update`; not with --dry-run). Mail is capped at 300 messages per run.
   status            last run and result per source
+  export [FILE]     everything the vault holds of your records in one zip, in open formats, to take elsewhere
+                    (default: lorelog-export-<date>.zip here); the index, caches and secrets stay behind
+  verify FILE       check an export against its list of hashes
 
 First-time setup:
   life add mail            mail account and folders to collect
@@ -276,6 +279,38 @@ fn main() -> ExitCode {
             }
         },
         "status" => status(&paths),
+        "export" => {
+            let out = args
+                .get(1)
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| format!("lorelog-export-{}.zip", chrono::Local::now().format("%Y-%m-%d")).into());
+            match life_server::export::export(&paths, &out) {
+                Ok(r) => {
+                    println!("exported {} files ({} MB) to {}", r.files, r.bytes / 1_000_000, out.display());
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("life: export failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        "verify" => match args.get(1) {
+            Some(f) => match life_server::export::verify(std::path::Path::new(f)) {
+                Ok(n) => {
+                    println!("ok: {n} files match their hashes");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("life: verify failed: {e}");
+                    ExitCode::FAILURE
+                }
+            },
+            None => {
+                eprintln!("usage: life verify FILE");
+                ExitCode::from(2)
+            }
+        },
         "" | "-h" | "--help" => {
             println!("{}", help(&paths));
             ExitCode::SUCCESS
