@@ -63,6 +63,12 @@ pub fn render(hits: &[Value]) -> String {
             let title = plain(&s("title"));
             let body: String = plain(&s("snippet")).chars().take(MAX_SNIPPET).collect();
             let count = h.get("count").and_then(Value::as_u64).unwrap_or(1);
+            // what the graph knows of the matter (#46): how it stands, who has what part in it
+            let known: String = [("state", "마지막 상태"), ("roles", "역할")]
+                .iter()
+                .filter_map(|(k, name)| h.get(*k).and_then(Value::as_str).map(|v| format!(" · {name}: {}", plain(v))))
+                .collect();
+            let title = format!("{title}{known}");
             if count > 1 {
                 // one matter (a thread, mails of one subject, their meetings): when it started comes first, then how
                 // it stands (its last record)
@@ -197,9 +203,11 @@ pub const WORDS_SYSTEM: &str = r#"사용자의 말에서 지난 기록을 찾아
 - 같은 것을 메일에서 흔히 부르는 다른 말이 있으면 하나 더 넣는다(예: "거래처" → "거래처", "고객사").
 - 낱말은 모두 합쳐 8개를 넘지 않는다.
 - 사람에 대해 묻거나 사람이 나오면 그 사람의 이름을 people 에 넣는다. 이름만 넣고 호칭과 직급(님, 씨, 수석, 팀장, 대리 …)은 뺀다. 회사 이름은 people 이 아니라 words 에 넣는다. 그 사람과의 일 가운데 특정한 주제를 물으면 그 주제 낱말만 words 에 넣고, 그 사람과 뭐가 있었는지만 물으면 words 는 비운다.
+- 회사·기관 이름은 words 와 함께 orgs 에도 넣는다. 제품·시스템·사업·과제처럼 일의 대상이 되는 이름은 things 에도 넣는다.
+- 그 일에서 누가 맡은 역할(담당, 고객, 지원자, 면접관 …)을 물으면 roles 에, 일의 단계·상태(견적, 계약, 면접, 배포 …)를 물으면 states 에, "~했는데 ~안 된" 처럼 뒤따르지 않은 단계는 absent 에 넣는다. 누가 달라고 했는데 아직 안 보낸 것을 물으면 open_requests 를 true 로 한다. 해당 없으면 비운다.
 - 기분이나 상태만 말하거나, 인사나 맞장구면 search 를 false 로 한다.
 - [앞 대화]가 있으면 비서가 같은 이름의 사람 가운데 누구인지 되물은 것이다. 사용자의 답이 후보 하나를 가리키면(순서, 회사, 날짜, 제목으로) search 를 true 로 하고 그 후보의 <주소>를 꺾쇠까지 그대로 people 에 넣는다. words 에는 처음 물은 말의 주제 낱말을 다시 넣는다. 답이 후보를 가리키지 않으면 사용자의 답만 보고 고른다.
-JSON 으로만 답한다: {"search": true 또는 false, "people": ["이름", ...], "words": ["낱말", ...]}"#;
+JSON 으로만 답한다: {"search": true 또는 false, "people": ["이름", ...], "words": ["낱말", ...], "orgs": [], "things": [], "roles": [], "states": [], "absent": [], "open_requests": false}"#;
 
 pub const LIMIT: usize = 8;
 pub const MAX_WORDS: usize = 10;
@@ -216,6 +224,29 @@ pub const WORDS_TIMEOUT_S: u64 = 15;
 pub struct Picked {
     pub people: Vec<String>,
     pub words: Vec<String>,
+    /// for the graph (#46): organizations, other things (a product, a system, a programme), the roles someone has in
+    /// the matters, how the matters stand and what did not follow, and whether requests not answered are asked for
+    pub orgs: Vec<String>,
+    pub things: Vec<String>,
+    pub roles: Vec<String>,
+    pub states: Vec<String>,
+    pub absent: Vec<String>,
+    pub open_requests: bool,
+}
+
+impl Picked {
+    /// What it asks the graph.
+    pub fn graph(&self) -> crate::librarian::graph::Ask1 {
+        crate::librarian::graph::Ask1 {
+            people: self.people.clone(),
+            orgs: self.orgs.clone(),
+            things: self.things.clone(),
+            roles: self.roles.clone(),
+            states: self.states.clone(),
+            absent: self.absent.clone(),
+            open_requests: self.open_requests,
+        }
+    }
 }
 
 /// Words to search for this message, or None if there is nothing to look up. A model that cannot pick: the user's words.
@@ -244,7 +275,7 @@ pub fn pick(model: &dyn crate::llm::Model, message: &str, before: Option<&str>) 
     let picked = model
         .complete(&messages, crate::llm::Ask::new(0.0, 120, true, WORDS_TIMEOUT_S))
         .and_then(|t| crate::llm::parse_json(&t));
-    let Ok(d) = picked else { return Some(Picked { people: Vec::new(), words: vec![message.to_string()] }) };
+    let Ok(d) = picked else { return Some(Picked { words: vec![message.to_string()], ..Picked::default() }) };
     if !matches!(d.get("search"), Some(Value::Bool(true))) && d.get("search").and_then(Value::as_str) != Some("true") {
         return None;
     }
@@ -261,8 +292,21 @@ pub fn pick(model: &dyn crate::llm::Model, message: &str, before: Option<&str>) 
             .unwrap_or_default()
     };
     let (people, words) = (list("people"), list("words"));
-    let words = if words.is_empty() && people.is_empty() { vec![message.to_string()] } else { words };
-    Some(Picked { people, words })
+    let mut p = Picked {
+        people,
+        words,
+        orgs: list("orgs"),
+        things: list("things"),
+        roles: list("roles"),
+        states: list("states"),
+        absent: list("absent"),
+        open_requests: matches!(d.get("open_requests"), Some(Value::Bool(true)))
+            || d.get("open_requests").and_then(Value::as_str) == Some("true"),
+    };
+    if p.words.is_empty() && p.people.is_empty() && p.graph().is_empty() {
+        p.words = vec![message.to_string()];
+    }
+    Some(p)
 }
 
 /// What recall needs of an index (the librarian; a test can stand in).
@@ -274,18 +318,53 @@ pub trait Index {
     fn with_names(&mut self, _names: &[String], _q: &str, _day: &str, _limit: usize) -> anyhow::Result<Option<Named>> {
         Ok(None)
     }
+    /// The matters the graph finds for what was picked (#46), as hits; none when it asks nothing of the graph.
+    fn with_graph(&mut self, _p: &Picked, _day: &str, _limit: usize) -> anyhow::Result<Vec<Value>> {
+        Ok(Vec::new())
+    }
+}
+
+/// The graph's hits and the words' hits, one hit per matter, up to `limit`: first the matters both found (in the
+/// words' order), then the others taking turns, the words' first. The words alone find a known matter well (#7); the
+/// graph adds what they cannot (an organization by its domain, a role, a state), and its noise does not push them out.
+fn merged(graph: Vec<Value>, words: Vec<Value>, limit: usize) -> Vec<Value> {
+    let key = |h: &Value| h.get("case").and_then(Value::as_str).map(str::to_string);
+    let in_graph: std::collections::HashSet<String> = graph.iter().filter_map(key).collect();
+    let in_words: std::collections::HashSet<String> = words.iter().filter_map(key).collect();
+    let (both, words_only): (Vec<Value>, Vec<Value>) =
+        words.into_iter().partition(|h| key(h).is_some_and(|k| in_graph.contains(&k)));
+    let graph_only: Vec<Value> = graph.into_iter().filter(|h| key(h).is_none_or(|k| !in_words.contains(&k))).collect();
+    let mut out = both;
+    let (mut w, mut g) = (words_only.into_iter(), graph_only.into_iter());
+    loop {
+        let (a, b) = (w.next(), g.next());
+        if a.is_none() && b.is_none() {
+            break;
+        }
+        out.extend(a);
+        out.extend(b);
+    }
+    out.truncate(limit);
+    out
 }
 
 /// Look up what was picked: by person when a name is someone in the records, else by the words (the names counted
 /// as words then, so "OO 건" still finds the records that name them).
 pub fn lookup(lib: &mut dyn Index, p: &Picked, limit: usize, day: &str, said: &[String]) -> anyhow::Result<Named> {
+    // the graph, when the question asks it something (a graph not there yet, or broken, is no answer: the words are)
+    let graph = if p.graph().is_empty() { Vec::new() } else { lib.with_graph(p, day, limit).unwrap_or_default() };
     if !p.people.is_empty()
         && let Some(named) = lib.with_names(&p.people, &p.words.join(" "), day, limit)?
     {
-        return Ok(named);
+        return Ok(match named {
+            Named::Hits(h) => Named::Hits(merged(graph, h, limit)),
+            Named::Ask(c) if graph.is_empty() => Named::Ask(c),
+            Named::Ask(_) => Named::Hits(graph), // the role told who was meant
+        });
     }
-    let all: Vec<String> = p.people.iter().chain(&p.words).cloned().collect();
-    lib.search(&all.join(" "), limit, day, said).map(Named::Hits)
+    let all: Vec<String> = p.people.iter().chain(&p.orgs).chain(&p.things).chain(&p.words).cloned().collect();
+    let words = if all.is_empty() { Vec::new() } else { lib.search(&all.join(" "), limit, day, said)? };
+    Ok(Named::Hits(merged(graph, words, limit)))
 }
 
 impl crate::librarian::Librarian {
@@ -301,6 +380,10 @@ impl crate::librarian::Librarian {
 }
 
 impl Index for crate::librarian::Librarian {
+    fn with_graph(&mut self, p: &Picked, day: &str, limit: usize) -> anyhow::Result<Vec<Value>> {
+        self.graph_lookup(&p.graph(), day, limit)
+    }
+
     fn update(&mut self) -> anyhow::Result<crate::librarian::Report> {
         crate::librarian::Librarian::update(self, false)
     }

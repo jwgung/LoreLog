@@ -774,7 +774,7 @@ impl Librarian {
     /// One hit as the assistant gets it: `{source, kind, day, title, snippet, ref, count, first, last, latest}` (`latest`:
     /// the title of the matter's last record, when it has more than one). A file that came with a mail is shown as that
     /// mail's (its title and where it is), the file named: what the user knows is the mail.
-    fn hit(&self, n: i64, case: Option<&str>, q: &str) -> anyhow::Result<Value> {
+    pub(crate) fn hit(&self, n: i64, case: Option<&str>, q: &str) -> anyhow::Result<Value> {
         let (source, kind, day, mut title, text, mut file, mid): (
             String,
             String,
@@ -813,6 +813,9 @@ impl Librarian {
             && let Some(l) = latest
         {
             hit["latest"] = json!(l);
+        }
+        if let Some(c) = case {
+            hit["case"] = json!(c); // the matter: one hit each, wherever it was found (#46)
         }
         Ok(hit)
     }

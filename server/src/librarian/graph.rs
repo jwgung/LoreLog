@@ -571,3 +571,385 @@ impl Librarian {
 pub fn backlog(db: &Connection) -> rusqlite::Result<usize> {
     Ok(candidates(db)?.len())
 }
+
+// ---------- asking the graph (#46) ----------
+
+/// What a question asks the graph: who and what it is about, and how the matters it wants stand.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Ask1 {
+    pub people: Vec<String>,
+    pub orgs: Vec<String>,
+    pub things: Vec<String>,
+    /// roles someone has in the matters (the record's words, or a group of them)
+    pub roles: Vec<String>,
+    /// how the matters stand (their last state)
+    pub states: Vec<String>,
+    /// what did not follow that state
+    pub absent: Vec<String>,
+    /// requests the user has not answered
+    pub open_requests: bool,
+}
+
+impl Ask1 {
+    pub fn is_empty(&self) -> bool {
+        self.orgs.is_empty()
+            && self.things.is_empty()
+            && self.roles.is_empty()
+            && self.states.is_empty()
+            && self.absent.is_empty()
+            && !self.open_requests
+    }
+}
+
+fn label_fits(label: &str, words: &[String], groups: &std::collections::HashMap<String, String>) -> bool {
+    let l = name_key(label);
+    let g = groups.get(label).map(|g| name_key(g)).unwrap_or_default();
+    words
+        .iter()
+        .map(|w| name_key(w))
+        .filter(|w| !w.is_empty())
+        .any(|w| l.contains(&w) || (!g.is_empty() && g.contains(&w)))
+}
+
+/// The groups of the labels the model gave (label -> group), kept by [`group_labels`].
+fn groups(paths: &Paths) -> std::collections::HashMap<String, String> {
+    std::fs::read_to_string(cache_dir(paths).join("labels.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+impl Librarian {
+    /// The organizations a name is: by name, alias or the address book; else the mail domains of whoever sends the
+    /// mails that name it (an organization named only in its subjects, `[한국표준협회]`).
+    fn orgs_named(&self, name: &str) -> anyhow::Result<Vec<String>> {
+        let key = name_key(name);
+        if key.chars().count() < 2 {
+            return Ok(Vec::new());
+        }
+        let mut out: Vec<String> = {
+            let mut st = self.db.prepare("select id, name, aliases from nodes where kind = 'org'")?;
+            st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+                .filter_map(Result::ok)
+                .filter(|(_, n, a)| {
+                    let names: Vec<String> = std::iter::once(n.clone())
+                        .chain(serde_json::from_str::<Vec<String>>(a).unwrap_or_default())
+                        .collect();
+                    names.iter().any(|x| {
+                        let k = name_key(x);
+                        k.contains(&key) || (k.chars().count() >= 3 && key.contains(&k))
+                    })
+                })
+                .map(|(id, _, _)| id)
+                .collect()
+        };
+        if out.is_empty() {
+            let expr = super::index::to_query(name);
+            if !expr.is_empty() {
+                let me = mine(&self.db)?;
+                let mut count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+                let mut st = self.db.prepare(
+                    "select p.addr from fts join docs d on d.n = fts.rowid join people p on p.n = d.n
+                     where fts match ? and d.source = 'mail' and p.role = 'from' limit 200",
+                )?;
+                for a in st.query_map([&expr], |r| r.get::<_, String>(0))?.flatten() {
+                    if !me.contains(&a)
+                        && let Some(d) = domain(&a)
+                    {
+                        *count.entry(d.to_string()).or_default() += 1;
+                    }
+                }
+                let total: usize = count.values().sum();
+                let mut by: Vec<(String, usize)> = count.into_iter().collect();
+                by.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+                // the domain most of them come from (not one sender among many)
+                if let Some((d, n)) = by.first()
+                    && n * 2 >= total
+                {
+                    out.push(format!("org:{d}"));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The nodes of other kinds a name is (people, things, matters by the name the model gave them).
+    fn nodes_named(&self, name: &str, kinds: &[&str]) -> anyhow::Result<Vec<String>> {
+        let key = name_key(name);
+        if key.chars().count() < 2 {
+            return Ok(Vec::new());
+        }
+        let mut st = self.db.prepare("select id, kind, name, aliases from nodes")?;
+        let rows: Vec<(String, String, String, String)> =
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows
+            .into_iter()
+            .filter(|(_, k, n, a)| {
+                kinds.contains(&k.as_str())
+                    && std::iter::once(n.clone())
+                        .chain(serde_json::from_str::<Vec<String>>(a).unwrap_or_default())
+                        .any(|x| name_key(&x).contains(&key))
+            })
+            .map(|(id, ..)| id)
+            .collect())
+    }
+
+    /// The matters with any of these nodes: the records of an organization's people (by mail domain) and of a person,
+    /// and the matters an edge joins them to.
+    fn cases_with(&self, ids: &[String]) -> anyhow::Result<HashSet<String>> {
+        let mut out = HashSet::new();
+        for id in ids {
+            let mut add = |sql: &str, arg: &str| -> anyhow::Result<()> {
+                let mut st = self.db.prepare(sql)?;
+                for c in st.query_map([arg], |r| r.get::<_, Option<String>>(0))?.flatten().flatten() {
+                    out.insert(c);
+                }
+                Ok(())
+            };
+            let mass =
+                format!("(select n from people where role in ('to', 'cc') group by n having count(*) > {MASS_MAIL})");
+            if let Some(d) = id.strip_prefix("org:").filter(|d| !d.starts_with('~')) {
+                add(
+                    &format!(
+                        "select distinct d.case_key from people p join docs d on d.n = p.n
+                         where p.addr like '%@' || ? and d.n not in {mass}"
+                    ),
+                    d,
+                )?;
+            }
+            if let Some(a) = id.strip_prefix("person:").filter(|a| !a.starts_with('~')) {
+                add(
+                    &format!(
+                        "select distinct d.case_key from people p join docs d on d.n = p.n where p.addr = ? and d.n not in {mass}"
+                    ),
+                    a,
+                )?;
+            }
+            add("select ?1 where ?1 like 'case:%'", id)?;
+            add("select dst from edges where src = ? and dst like 'case:%'", id)?;
+            add("select src from edges where dst = ? and src like 'case:%'", id)?;
+            // a name-only organization: the matters of its people
+            add(
+                "select e2.dst from edges e1 join edges e2 on e2.src = e1.src and e2.dst like 'case:%' where e1.dst = ? and e1.rel = 'member'",
+                id,
+            )?;
+        }
+        Ok(out)
+    }
+
+    /// The last state of a matter up to `day`: (label, since).
+    fn last_state(&self, case: &str, day: &str) -> Option<(String, String)> {
+        self.db
+            .query_row(
+                "select label, since from edges where src = ? and rel = 'state' and since <= ? order by since desc limit 1",
+                params![case, day],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .ok()
+            .flatten()
+    }
+
+    /// The matters this question asks the graph about, as hits: the user's own and the latest first.
+    pub fn graph_lookup(&mut self, a: &Ask1, day: &str, limit: usize) -> anyhow::Result<Vec<Value>> {
+        if a.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.ready_graph()?;
+        let groups = groups(&self.paths);
+        // who and what
+        let mut ids = Vec::new();
+        for o in &a.orgs {
+            ids.extend(self.orgs_named(o)?);
+        }
+        for t in &a.things {
+            ids.extend(self.nodes_named(t, &["thing", "case", "doc"])?);
+        }
+        let mut person_ids = Vec::new();
+        for p in &a.people {
+            person_ids.extend(self.nodes_named(p, &["person"])?);
+        }
+        // a name asked about that is no one in the graph finds nothing (not every matter)
+        let named = !(a.orgs.is_empty() && a.things.is_empty() && (a.people.is_empty() || !a.roles.is_empty()));
+        let entity: Option<HashSet<String>> =
+            if named { Some(self.cases_with(&[ids, person_ids.clone()].concat())?) } else { None };
+        // by role
+        let role: Option<HashSet<String>> = if a.roles.is_empty() {
+            None
+        } else {
+            let mut st = self.db.prepare("select src, dst, label from edges where rel = 'role'")?;
+            let rows: Vec<(String, String, String)> =
+                st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+            Some(
+                rows.into_iter()
+                    .filter(|(src, _, l)| {
+                        label_fits(l, &a.roles, &groups) && (person_ids.is_empty() || person_ids.contains(src))
+                    })
+                    .map(|(_, dst, _)| dst)
+                    .collect(),
+            )
+        };
+        let mut cases: HashSet<String> = match (entity, role) {
+            (Some(e), Some(r)) => {
+                let both: HashSet<String> = e.intersection(&r).cloned().collect();
+                if both.is_empty() { r } else { both }
+            }
+            (Some(e), None) => e,
+            (None, Some(r)) => r,
+            (None, None) => {
+                let mut st =
+                    self.db.prepare("select distinct src from edges where rel = 'state' and src like 'case:%'")?;
+                let mut all: HashSet<String> = st.query_map([], |r| r.get::<_, String>(0))?.flatten().collect();
+                if a.open_requests {
+                    let mut st = self.db.prepare(
+                        "select distinct d.case_key from edges e join docs d on d.n = e.n where e.rel = 'requested' and d.case_key is not null",
+                    )?;
+                    all.extend(st.query_map([], |r| r.get::<_, String>(0))?.flatten());
+                }
+                all
+            }
+        };
+        // how they stand
+        if !a.states.is_empty() || !a.absent.is_empty() {
+            cases.retain(|c| {
+                let mut st = match self.db.prepare(
+                    "select label, since from edges where src = ? and rel = 'state' and since <= ? order by since",
+                ) {
+                    Ok(st) => st,
+                    Err(_) => return false,
+                };
+                let states: Vec<(String, String)> = st
+                    .query_map(params![c, day], |r| Ok((r.get(0)?, r.get(1)?)))
+                    .map(|r| r.flatten().collect())
+                    .unwrap_or_default();
+                let hit = if a.states.is_empty() {
+                    Some(0)
+                } else {
+                    states.iter().rposition(|(l, _)| label_fits(l, &a.states, &groups))
+                };
+                match hit {
+                    None => false,
+                    Some(i) => {
+                        !states[i..].iter().any(|(l, _)| !a.absent.is_empty() && label_fits(l, &a.absent, &groups))
+                    }
+                }
+            });
+        }
+        // requests the user did not answer: no mail of theirs in the matter after the request
+        if a.open_requests {
+            let me = mine(&self.db)?;
+            cases.retain(|c| {
+                let asked: Option<String> = self
+                    .db
+                    .query_row(
+                        "select max(e.since) from edges e join docs d on d.n = e.n where e.rel = 'requested' and d.case_key = ?",
+                        [c],
+                        |r| r.get(0),
+                    )
+                    .ok()
+                    .flatten();
+                let Some(asked) = asked else { return false };
+                let answered: i64 = self
+                    .db
+                    .query_row(
+                        "select count(*) from docs where case_key = ? and kind = '보낸 메일' and day >= ?",
+                        params![c, asked],
+                        |r| r.get(0),
+                    )
+                    .unwrap_or(0);
+                answered == 0 && !me.is_empty()
+            });
+        }
+        // the user's own and the latest first, up to the day asked
+        let mut ranked: Vec<(i64, String, i64, String)> = Vec::new();
+        for c in &cases {
+            let row: Option<(i64, String, i64)> = self
+                .db
+                .query_row(
+                    "select coalesce(max(involved), 0), max(day), (select n from docs where case_key = ?1 and day <= ?2 and source != 'file' order by day desc, n desc limit 1)
+                     from docs where case_key = ?1 and day <= ?2",
+                    params![c, day],
+                    |r| Ok((r.get(0)?, r.get::<_, Option<String>>(1)?.unwrap_or_default(), r.get::<_, Option<i64>>(2)?.unwrap_or(0))),
+                )
+                .optional()?;
+            if let Some((inv, last, n)) = row
+                && n > 0
+            {
+                ranked.push((inv, last, n, c.clone()));
+            }
+        }
+        ranked.sort_by(|x, y| y.0.cmp(&x.0).then(y.1.cmp(&x.1)));
+        let words: Vec<String> = a.orgs.iter().chain(&a.things).chain(&a.people).chain(&a.roles).cloned().collect();
+        let mut out = Vec::new();
+        for (_, _, n, c) in ranked.into_iter().take(limit) {
+            let mut h = self.hit(n, Some(&c), &words.join(" "))?;
+            if let Some((l, since)) = self.last_state(&c, day) {
+                h["state"] = json!(format!("{l} ({since})"));
+            }
+            let roles: Vec<String> = {
+                let mut st = self.db.prepare(
+                    "select coalesce(n.name, e.src), e.label from edges e left join nodes n on n.id = e.src where e.dst = ? and e.rel = 'role' limit 4",
+                )?;
+                st.query_map([&c], |r| Ok(format!("{} {}", r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+                    .flatten()
+                    .collect()
+            };
+            if !roles.is_empty() {
+                h["roles"] = json!(roles.join(", "));
+            }
+            out.push(h);
+        }
+        Ok(out)
+    }
+
+    fn ready_graph(&self) -> anyhow::Result<()> {
+        let v: Option<String> =
+            self.db.query_row("select value from meta where key = 'schema'", [], |r| r.get(0)).optional()?;
+        if v.as_deref() != Some(super::index::SCHEMA_VERSION) {
+            anyhow::bail!(super::index::Outdated("index of another version: run update".into()));
+        }
+        Ok(())
+    }
+}
+
+/// Put the labels the model gave roles and states not grouped yet into groups of the same meaning (the model
+/// decides; titles and ranks are no roles). Kept beside the answers. -> labels grouped
+pub fn group_labels(lib: &Librarian, model: &dyn Model) -> anyhow::Result<usize> {
+    let path = cache_dir(&lib.paths).join("labels.json");
+    let mut known: std::collections::HashMap<String, String> = groups(&lib.paths);
+    let mut st = lib.db.prepare("select distinct label from edges where rel in ('role', 'state') and label != ''")?;
+    let new: Vec<String> =
+        st.query_map([], |r| r.get::<_, String>(0))?.flatten().filter(|l| !known.contains_key(l)).take(300).collect();
+    if new.is_empty() {
+        return Ok(0);
+    }
+    let names: Vec<&String> = {
+        let mut v: Vec<&String> = known.values().collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    let system = "업무 기록에서 뽑은 역할·상태 이름들을 같은 뜻끼리 묶는다. 이미 있는 묶음 이름이 맞으면 그것을 쓰고, 없으면 짧은 새 이름을 만든다. 뜻이 다르면 묶지 않는다. JSON 만: {\"g\": {\"원래 이름\": \"묶음 이름\"}}";
+    let user = format!(
+        "[이미 있는 묶음]\n{}\n\n[묶을 이름]\n{}",
+        names.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n"),
+        new.join("\n")
+    );
+    let answer = model.complete(
+        &[json!({"role": "system", "content": system}), json!({"role": "user", "content": user})],
+        Ask::new(0.0, 4000, true, 300),
+    )?;
+    let v = crate::llm::parse_json(&answer)?;
+    let mut n = 0;
+    if let Some(m) = v.get("g").and_then(Value::as_object) {
+        for l in &new {
+            if let Some(g) = m.get(l).and_then(Value::as_str).filter(|g| !g.trim().is_empty()) {
+                known.insert(l.clone(), g.trim().chars().take(40).collect());
+                n += 1;
+            }
+        }
+    }
+    crate::fsutil::ensure_private_dir(&cache_dir(&lib.paths))?;
+    crate::fsutil::write_private_atomic(&path, json!(known).to_string().as_bytes())?;
+    Ok(n)
+}
