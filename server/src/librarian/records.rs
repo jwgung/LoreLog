@@ -117,6 +117,8 @@ pub enum Kind {
     Lorelog,
     Pc,
     Diary,
+    /// the phone's address book, sent as whole lists (`snap`): no documents, only who is who (#22)
+    Contacts,
 }
 
 impl Kind {
@@ -127,6 +129,7 @@ impl Kind {
             Kind::Lorelog => "lorelog",
             Kind::Pc => "pc",
             Kind::Diary => "diary",
+            Kind::Contacts => "contacts",
         }
     }
 }
@@ -136,7 +139,9 @@ pub fn sources(paths: &Paths) -> Vec<(Kind, PathBuf)> {
     let mut out: Vec<(Kind, PathBuf)> =
         files_like_nested(&paths.vault.join("Mail"), "", ".md").into_iter().map(|p| (Kind::Mail, p)).collect();
     out.extend(files_like(&paths.vault.join("Events"), "", ".md").into_iter().map(|p| (Kind::Event, p)));
-    for (kind, name) in [(Kind::Lorelog, "lorelog"), (Kind::Pc, "pc"), (Kind::Diary, "diary")] {
+    for (kind, name) in
+        [(Kind::Lorelog, "lorelog"), (Kind::Pc, "pc"), (Kind::Diary, "diary"), (Kind::Contacts, "contacts")]
+    {
         out.extend(files_like(&paths.raw().join(name), "", ".ndjson").into_iter().map(|p| (kind, p)));
     }
     out.sort_by(|a, b| a.1.cmp(&b.1));
@@ -438,12 +443,79 @@ pub fn docs(kind: Kind, path: &Path) -> anyhow::Result<Vec<Doc>> {
         Kind::Event => event_docs(path)?,
         Kind::Pc => pc_docs(path)?,
         Kind::Diary | Kind::Lorelog => word_docs(path)?,
+        Kind::Contacts => Vec::new(), // read as a whole by the index (only the newest list counts)
     })
+}
+
+/// One entry of an address book: the names and the addresses it puts together (mail in lower case, phone numbers as
+/// `tel:<digits>`, a leading 82 read as 0).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Contact {
+    pub name: String,
+    pub addrs: Vec<String>,
+}
+
+/// A phone number as compared: its digits, `+82 10-1234-5678` and `010 1234 5678` alike.
+pub fn phone_key(number: &str) -> Option<String> {
+    let digits: String = number.chars().filter(char::is_ascii_digit).collect();
+    let digits = match digits.strip_prefix("82") {
+        Some(rest) if number.trim_start().starts_with('+') || digits.len() >= 11 => format!("0{rest}"),
+        _ => digits,
+    };
+    (digits.len() >= 7).then(|| format!("tel:{digits}"))
+}
+
+/// The newest address book in these files: the lines of the highest `snap` (a list sent whole; an older list, or a
+/// contact deleted since, does not count).
+pub fn newest_contacts(files: &[PathBuf]) -> Vec<Contact> {
+    let mut lines: Vec<Value> = Vec::new();
+    for f in files {
+        let Ok(text) = std::fs::read_to_string(f) else { continue };
+        lines.extend(
+            text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).filter(|v| v["type"] == "contact"),
+        );
+    }
+    let Some(snap) = lines.iter().filter_map(|v| as_int(v.get("snap"))).max() else { return Vec::new() };
+    let list = |v: &Value, k: &str| -> Vec<String> {
+        v.get(k)
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+            .unwrap_or_default()
+    };
+    lines
+        .iter()
+        .filter(|v| as_int(v.get("snap")) == Some(snap))
+        .map(|v| {
+            let mut addrs: Vec<String> =
+                list(v, "emails").iter().map(|e| e.trim().to_lowercase()).filter(|e| e.contains('@')).collect();
+            addrs.extend(list(v, "phones").iter().filter_map(|p| phone_key(p)));
+            addrs.dedup();
+            Contact { name: pystr(v.get("name")).trim().chars().take(100).collect(), addrs }
+        })
+        .filter(|c| !c.addrs.is_empty())
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn phone_numbers_compare_by_their_digits() {
+        assert_eq!(phone_key("+82 10-1234-5678").as_deref(), Some("tel:01012345678"));
+        assert_eq!(phone_key("010 1234 5678").as_deref(), Some("tel:01012345678"));
+        assert_eq!(phone_key("02-123-4567").as_deref(), Some("tel:021234567"));
+        assert_eq!(phone_key("1234"), None, "too short to be someone's number");
+    }
+
+    #[test]
+    fn mail_headers_and_attendees_give_names_and_addresses() {
+        let p = addresses(r#"["김영희 수석" <YH@x.com>, bare@y.com, 이름만]"#, "to");
+        let got: Vec<(&str, &str)> = p.iter().map(|p| (p.name.as_str(), p.addr.as_str())).collect();
+        assert_eq!(got, [("김영희 수석", "yh@x.com"), ("", "bare@y.com")]);
+        let front = "title: 회의\nattendees:\n  - 영희 <b@x.com>\n  - c@x.com\nlocation: 2층\n";
+        assert_eq!(list_items(front, "attendees"), ["영희 <b@x.com>", "c@x.com"]);
+    }
     use serde_json::json;
 
     #[test]

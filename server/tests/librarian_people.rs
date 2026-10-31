@@ -146,6 +146,39 @@ fn a_rebuild_leaves_no_one_on_a_record_they_were_not_on() {
     assert_eq!(titles(&lib.with_people(&["yh@x.com".to_string()], "", "2026-12-31", 8).unwrap()), after);
 }
 
+#[test]
+fn a_phone_contact_joins_its_addresses_and_gives_a_name_to_a_bare_address() {
+    let t = world();
+    t.mail("k1.md", "2026-07-02", "yh.kim@corp.com", ME, "", "계약서", "계약서 보냅니다", "[]", false);
+    t.mail("k2.md", "2026-07-03", "old.friend@x.com", ME, "", "안부", "잘 지내?", "[]", false);
+    let dir = t.p.raw().join("contacts");
+    fs::create_dir_all(&dir).unwrap();
+    let line = |snap: i64, name: &str, emails: &[&str]| {
+        serde_json::json!({"type": "contact", "snap": snap, "ts": snap, "name": name, "emails": emails, "phones": ["010-1234-5678"]})
+            .to_string()
+    };
+    fs::write(
+        dir.join("2026-07-01.ndjson"),
+        format!(
+            "{}\n{}\n",
+            line(1, "김영희 거래처", &["YH@x.com", "yh.kim@corp.com"]),
+            line(1, "옛친구", &["old.friend@x.com"])
+        ),
+    )
+    .unwrap();
+    fs::write(
+        dir.join("2026-07-05.ndjson"),
+        format!("{}\n", line(2, "김영희 거래처", &["YH@x.com", "yh.kim@corp.com"])),
+    )
+    .unwrap();
+    let mut lib = t.lib();
+    let addrs: Vec<String> = lib.people("영희").unwrap().into_iter().map(|p| p.addr).collect();
+    assert!(addrs.contains(&"yh.kim@corp.com".to_string()), "named only in the contact: {addrs:?}");
+    assert!(lib.people("옛친구").unwrap().is_empty(), "deleted from the phone since: only the newest list counts");
+    let hits = titles(&lib.with_people(&addrs, "", "2026-12-31", 8).unwrap());
+    assert!(hits.contains(&"계약서".to_string()) && hits.contains(&"회의록".to_string()), "{hits:?}");
+}
+
 struct Picks(&'static str);
 impl Model for Picks {
     fn complete(&self, _: &[Value], _: Ask) -> anyhow::Result<String> {
