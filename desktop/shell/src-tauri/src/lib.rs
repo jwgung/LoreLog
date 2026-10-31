@@ -202,6 +202,19 @@ fn asks_set(on: bool, slot: tauri::State<HostSlot>) -> Result<(), String> {
     life_server::librarian::asks::set_enabled(&host_paths(&slot)?, on)
 }
 
+/// Take the vault out (#11): one zip in the user's Downloads folder (else their home). -> where it is
+#[tauri::command]
+async fn export_vault(slot: tauri::State<'_, HostSlot>) -> Result<String, String> {
+    let paths = host_paths(&slot)?;
+    blocking(move || {
+        let dir = dirs::download_dir().or_else(dirs::home_dir).ok_or("내려받기 폴더를 찾지 못했습니다")?;
+        let out = dir.join(format!("lorelog-export-{}.zip", chrono::Local::now().format("%Y-%m-%d-%H%M")));
+        life_server::export::export(&paths, &out).map_err(|e| format!("내보내지 못했습니다: {e}"))?;
+        Ok(out.to_string_lossy().into_owned())
+    })
+    .await
+}
+
 /// Network calls (IMAP, CalDAV) off the UI thread.
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
     tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
@@ -422,6 +435,7 @@ pub fn run() {
             models_get,
             models_save,
             asks_get,
+            export_vault,
             asks_set
         ])
         .manage(HostSlot::default())

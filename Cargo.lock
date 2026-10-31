@@ -2512,6 +2512,7 @@ name = "life-desktop"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "dirs 7.0.0",
  "if-addrs",
  "life-agent",
  "life-server",

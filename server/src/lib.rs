@@ -4,6 +4,7 @@ pub mod assistant;
 pub mod collect;
 pub mod config;
 pub mod errors;
+pub mod export;
 pub mod filestore;
 pub mod fsutil;
 pub mod host;
