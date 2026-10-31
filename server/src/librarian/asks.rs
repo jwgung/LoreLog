@@ -40,6 +40,8 @@ pub enum Found {
     /// the model chose not to look anything up
     NotSearched,
     Hits(Vec<String>),
+    /// the name was more than one person: the assistant asked which one
+    Asked,
     /// the index could not be read
     Unavailable,
 }
@@ -53,6 +55,7 @@ pub fn record(paths: &Paths, day: &str, q: &str, words: Option<&[String]>, found
         Found::NotSearched => ("not searched", &[]),
         Found::Hits(r) if r.is_empty() => ("nothing", &[]),
         Found::Hits(r) => ("found", r.as_slice()),
+        Found::Asked => ("asked back", &[]),
         Found::Unavailable => ("unavailable", &[]),
     };
     let refs: Vec<String> = refs.iter().map(|r| ref_id(r)).collect();

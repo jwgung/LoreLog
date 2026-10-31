@@ -68,7 +68,8 @@ impl T {
     }
 
     fn talk(&self, m: &FakeModel, message: &str, day: &str, wrong: Option<&str>) -> String {
-        let recall = |msg: &str, d: &str, said: &[String]| recall::find(&self.p, m, msg, d, said);
+        let recall =
+            |msg: &str, d: &str, said: &[String], before: Option<&str>| recall::find(&self.p, m, msg, d, said, before);
         chat_reply(&self.p, m, &recall, day, message, wrong).unwrap()
     }
 }

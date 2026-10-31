@@ -85,6 +85,104 @@ pub fn quote(section: &str) -> String {
     format!("{HEADER}\n{section}\n{QUOTE_END}")
 }
 
+// ---------- people of one name (#9) ----------
+
+/// The first line of the section when the name is more than one person and nothing in the question tells them apart.
+pub const NAMESAKES: &str =
+    "- (같은 이름의 사람이 여럿이라 누구인지 모른다. 아래 후보 가운데 누구인지 한 번만 되묻는다)";
+/// the start of each candidate's line (the chat keeps these lines to read the user's answer by)
+pub const CANDIDATE: &str = "  - ";
+pub const MAX_CANDIDATES: usize = 3;
+/// a second person of the name with at least this share of the first one's records: which one is meant is not known.
+/// Below it, the name is the first one's (and the few records of the other are shown with theirs, as before).
+pub const NAMESAKE_SHARE: f64 = 0.2;
+
+/// Someone the user may have meant: what tells them apart.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Candidate {
+    pub addr: String,
+    pub name: String,
+    /// from the address book, else the domain of the mail address; may be empty (a phone number)
+    pub company: String,
+    pub last: String,
+    /// the subject of the latest mail or event with them
+    pub subject: String,
+}
+
+/// What a name found: the records with them, or the people to ask about.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Named {
+    Hits(Vec<Value>),
+    Ask(Vec<Candidate>),
+}
+
+pub fn render_candidates(cands: &[Candidate]) -> String {
+    // one line each: a name or a subject with a line break in it must not make a candidate line of its own
+    let one = |s: &str| plain(s).split_whitespace().collect::<Vec<_>>().join(" ");
+    let lines = cands.iter().map(|c| {
+        let mut parts = vec![format!("{} <{}>", one(&c.name), one(&c.addr))];
+        if !c.company.is_empty() {
+            parts.push(one(&c.company));
+        }
+        parts.push(format!("마지막 기록 {}", one(&c.last)));
+        if !c.subject.is_empty() {
+            parts.push(format!("최근 \"{}\"", one(&c.subject).chars().take(80).collect::<String>()));
+        }
+        format!("{CANDIDATE}{}", parts.join(" · "))
+    });
+    std::iter::once(NAMESAKES.to_string()).chain(lines).collect::<Vec<_>>().join("\n")
+}
+
+/// The candidates of a section that asks back (None for any other section): the lines the user answers.
+pub fn asked_candidates(section: &str) -> Option<String> {
+    let mut lines = section.lines().skip_while(|l| *l != NAMESAKES);
+    lines.next()?;
+    Some(lines.take_while(|l| l.starts_with(CANDIDATE)).collect::<Vec<_>>().join("\n"))
+}
+
+/// An address written in place of a name (`<a@b.com>`, `김영희 <a@b.com>`, `tel:0101234`): the one the user chose.
+fn chosen_address(name: &str) -> Option<String> {
+    let inner = match (name.find('<'), name.rfind('>')) {
+        (Some(a), Some(b)) if a < b => &name[a + 1..b],
+        _ => name,
+    };
+    let a = inner.trim().to_lowercase();
+    ((a.contains('@') || a.starts_with("tel:")) && a.len() <= 254).then_some(a)
+}
+
+/// One person among those of a name: the addresses an address book entry puts together are one.
+#[derive(Clone, Debug)]
+struct Who {
+    addrs: Vec<String>,
+    first: crate::librarian::index::Someone,
+    count: i64,
+    last: String,
+}
+
+fn group(found: Vec<crate::librarian::index::Someone>) -> Vec<Who> {
+    let mut out: Vec<Who> = Vec::new();
+    for s in found {
+        match out.iter_mut().find(|w| s.book.is_some() && w.first.book == s.book) {
+            Some(w) => {
+                w.addrs.push(s.addr.clone());
+                w.count += s.count;
+                if s.last > w.last {
+                    w.last = s.last.clone();
+                }
+            }
+            None => out.push(Who { addrs: vec![s.addr.clone()], count: s.count, last: s.last.clone(), first: s }),
+        }
+    }
+    out
+}
+
+fn company(s: &crate::librarian::index::Someone) -> String {
+    if !s.company.is_empty() {
+        return s.company.clone();
+    }
+    s.addr.split_once('@').map(|(_, d)| d.to_string()).unwrap_or_default()
+}
+
 // ---------- asking the librarian ----------
 
 pub const WORDS_SYSTEM: &str = r#"사용자의 말에서 지난 기록을 찾아볼 검색어를 고른다. 기록은 메일·일정·메신저이고, 한글과 영어가 섞여 있다.
@@ -96,6 +194,7 @@ pub const WORDS_SYSTEM: &str = r#"사용자의 말에서 지난 기록을 찾아
 - 낱말은 모두 합쳐 8개를 넘지 않는다.
 - 사람에 대해 묻거나 사람이 나오면 그 사람의 이름을 people 에 넣는다. 이름만 넣고 호칭과 직급(님, 씨, 수석, 팀장, 대리 …)은 뺀다. 회사 이름은 people 이 아니라 words 에 넣는다. 그 사람과의 일 가운데 특정한 주제를 물으면 그 주제 낱말만 words 에 넣고, 그 사람과 뭐가 있었는지만 물으면 words 는 비운다.
 - 기분이나 상태만 말하거나, 인사나 맞장구면 search 를 false 로 한다.
+- [앞 대화]가 있으면 비서가 같은 이름의 사람 가운데 누구인지 되물은 것이다. 사용자의 답이 후보 하나를 가리키면(순서, 회사, 날짜, 제목으로) search 를 true 로 하고 그 후보의 <주소>를 꺾쇠까지 그대로 people 에 넣는다. words 에는 처음 물은 말의 주제 낱말을 다시 넣는다. 답이 후보를 가리키지 않으면 사용자의 답만 보고 고른다.
 JSON 으로만 답한다: {"search": true 또는 false, "people": ["이름", ...], "words": ["낱말", ...]}"#;
 
 pub const LIMIT: usize = 8;
@@ -118,7 +217,7 @@ pub struct Picked {
 /// Words to search for this message, or None if there is nothing to look up. A model that cannot pick: the user's words.
 /// (The names the model picks are counted as words here; [`pick`] keeps them apart.)
 pub fn search_words(model: &dyn crate::llm::Model, message: &str) -> Option<Vec<String>> {
-    pick(model, message).map(|p| {
+    pick(model, message, None).map(|p| {
         let mut all = p.people;
         all.extend(p.words);
         all.truncate(MAX_WORDS);
@@ -128,13 +227,18 @@ pub fn search_words(model: &dyn crate::llm::Model, message: &str) -> Option<Vec<
 
 /// The people and words to look up for this message, or None if there is nothing to look up. A model that cannot
 /// pick: the user's words. With no people, there is always a word (the message itself if the model gave none).
-pub fn pick(model: &dyn crate::llm::Model, message: &str) -> Option<Picked> {
+/// `before`: the turn that asked back (the question, the reply and its candidates), when the message answers it.
+pub fn pick(model: &dyn crate::llm::Model, message: &str, before: Option<&str>) -> Option<Picked> {
+    let said = match before {
+        Some(b) => format!("[앞 대화]\n{}\n\n[사용자의 답]\n{message}", plain(b)),
+        None => message.to_string(),
+    };
     let messages = [
         serde_json::json!({"role": "system", "content": WORDS_SYSTEM}),
-        serde_json::json!({"role": "user", "content": message}),
+        serde_json::json!({"role": "user", "content": said}),
     ];
     let picked = model
-        .complete(&messages, crate::llm::Ask::new(0.0, 80, true, WORDS_TIMEOUT_S))
+        .complete(&messages, crate::llm::Ask::new(0.0, 120, true, WORDS_TIMEOUT_S))
         .and_then(|t| crate::llm::parse_json(&t));
     let Ok(d) = picked else { return Some(Picked { people: Vec::new(), words: vec![message.to_string()] }) };
     if !matches!(d.get("search"), Some(Value::Bool(true))) && d.get("search").and_then(Value::as_str) != Some("true") {
@@ -161,29 +265,35 @@ pub fn pick(model: &dyn crate::llm::Model, message: &str) -> Option<Picked> {
 pub trait Index {
     fn update(&mut self) -> anyhow::Result<crate::librarian::Report>;
     fn search(&mut self, q: &str, limit: usize, day: &str, said: &[String]) -> anyhow::Result<Vec<Value>>;
-    /// What was with the people of these names up to `day` (narrowed by `q`), or None when no name is someone in the
-    /// records.
-    fn with_names(
-        &mut self,
-        _names: &[String],
-        _q: &str,
-        _day: &str,
-        _limit: usize,
-    ) -> anyhow::Result<Option<Vec<Value>>> {
+    /// What was with the people of these names up to `day` (narrowed by `q`), the people to ask about when the name is
+    /// more than one and nothing tells them apart, or None when no name is someone in the records.
+    fn with_names(&mut self, _names: &[String], _q: &str, _day: &str, _limit: usize) -> anyhow::Result<Option<Named>> {
         Ok(None)
     }
 }
 
 /// Look up what was picked: by person when a name is someone in the records, else by the words (the names counted
 /// as words then, so "OO 건" still finds the records that name them).
-pub fn lookup(lib: &mut dyn Index, p: &Picked, limit: usize, day: &str, said: &[String]) -> anyhow::Result<Vec<Value>> {
+pub fn lookup(lib: &mut dyn Index, p: &Picked, limit: usize, day: &str, said: &[String]) -> anyhow::Result<Named> {
     if !p.people.is_empty()
-        && let Some(hits) = lib.with_names(&p.people, &p.words.join(" "), day, limit)?
+        && let Some(named) = lib.with_names(&p.people, &p.words.join(" "), day, limit)?
     {
-        return Ok(hits);
+        return Ok(named);
     }
     let all: Vec<String> = p.people.iter().chain(&p.words).cloned().collect();
-    lib.search(&all.join(" "), limit, day, said)
+    lib.search(&all.join(" "), limit, day, said).map(Named::Hits)
+}
+
+impl crate::librarian::Librarian {
+    /// What was with them, narrowed by `q`; all of it if `q` leaves nothing (the other words were how the user knows
+    /// them, a company written another way in the records: the person is known, so that is the answer, not "not found").
+    fn with_them(&mut self, addrs: &[String], q: &str, day: &str, limit: usize) -> anyhow::Result<Vec<Value>> {
+        let hits = self.with_people(addrs, q, day, limit)?;
+        if hits.is_empty() && !q.trim().is_empty() {
+            return self.with_people(addrs, "", day, limit);
+        }
+        Ok(hits)
+    }
 }
 
 impl Index for crate::librarian::Librarian {
@@ -195,25 +305,69 @@ impl Index for crate::librarian::Librarian {
         crate::librarian::Librarian::search(self, q, limit, Some(crate::librarian::Exclude::Words(day, said)))
     }
 
-    fn with_names(&mut self, names: &[String], q: &str, day: &str, limit: usize) -> anyhow::Result<Option<Vec<Value>>> {
-        let mut addrs: Vec<String> = Vec::new();
+    fn with_names(&mut self, names: &[String], q: &str, day: &str, limit: usize) -> anyhow::Result<Option<Named>> {
+        // one the user chose among the candidates of the turn before
+        if let Some(addr) = names.iter().find_map(|n| chosen_address(n)) {
+            let addrs = self.same_person(&addr)?;
+            return self.with_them(&addrs, q, day, limit).map(|h| Some(Named::Hits(h)));
+        }
+        let mut found: Vec<crate::librarian::index::Someone> = Vec::new();
         for n in names {
             for someone in self.people(n)? {
-                if !addrs.contains(&someone.addr) && addrs.len() < MAX_PEOPLE {
-                    addrs.push(someone.addr); // every address of that name: the assistant asks which one (#9)
+                if !found.iter().any(|f| f.addr == someone.addr) && found.len() < MAX_PEOPLE {
+                    found.push(someone);
                 }
             }
         }
-        if addrs.is_empty() {
+        if found.is_empty() {
             return Ok(None);
         }
-        let hits = self.with_people(&addrs, q, day, limit)?;
-        if hits.is_empty() && !q.trim().is_empty() {
-            // the other words were how the user knows them (a company written another way in the records): the
-            // person is known, so what was with them is the answer, not "not found"
-            return self.with_people(&addrs, "", day, limit).map(Some);
+        let mut whos = group(found);
+        // the question tells them apart first: its words name their company, or are in records with only some of them
+        if whos.len() > 1 && !q.trim().is_empty() {
+            use crate::librarian::index::name_key;
+            let words: Vec<String> = q.split_whitespace().map(name_key).filter(|w| w.chars().count() >= 2).collect();
+            let mut fit = Vec::new();
+            for w in &whos {
+                let named = words.iter().any(|x| {
+                    (!w.first.company.is_empty() && name_key(&w.first.company).contains(x))
+                        || w.addrs.iter().any(|a| {
+                            // a label of the mail domain, whole (`other` of `kim@other.co.kr`)
+                            a.split_once('@').is_some_and(|(_, d)| {
+                                d.split('.')
+                                    .filter(|l| l.len() >= 3 && !matches!(*l, "com" | "net" | "org"))
+                                    .any(|l| name_key(l) == *x)
+                            })
+                        })
+                });
+                if named || !self.with_people(&w.addrs, q, day, 1)?.is_empty() {
+                    fit.push(w.clone());
+                }
+            }
+            if !fit.is_empty() {
+                whos = fit;
+            }
         }
-        Ok(Some(hits))
+        whos.sort_by_key(|w| std::cmp::Reverse(w.count));
+        if whos.len() > 1 && whos[1].count as f64 >= whos[0].count as f64 * NAMESAKE_SHARE {
+            let mut cands = Vec::new();
+            for w in whos.iter().take(MAX_CANDIDATES) {
+                // the newest record with them up to the day asked: its day and subject go together
+                let hits = self.with_people(&w.addrs, "", day, LIMIT)?;
+                let newest = hits.iter().max_by_key(|h| super::util::pystr(h.get("last")));
+                let field = |k: &str| newest.map(|h| super::util::pystr(h.get(k))).unwrap_or_default();
+                cands.push(Candidate {
+                    addr: w.first.addr.clone(),
+                    name: w.first.names.first().cloned().unwrap_or_default(),
+                    company: company(&w.first),
+                    last: newest.map(|_| field("last")).unwrap_or_else(|| w.last.clone()),
+                    subject: field("title"),
+                });
+            }
+            return Ok(Some(Named::Ask(cands)));
+        }
+        let addrs: Vec<String> = whos.into_iter().flat_map(|w| w.addrs).collect();
+        self.with_them(&addrs, q, day, limit).map(|h| Some(Named::Hits(h)))
     }
 }
 
@@ -230,7 +384,7 @@ pub fn find_with(
     day: &str,
     said: &[String],
 ) -> Option<String> {
-    asked(open, model, message, day, said).0
+    asked(open, model, message, day, said, None).0
 }
 
 /// [`find_with`], and what to keep of the question: the words searched and where the hits are.
@@ -240,12 +394,13 @@ fn asked(
     message: &str,
     day: &str,
     said: &[String],
+    before: Option<&str>,
 ) -> (Option<String>, Option<Vec<String>>, crate::librarian::asks::Found) {
     use crate::librarian::asks::Found;
-    let Some(picked) = pick(model, message) else { return (None, None, Found::NotSearched) };
+    let Some(picked) = pick(model, message, before) else { return (None, None, Found::NotSearched) };
     let words: Vec<String> = picked.people.iter().chain(&picked.words).cloned().collect();
     let mut notes = Vec::new();
-    let found = (|| -> anyhow::Result<Vec<Value>> {
+    let found = (|| -> anyhow::Result<Named> {
         let mut lib = open()?;
         match lib.update() {
             Ok(r) if r.skipped > 0 => notes.push(PARTIAL), // what was found stands, but "not found" would claim more than we know
@@ -260,13 +415,17 @@ fn asked(
         lookup(lib.as_mut(), &picked, LIMIT, day, &all)
     })();
     match found {
-        Ok(hits) => {
-            let refs = hits.iter().filter_map(|h| h["ref"].as_str().map(str::to_string)).collect();
-            let section = std::iter::once(render(&hits))
-                .chain(notes.iter().map(|n| n.to_string()))
-                .collect::<Vec<_>>()
-                .join("\n");
-            (Some(section), Some(words), Found::Hits(refs))
+        Ok(named) => {
+            let (body, found) = match &named {
+                Named::Hits(hits) => (
+                    render(hits),
+                    Found::Hits(hits.iter().filter_map(|h| h["ref"].as_str().map(str::to_string)).collect()),
+                ),
+                Named::Ask(cands) => (render_candidates(cands), Found::Asked),
+            };
+            let section =
+                std::iter::once(body).chain(notes.iter().map(|n| n.to_string())).collect::<Vec<_>>().join("\n");
+            (Some(section), Some(words), found)
         }
         Err(e) => {
             log::warn!("librarian unavailable: {}", first_word(&e));
@@ -289,18 +448,19 @@ fn first_word(e: &anyhow::Error) -> String {
     "error".into()
 }
 
-/// The real thing: the librarian of these places.
+/// The real thing: the librarian of these places. `before`: the turn that asked back, when this message answers it.
 pub fn find(
     paths: &crate::config::Paths,
     model: &dyn crate::llm::Model,
     message: &str,
     day: &str,
     said: &[String],
+    before: Option<&str>,
 ) -> Option<String> {
     let open = || -> anyhow::Result<Box<dyn Index>> {
         Ok(Box::new(crate::librarian::Librarian::open(paths, None, LOCK_WAIT)?))
     };
-    let (section, words, found) = asked(open, model, message, day, said);
+    let (section, words, found) = asked(open, model, message, day, said, before);
     crate::librarian::asks::record(paths, day, message, words.as_deref(), &found);
     section
 }
