@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>관계 보기</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="app.css">
+<style>
+  body { overflow: auto; }
+  .gwrap { max-width: 960px; margin: 0 auto; padding: 16px 20px 40px; }
+  .gwrap a.back { color: var(--muted); text-decoration: none; font-size: 14px; }
+  .gsearch { display: flex; gap: 8px; margin: 12px 0; }
+  .gsearch input { flex: 1; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--text); }
+  .gsearch button, .gbtn { padding: 8px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; }
+  .gbtn.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+  .gbtn.small { padding: 3px 8px; font-size: 12px; }
+  .glist { list-style: none; padding: 0; margin: 0; display: grid; gap: 4px; }
+  .glist button { width: 100%; text-align: left; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); cursor: pointer; }
+  .gkind { font-size: 12px; color: var(--muted); margin-left: 6px; }
+  .gnode { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; margin-top: 14px; }
+  .gnode h2 { margin: 0 0 4px; font-size: 18px; }
+  .gnames { font-size: 14px; color: var(--muted); }
+  .grow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+  .grow input { padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); }
+  table.gedges { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 14px; }
+  table.gedges th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+  table.gedges td { padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.gedges a { color: var(--accent); cursor: pointer; text-decoration: none; }
+  .gev { font-size: 12px; color: var(--muted); }
+  .gmsg { min-height: 1.2em; margin-top: 8px; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="gwrap">
+  <a class="back" href="index.html">← 대화로</a>
+  <h1 style="margin:10px 0 0;">관계 보기</h1>
+  <p class="muted">사서가 기록에서 뽑은 사람·조직·건과 그 관계입니다. 틀린 관계는 고치거나 지우고, 조직을 부르는 이름을 더할 수 있습니다. 고친 것은 기록으로 남고, 다시 만들어도 유지됩니다.</p>
+  <form class="gsearch" id="gform"><input id="gq" placeholder="이름, 회사, 약어, 메일 도메인 (예: example.com)" autocomplete="off"><button type="submit">찾기</button></form>
+  <ul class="glist" id="gfound"></ul>
+  <div id="gview"></div>
+  <p class="gmsg" id="gmsg"></p>
+</div>
+<script src="graph.js"></script>
+</body>
+</html>

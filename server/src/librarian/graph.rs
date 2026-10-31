@@ -1288,3 +1288,67 @@ impl Librarian {
         Ok(out)
     }
 }
+
+// ---------- what the graph screen reads (desktop) ----------
+
+impl Librarian {
+    /// Nodes a name finds (organizations by any of their names, people, matters, things), the ones with most
+    /// relations first: `[{id, kind, name, aliases, edges}]`.
+    pub fn graph_search(&self, q: &str, limit: usize) -> anyhow::Result<Vec<Value>> {
+        self.ready_graph()?;
+        let q = q.trim();
+        if q.chars().count() < 2 {
+            return Ok(Vec::new());
+        }
+        let mut ids = self.with_same(self.orgs_named(q)?)?;
+        if let Some(o) = self.org_exactly(q)? {
+            ids.insert(0, o);
+        }
+        ids.extend(self.nodes_named(q, &["person", "case", "thing", "doc", "todo", "event"])?);
+        let mut seen = HashSet::new();
+        ids.retain(|i| seen.insert(i.clone()));
+        let mut out: Vec<(i64, Value)> = Vec::new();
+        for id in ids {
+            let Some(n) = self.node(&id) else { continue };
+            let count: i64 =
+                self.db.query_row("select count(*) from edges where src = ?1 or dst = ?1", [&id], |r| r.get(0))?;
+            out.push((
+                count,
+                json!({"id": n.id, "kind": n.kind, "name": n.name, "aliases": n.aliases, "edges": count}),
+            ));
+        }
+        out.sort_by_key(|b| std::cmp::Reverse(b.0));
+        Ok(out.into_iter().take(limit).map(|(_, v)| v).collect())
+    }
+
+    /// One node and its relations, each with the other end's name, the record it came from and its key to correct
+    /// it by: `{node, same, edges: [{key, rel, dir, other, other_name, label, since, evidence, origin, title, day}]}`.
+    pub fn graph_node(&self, id: &str) -> anyhow::Result<Option<Value>> {
+        self.ready_graph()?;
+        let Some(n) = self.node(id) else { return Ok(None) };
+        let short = short_names(&self.paths).remove(id).unwrap_or_default();
+        let same = self.with_same(vec![id.to_string()])?.into_iter().skip(1).collect::<Vec<_>>();
+        let mut edges = Vec::new();
+        for (dir, list) in [("out", self.edges_from(id, None)), ("in", self.edges_to(id, None))] {
+            for e in list.into_iter().take(300) {
+                let other = if dir == "out" { e.dst.clone() } else { e.src.clone() };
+                let other_name =
+                    self.node(&other).map(|o| o.name).filter(|n| !n.is_empty()).unwrap_or_else(|| other.clone());
+                let (title, day): (String, String) = self
+                    .db
+                    .query_row("select title, day from docs where file = ? order by n limit 1", [&e.doc], |r| {
+                        Ok((r.get(0)?, r.get(1)?))
+                    })
+                    .optional()?
+                    .unwrap_or_default();
+                edges.push(
+                    json!({"key": edge_key(&e), "rel": e.rel, "dir": dir, "other": other, "other_name": other_name,
+                                  "label": e.label, "since": e.since, "evidence": e.evidence, "origin": e.origin,
+                                  "title": title, "day": day}),
+                );
+            }
+        }
+        Ok(Some(json!({"node": {"id": n.id, "kind": n.kind, "name": n.name, "aliases": n.aliases, "short": short},
+                       "same": same, "edges": edges})))
+    }
+}

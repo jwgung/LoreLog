@@ -366,6 +366,7 @@ $("btnDrawer").addEventListener("click", () => openDrawer().catch(onError));
 $("drawerClose").addEventListener("click", () => ($("drawer").hidden = true));
 $("drawer").addEventListener("click", (ev) => { if (ev.target === $("drawer")) $("drawer").hidden = true; });
 $("toSettings").addEventListener("click", () => { location.href = "settings.html"; });
+$("toGraph").addEventListener("click", () => { location.href = "graph.html"; });
 document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") $("drawer").hidden = true; });
 
 // ---------- start ----------
