@@ -33,8 +33,14 @@ fn lines(p: &Paths) -> Vec<Value> {
 #[test]
 fn a_question_is_kept_with_its_words_and_where_the_hits_are_but_not_what_they_say() {
     let (_d, p) = setup();
-    let section =
-        recall::find(&p, &Picker(r#"{"search": true, "words": ["포트"]}"#), "포트 열어 준 거 됐나", "2026-10-30", &[]);
+    let section = recall::find(
+        &p,
+        &Picker(r#"{"search": true, "words": ["포트"]}"#),
+        "포트 열어 준 거 됐나",
+        "2026-10-30",
+        &[],
+        None,
+    );
     assert!(section.unwrap().contains("포트 포워딩 요청"));
     let got = lines(&p);
     assert_eq!(got.len(), 1);
@@ -57,8 +63,8 @@ fn a_question_is_kept_with_its_words_and_where_the_hits_are_but_not_what_they_sa
 #[test]
 fn a_question_the_model_does_not_look_up_and_one_that_finds_nothing_are_kept_as_such() {
     let (_d, p) = setup();
-    assert!(recall::find(&p, &Picker(r#"{"search": false}"#), "좋은 아침", "2026-10-30", &[]).is_none());
-    recall::find(&p, &Picker(r#"{"search": true, "words": ["없는말무지개"]}"#), "무지개 건", "2026-10-30", &[]);
+    assert!(recall::find(&p, &Picker(r#"{"search": false}"#), "좋은 아침", "2026-10-30", &[], None).is_none());
+    recall::find(&p, &Picker(r#"{"search": true, "words": ["없는말무지개"]}"#), "무지개 건", "2026-10-30", &[], None);
     let got = lines(&p);
     assert_eq!(got[0]["found"], "not searched");
     assert_eq!((got[1]["found"].as_str(), got[1]["refs"].as_array().map(Vec::len)), (Some("nothing"), Some(0)));
@@ -71,7 +77,7 @@ fn keeping_questions_can_be_turned_off() {
     fs::write(p.conf.join("ingest.env"), "INGEST_PORT=9000\n").unwrap();
     asks::set_enabled(&p, false).unwrap();
     assert!(!asks::enabled(&p));
-    recall::find(&p, &Picker(r#"{"search": true, "words": ["포트"]}"#), "포트", "2026-10-30", &[]);
+    recall::find(&p, &Picker(r#"{"search": true, "words": ["포트"]}"#), "포트", "2026-10-30", &[], None);
     assert!(!asks::file(&p).exists());
     asks::set_enabled(&p, true).unwrap();
     assert!(asks::enabled(&p));

@@ -453,6 +453,8 @@ pub fn docs(kind: Kind, path: &Path) -> anyhow::Result<Vec<Doc>> {
 pub struct Contact {
     pub name: String,
     pub addrs: Vec<String>,
+    /// the company it gives (the first one), to tell people of one name apart; may be empty
+    pub org: String,
 }
 
 /// A phone number as compared: its digits, `+82 10-1234-5678` and `010 1234 5678` alike.
@@ -506,7 +508,20 @@ pub fn newest_contacts(files: &[PathBuf]) -> Vec<Contact> {
                 .collect();
             addrs.extend(list(v, "phones").iter().take(20).filter_map(|p| phone_key(p)));
             addrs.dedup();
-            Contact { name: pystr(v.get("name")).trim().chars().take(100).collect(), addrs }
+            // `{company, department, title}`, or a bare string
+            let org = v
+                .get("orgs")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|o| o.as_str().or_else(|| o["company"].as_str()))
+                .map(str::trim)
+                .find(|o| !o.is_empty())
+                .unwrap_or("")
+                .chars()
+                .take(100)
+                .collect();
+            Contact { name: pystr(v.get("name")).trim().chars().take(100).collect(), addrs, org }
         })
         .filter(|c| !c.addrs.is_empty())
         .collect()

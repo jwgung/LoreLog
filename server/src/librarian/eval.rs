@@ -179,11 +179,15 @@ pub fn run(
         });
         let (model_words, model_rank) = match model {
             None => (None, None),
-            Some(m) => match recall::pick(m, &c.q) {
+            Some(m) => match recall::pick(m, &c.q, None) {
                 None => (Some(Vec::new()), None), // the model chose not to look anything up
                 Some(p) => {
                     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-                    let hits = recall::lookup(lib, &p, k, &today, &[])?; // as the chat does today
+                    // as the chat does today; asking back which one is not finding it
+                    let hits = match recall::lookup(lib, &p, k, &today, &[])? {
+                        recall::Named::Hits(h) => h,
+                        recall::Named::Ask(_) => Vec::new(),
+                    };
                     let r = if scored { rank(lib, &hits, &targets) } else { None };
                     let shown = p.people.iter().map(|n| format!("@{n}")).chain(p.words.iter().cloned()).collect();
                     (Some(shown), r)

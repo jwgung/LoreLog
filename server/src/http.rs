@@ -28,7 +28,7 @@ use crate::store::RawStore;
 pub const BODY_LIMIT: usize = 1_000_000;
 
 /// What the librarian adds to a chat question (see [`chat::Recall`]); set by whoever builds the app.
-pub type RecallFn = Arc<dyn Fn(&str, &str, &[String]) -> Option<String> + Send + Sync>;
+pub type RecallFn = Arc<dyn Fn(&str, &str, &[String], Option<&str>) -> Option<String> + Send + Sync>;
 
 /// What the server needs to answer requests.
 pub struct App {
@@ -57,8 +57,9 @@ impl App {
         let store = RawStore::new(&paths.data);
         // a chat question asks the librarian of the same places
         let (p, m) = (paths.clone(), model.clone());
-        let recall: RecallFn =
-            Arc::new(move |message, day, said| crate::assistant::recall::find(&p, m.as_ref(), message, day, said));
+        let recall: RecallFn = Arc::new(move |message, day, said, before| {
+            crate::assistant::recall::find(&p, m.as_ref(), message, day, said, before)
+        });
         App {
             paths,
             store,
@@ -255,7 +256,7 @@ fn chat_post(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, 
         return Ok(Reply::new(400, json!({"error": "bad body"})));
     };
     let wrong = payload.get("wrong").and_then(Value::as_str).filter(|w| !w.is_empty());
-    let recall = |m: &str, d: &str, said: &[String]| (app.recall)(m, d, said);
+    let recall = |m: &str, d: &str, said: &[String], before: Option<&str>| (app.recall)(m, d, said, before);
     match chat::chat_reply(&app.paths, app.model.as_ref(), &recall, &caps[1], message, wrong) {
         Ok(reply) => Ok(Reply::ok(json!({"reply": reply}))),
         Err(e) => {

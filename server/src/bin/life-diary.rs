@@ -58,8 +58,9 @@ fn run(args: &[String], paths: &Paths, day: &str) -> Result<(), String> {
     } else if flag("--chat") {
         let v = stdin_json()?;
         let wrong = v.get("wrong").and_then(Value::as_str).filter(|w| !w.is_empty());
-        let recall =
-            |m: &str, d: &str, said: &[String]| life_server::assistant::recall::find(paths, &model, m, d, said);
+        let recall = |m: &str, d: &str, said: &[String], before: Option<&str>| {
+            life_server::assistant::recall::find(paths, &model, m, d, said, before)
+        };
         let reply = chat::chat_reply(paths, &model, &recall, day, &text_of(&v, "message")?, wrong)
             .map_err(|e| format!("chat failed: {e}"))?;
         println!("{}", json!({"reply": reply}));

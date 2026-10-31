@@ -100,7 +100,7 @@ const SNIPPET_AFTER: usize = 140;
 const WINDOW: i64 = 400;
 /// Bump when the tables or what goes in them change: an index of another version is built again. (6 was the last
 /// Python version; the Rust index is built anew once.)
-pub const SCHEMA_VERSION: &str = "9"; // 8: who each record is with, 9: the phone's address book (#22)
+pub const SCHEMA_VERSION: &str = "10"; // 8: who each record is with, 9: the phone's address book (#22), 10: its company (#9)
 
 /// A mail sent to more people than this is a mass mail: not counted as with any one of them.
 pub const MASS_MAIL: i64 = 10;
@@ -115,7 +115,7 @@ create table if not exists convs(file text, seq integer, id text, data text);
 create index if not exists convs_file on convs(file);
 create virtual table if not exists fts using fts5(terms);
 create table if not exists people(n integer, role text, name text, key text, addr text);
-create table if not exists contacts(person integer, name text, key text, addr text);
+create table if not exists contacts(person integer, name text, key text, addr text, org text);
 create index if not exists contacts_addr on contacts(addr);
 create index if not exists contacts_person on contacts(person);
 create index if not exists people_n on people(n);
@@ -214,6 +214,10 @@ pub struct Someone {
     pub count: i64,
     /// the day of the latest
     pub last: String,
+    /// the address book entry that has this address (its addresses are one person), if any
+    pub book: Option<i64>,
+    /// the company that entry gives; may be empty
+    pub company: String,
 }
 
 /// The part of the text around the first word of the query (or its stem) that appears in it.
@@ -745,13 +749,30 @@ impl Librarian {
     /// Replace the address book: one person per contact, each address of it a row.
     fn keep_contacts(&self, contacts: &[records::Contact]) -> rusqlite::Result<()> {
         self.db.execute("delete from contacts", [])?;
-        let mut st = self.db.prepare_cached("insert into contacts(person, name, key, addr) values (?, ?, ?, ?)")?;
+        let mut st =
+            self.db.prepare_cached("insert into contacts(person, name, key, addr, org) values (?, ?, ?, ?, ?)")?;
         for (i, c) in contacts.iter().enumerate() {
             for a in &c.addrs {
-                st.execute(params![i as i64, c.name, name_key(&c.name), a])?;
+                st.execute(params![i as i64, c.name, name_key(&c.name), a, c.org])?;
             }
         }
         Ok(())
+    }
+
+    /// This address and the others its address book entry puts with it.
+    pub fn same_person(&self, addr: &str) -> anyhow::Result<Vec<String>> {
+        self.ready()?;
+        let mut out = vec![addr.to_string()];
+        let mut st = self.db.prepare(
+            "select distinct addr from contacts where person in (select person from contacts where addr = ?) order by addr limit 50",
+        )?;
+        for a in st.query_map([addr], |r| r.get::<_, String>(0))? {
+            let a = a?;
+            if !out.contains(&a) {
+                out.push(a);
+            }
+        }
+        Ok(out)
     }
 
     /// The people whose name contains `name` (compared as [`name_key`]), one per address: a name alone never makes
@@ -785,10 +806,11 @@ impl Librarian {
         // address -> (names with how often each was used, records, latest day)
         type Seen = (Vec<(i64, String)>, i64, String);
         let mut by: BTreeMap<String, Seen> = BTreeMap::new();
-        let book: Vec<(String, String)> = {
-            let mut st = self.db.prepare("select addr, name from contacts where name != ''")?;
-            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+        let book: Vec<(String, String, i64, String)> = {
+            let mut st = self.db.prepare("select addr, name, person, coalesce(org, '') from contacts")?;
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<rusqlite::Result<_>>()?
         };
+        let mut entry: BTreeMap<String, (i64, String)> = BTreeMap::new();
         for (addr, name, count, last) in rows {
             let e = by.entry(addr).or_insert_with(|| (Vec::new(), 0, String::new()));
             if !name.is_empty() {
@@ -799,9 +821,12 @@ impl Librarian {
                 e.2 = last;
             }
         }
-        for (addr, name) in book {
+        for (addr, name, person, org) in book {
             if let Some(e) = by.get_mut(&addr) {
-                e.0.push((i64::MAX, name)); // the name the user saved them under comes first
+                if !name.is_empty() {
+                    e.0.push((i64::MAX, name)); // the name the user saved them under comes first
+                }
+                entry.entry(addr).or_insert((person, org));
             }
         }
         let mut out: Vec<Someone> = by
@@ -810,7 +835,11 @@ impl Librarian {
                 names.sort_by_key(|n| std::cmp::Reverse(n.0));
                 let mut seen = HashSet::new();
                 names.retain(|n| seen.insert(n.1.clone()));
-                Someone { addr, names: names.into_iter().map(|(_, n)| n).collect(), count, last }
+                let (book, company) = match entry.get(&addr) {
+                    Some((p, o)) => (Some(*p), o.clone()),
+                    None => (None, String::new()),
+                };
+                Someone { addr, names: names.into_iter().map(|(_, n)| n).collect(), count, last, book, company }
             })
             .collect();
         out.sort_by_key(|s| std::cmp::Reverse(s.count));
