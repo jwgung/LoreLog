@@ -97,6 +97,12 @@ async function loadSources() {
     $("mPass").placeholder = v.mail.has_password ? "저장됨 — 바꾸려면 새로 입력" : "";
     say("mMsg", "모으는 폴더: " + v.mail.folder_labels.join(", "), true);
   }
+  if (v.books && v.books.length) {
+    try { const u = new URL(v.books[0]); $("bServer").value = `${u.protocol}//${u.host}/`; }
+    catch { $("bServer").value = v.books[0]; }
+    say("bMsg", `주소록 ${v.books.length}개를 모읍니다.`, true);
+    $("bOff").hidden = false;
+  }
   if (v.calendars.length) {
     try { const u = new URL(v.calendars[0]); $("cServer").value = `${u.protocol}//${u.host}/`; }
     catch { $("cServer").value = v.calendars[0]; }
@@ -158,6 +164,27 @@ $("cOff").onclick = async () => {
   catch (e) { say("cMsg", String(e), false); }
 };
 
+// ---------- address books ----------
+$("bFind").onclick = async () => {
+  say("bMsg", "주소록을 찾는 중…", true);
+  try {
+    const books = await invoke("book_list", { server: $("bServer").value.trim() });
+    checks($("bList"), books.map((b) => ({ value: b.url, label: b.name, chosen: b.chosen })));
+    $("bSave").hidden = false;
+    say("bMsg", `주소록 ${books.length}개 — 모을 주소록을 고르고 저장하세요.`, true);
+  } catch (e) { say("bMsg", String(e), false); }
+};
+$("bSave").onclick = async () => {
+  const urls = checked($("bList"));
+  if (!urls.length) { say("bMsg", "주소록을 하나 이상 고르세요. 그만 모으려면 '주소록 모으지 않기'.", false); return; }
+  try { await invoke("book_save", { urls }); say("bMsg", "저장했습니다. 지금 주소록을 가져옵니다.", true); $("bOff").hidden = false; setTimeout(loadSync, 1000); }
+  catch (e) { say("bMsg", String(e), false); }
+};
+$("bOff").onclick = async () => {
+  try { await invoke("book_save", { urls: [] }); $("bList").replaceChildren(); $("bSave").hidden = true; $("bOff").hidden = true; say("bMsg", "주소록을 모으지 않습니다.", true); }
+  catch (e) { say("bMsg", String(e), false); }
+};
+
 // ---------- models ----------
 async function loadModels() {
   const m = await invoke("models_get").catch(() => null);
@@ -175,7 +202,7 @@ $("modelSave").onclick = async () => {
 };
 
 // ---------- sync ----------
-const JOB = { mail: "메일", files: "첨부", calendar: "일정", librarian: "색인" };
+const JOB = { mail: "메일", files: "첨부", calendar: "일정", contacts: "주소록", librarian: "색인" };
 let polling = null;
 async function loadSync() {
   const st = await invoke("sync_status").catch(() => null);

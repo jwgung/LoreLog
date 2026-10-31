@@ -61,6 +61,9 @@ pub fn configured(sources: &toml::Table) -> Vec<&'static str> {
     if sources.contains_key("calendar") {
         out.push("calendar");
     }
+    if sources.contains_key("contacts") {
+        out.push("contacts");
+    }
     if !out.is_empty() {
         out.push("librarian"); // sync indexes whatever it collected
     }

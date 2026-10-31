@@ -19,6 +19,7 @@ The actual collection is done by mail-sync, mail-files and calendar-sync; this c
 commands:
   add mail          mail account (IMAP): server, account, password (hidden), then folders to collect
   add calendar      calendars (CalDAV) of the account from `life add mail`
+  add contacts      address books (CardDAV) of that account: names, mail and phone numbers only
   sync [--dry-run]  collect from every configured source; last, the librarian's index is brought up to date
                     (`life-librarian update`; not with --dry-run). Mail is capped at 300 messages per run.
   status            last run and result per source
@@ -170,6 +171,41 @@ fn add_calendar(paths: &Paths) -> Result<(), ExitCode> {
     Ok(())
 }
 
+fn add_contacts(paths: &Paths) -> Result<(), ExitCode> {
+    need_tty()?;
+    if sources::calendar_account(paths).is_err() {
+        eprintln!("Run `life add mail` first (address books use the same account).");
+        return Err(ExitCode::from(2));
+    }
+    let existing = sources::view(paths).books.first().cloned().unwrap_or_default();
+    let base = url::Url::parse(&existing)
+        .map(|u| format!("{}://{}/", u.scheme(), u.host_str().unwrap_or("")))
+        .unwrap_or_default();
+    let server = ask("CardDAV server", &base);
+    if server.is_empty() {
+        eprintln!("A CardDAV server URL is required.");
+        return Err(ExitCode::from(2));
+    }
+    let books = sources::books(paths, &server).map_err(|e| {
+        eprintln!("{e}");
+        ExitCode::FAILURE
+    })?;
+    let urls: Vec<String> = books.iter().map(|b| b.url.clone()).collect();
+    let labels: Vec<String> = books.iter().map(|b| b.name.clone()).collect();
+    let defaults: Vec<String> = books.iter().filter(|b| b.chosen).map(|b| b.url.clone()).collect();
+    let chosen = choose(&urls, &labels, &defaults, "Address books to collect")?;
+    if chosen.is_empty() {
+        eprintln!("No address book selected. Nothing was saved.");
+        return Err(ExitCode::from(2));
+    }
+    sources::save_books(paths, &chosen).map_err(|e| {
+        eprintln!("{e}");
+        ExitCode::FAILURE
+    })?;
+    println!("Saved: {}\nNext: life sync --dry-run", settings::sources_file(paths).display());
+    Ok(())
+}
+
 // ---------- sync / status ----------
 
 fn sync(paths: &Paths, dry: bool) -> ExitCode {
@@ -225,8 +261,9 @@ fn main() -> ExitCode {
         "add" => match args.get(1).map(String::as_str) {
             Some("mail") => add_mail(&paths).err().unwrap_or(ExitCode::SUCCESS),
             Some("calendar") => add_calendar(&paths).err().unwrap_or(ExitCode::SUCCESS),
+            Some("contacts") => add_contacts(&paths).err().unwrap_or(ExitCode::SUCCESS),
             _ => {
-                eprintln!("usage: life add {{mail,calendar}}");
+                eprintln!("usage: life add {{mail,calendar,contacts}}");
                 ExitCode::from(2)
             }
         },

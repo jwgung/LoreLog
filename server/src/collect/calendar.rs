@@ -247,7 +247,14 @@ pub fn check_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn dav(method: &str, url: &str, acct: &Account, depth: &str, body: String, timeout: u64) -> Result<String, DavError> {
+pub(crate) fn dav(
+    method: &str,
+    url: &str,
+    acct: &Account,
+    depth: &str,
+    body: String,
+    timeout: u64,
+) -> Result<String, DavError> {
     check_url(url).map_err(DavError::Other)?;
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(timeout)))
@@ -350,7 +357,7 @@ fn propfind(url: &str, acct: &Account, props: &str, depth: &str) -> Result<Strin
 }
 
 /// A URL for the journal: scheme, host and path only (never an account).
-fn shown(url: &str) -> String {
+pub(crate) fn shown(url: &str) -> String {
     url::Url::parse(url)
         .map(|u| format!("{}://{}{}", u.scheme(), u.host_str().unwrap_or(""), u.path()))
         .unwrap_or_else(|_| "(not a URL)".into())
