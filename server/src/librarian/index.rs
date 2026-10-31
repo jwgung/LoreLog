@@ -100,7 +100,7 @@ const SNIPPET_AFTER: usize = 140;
 const WINDOW: i64 = 400;
 /// Bump when the tables or what goes in them change: an index of another version is built again. (6 was the last
 /// Python version; the Rust index is built anew once.)
-pub const SCHEMA_VERSION: &str = "12"; // 8: who each record is with, 9: the phone's address book (#22), 10: its company (#9), 11: attachments and the mail they came with (#15), 12: one matter beyond a thread (#8)
+pub const SCHEMA_VERSION: &str = "13"; // 8: who each record is with, 9: the phone's address book (#22), 10: its company (#9), 11: attachments and the mail they came with (#15), 12: one matter beyond a thread (#8), 13: the matters the user took part in
 
 /// A mail sent to more people than this is a mass mail: not counted as with any one of them.
 pub const MASS_MAIL: i64 = 10;
@@ -108,13 +108,15 @@ pub const MASS_MAIL: i64 = 10;
 pub const CASE_MAIL_DAYS: i64 = 30;
 /// an event of that subject this close to one of its mails, with someone in common, is part of it
 pub const CASE_EVENT_DAYS: i64 = 7;
+/// how much more a record of a matter the user took part in (sent a mail in) counts: "그 건" is the user's own
+pub const INVOLVED_WEIGHT: f64 = 2.0;
 /// how much an attachment's match counts against a mail's (#15)
 pub const FILE_WEIGHT: f64 = 0.5;
 
 const TABLES: &str = "
 create table if not exists meta(key text primary key, value text);
 create table if not exists files(path text primary key, kind text, stamp text);
-create table if not exists docs(n integer primary key, file text, source text, kind text, day text, title text, thread text, text text, mid text, case_key text);
+create table if not exists docs(n integer primary key, file text, source text, kind text, day text, title text, thread text, text text, mid text, case_key text, involved integer);
 create index if not exists docs_case on docs(case_key);
 create index if not exists docs_mid on docs(mid);
 create index if not exists docs_file on docs(file);
@@ -718,7 +720,8 @@ impl Librarian {
         // a long attachment matches many words: it counts for less than a mail or a message (rank is negative, lower
         // is better)
         sql += &format!(
-            " order by case when d.source = 'file' then fts.rank * {FILE_WEIGHT} else fts.rank end limit {WINDOW}"
+            " order by fts.rank * (case when d.source = 'file' then {FILE_WEIGHT} else 1.0 end)
+                                 * (case when d.involved = 1 then {INVOLVED_WEIGHT} else 1.0 end) limit {WINDOW}"
         );
         let rows: Vec<(i64, Option<String>, String)> = {
             let mut st = self.db.prepare(&sql)?;
