@@ -9,6 +9,7 @@
 //!   person     "이 사람이랑 뭐 있었지"      any of the latest five things with that address up to today: threads of mail
 //!                                          they sent or received (not copied, not mass mail) and events they attended
 //!                                          (read from the notes, not from the index), and how many hits are with them
+//!   graph      "A사랑 하는 건들 어디까지"  several matters (#44): found when every one of them is, at the rank of the last
 //!   pending    "이번 달에 뭐가 걸려 있지"   not scored: kept to see what is asked
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -27,6 +28,8 @@ pub enum Kind {
     Status,
     Person,
     Precedent,
+    /// a question about several matters at once (#44)
+    Graph,
     Pending,
 }
 
@@ -36,6 +39,7 @@ impl Kind {
             Kind::Status => "그 건 어떻게 됐지",
             Kind::Person => "이 사람이랑 뭐 있었지",
             Kind::Precedent => "전에 어떻게 했지",
+            Kind::Graph => "여러 건을 따라가는 질문",
             Kind::Pending => "이번 달에 뭐가 걸려 있지",
         }
     }
@@ -50,6 +54,8 @@ pub struct Case {
     pub thread: Option<String>,
     /// person: their mail address
     pub person: Option<String>,
+    /// graph: the threads of every matter it is about
+    pub threads: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -71,6 +77,7 @@ pub fn load(path: &Path) -> anyhow::Result<Vec<Case>> {
         let missing = match c.kind {
             Kind::Status | Kind::Precedent if c.thread.is_none() => Some("thread"),
             Kind::Person if c.person.is_none() => Some("person"),
+            Kind::Graph if c.threads.as_ref().is_none_or(|t| t.is_empty()) => Some("threads"),
             _ => None,
         };
         if let Some(what) = missing {
@@ -155,6 +162,16 @@ fn rank(lib: &Librarian, hits: &[serde_json::Value], targets: &HashSet<String>) 
     hits.iter().position(holds).map(|i| i + 1)
 }
 
+/// Where every target is held by some hit: the rank of the last of them, or None when one is not in the hits.
+fn rank_all(lib: &Librarian, hits: &[serde_json::Value], targets: &HashSet<String>) -> Option<usize> {
+    let mut last = 0;
+    for t in targets {
+        let one: HashSet<String> = [t.clone()].into();
+        last = last.max(rank(lib, hits, &one)?);
+    }
+    Some(last)
+}
+
 /// Measure every case against the index, with the user's words and (if a model is given) the words it picks.
 pub fn run(
     lib: &mut Librarian,
@@ -168,12 +185,17 @@ pub fn run(
         let addr = c.person.as_ref().map(|a| a.trim().to_lowercase());
         let targets: HashSet<String> = match (c.kind, &c.thread, &addr) {
             (Kind::Person, _, Some(a)) => person_threads(lib, vault, a),
+            (Kind::Graph, _, _) => c.threads.iter().flatten().cloned().collect(),
             (_, Some(t), _) => [t.clone()].into(),
             _ => HashSet::new(),
         };
-        let scored = c.kind != Kind::Pending;
         let hits = lib.search(&c.q, k, None)?;
-        let raw_rank = if scored { rank(lib, &hits, &targets) } else { None };
+        let score = |lib: &Librarian, hits: &[serde_json::Value]| match c.kind {
+            Kind::Pending => None,
+            Kind::Graph => rank_all(lib, hits, &targets),
+            _ => rank(lib, hits, &targets),
+        };
+        let raw_rank = score(lib, &hits);
         let person_share = addr.as_ref().map(|a| {
             let with = hits.iter().filter(|h| h["ref"].as_str().is_some_and(|r| involves(r, a))).count();
             (with, hits.len())
@@ -189,7 +211,7 @@ pub fn run(
                         recall::Named::Hits(h) => h,
                         recall::Named::Ask(_) => Vec::new(),
                     };
-                    let r = if scored { rank(lib, &hits, &targets) } else { None };
+                    let r = score(lib, &hits);
                     let shown = p.people.iter().map(|n| format!("@{n}")).chain(p.words.iter().cloned()).collect();
                     (Some(shown), r)
                 }
