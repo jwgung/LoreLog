@@ -14,7 +14,7 @@ object CollectorPrefs {
     const val APPS = "apps"
     const val CONTACTS = "contacts"
 
-    val ALL = listOf(VOICE to "음성", SCREEN to "화면 내용", APPS to "앱 사용", LOCATION to "위치", COMMS to "통화·문자", CALENDAR to "캘린더", CONTACTS to "주소록(이름·메일·전화)")
+    val ALL = listOf(VOICE to "음성", SCREEN to "화면 내용", APPS to "앱 사용", LOCATION to "위치", COMMS to "통화·문자", CALENDAR to "캘린더", CONTACTS to "주소록")
 
     fun enabled(context: Context, key: String): Boolean =
         context.applicationContext.getSharedPreferences(PREF, Context.MODE_PRIVATE).getBoolean(key, true)

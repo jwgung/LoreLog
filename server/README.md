@@ -11,7 +11,7 @@ Rust 라이브러리 crate 하나(`life-server`)와 그 위의 실행 파일들�
 
 | 실행 파일 | 하는 일 | 코드 |
 |---|---|---|
-| `life` | 수집 소스 설정·실행(`life add mail`, `life add calendar`, `life add contacts`, `life sync`, `life status`). `contacts`는 CardDAV 주소록(이름·메일·전화·회사만, `src/collect/carddav.rs`). `sync`는 아래 수집기를 차례로 돌리고 마지막에 사서 색인을 갱신한다(`--dry-run`일 때는 갱신하지 않는다). 다른 실행 파일을 띄우지 않고 같은 프로세스에서 `collect::sync`의 함수를 부른다 | `src/bin/life.rs`, `src/collect/sync.rs`, `src/collect/setup.rs` |
+| `life` | 수집 소스 설정·실행(`life add mail`, `life add calendar`, `life add contacts`, `life sync`, `life status`). `contacts`는 CardDAV 주소록(가진 것 다, 사진만 뺌, `src/collect/carddav.rs`). `sync`는 아래 수집기를 차례로 돌리고 마지막에 사서 색인을 갱신한다(`--dry-run`일 때는 갱신하지 않는다). 다른 실행 파일을 띄우지 않고 같은 프로세스에서 `collect::sync`의 함수를 부른다 | `src/bin/life.rs`, `src/collect/sync.rs`, `src/collect/setup.rs` |
 | `life-ingest` | 폰·PC가 보내는 기록 수신, 일기·대화·할 일·받아쓰기 HTTP API | `src/http.rs`, `src/store.rs`, `src/filestore.rs`, `src/jobs.rs` |
 | `life-diary` | 하루 정리, 대화, 할 일, 메신저 허용을 명령줄로 | `src/assistant/` |
 | `life-librarian` | 사서. 모든 날의 기록에 색인을 얹고 찾아 준다(`update`, `rebuild`, `search`, `stats`). 사람 색인(메일 머리말·일정 참석자)으로 사람으로도 찾는다(#22). `eval FILE`은 질문과 나와야 할 기록의 짝으로 재현율@8을 잰다(말 그대로, 비서가 고른 검색어). 평가셋은 실제 이름·제목이 들어 있어 저장소 밖(`<data>/eval/`)에 둔다 | `src/librarian/`, `src/librarian/eval.rs`, `src/assistant/recall.rs` |

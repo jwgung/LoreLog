@@ -487,10 +487,11 @@ pub fn newest_contacts(files: &[PathBuf]) -> Vec<Contact> {
             *e = (received(v), snap);
         }
     }
+    // a list of strings, or of `{type, value}` (both shapes are sent)
     let list = |v: &Value, k: &str| -> Vec<String> {
         v.get(k)
             .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+            .map(|a| a.iter().filter_map(|x| x.as_str().or_else(|| x["value"].as_str())).map(str::to_string).collect())
             .unwrap_or_default()
     };
     lines

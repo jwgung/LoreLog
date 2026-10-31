@@ -7,20 +7,29 @@ use life_server::collect::sources;
 use life_server::config::Paths;
 use life_server::librarian::records::newest_contacts;
 
-const CARDS: &str = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:김영희\r\nN:김;영희;;;\r\nORG:한빛상사;영업팀\r\nEMAIL;TYPE=WORK:YH@hanbit.example\r\nEMAIL:yh.home@x.example\r\nTEL;TYPE=CELL:+82 10-1234-5678\r\nNOTE:생일 선물 사 주기\r\nEND:VCARD\r\nBEGIN:VCARD\r\nVERSION:4.0\r\nN:Lee;Andy;;;\r\nEMAIL:andy@istec.exa\r\n mple\r\nEND:VCARD\r\nBEGIN:VCARD\r\nFN:번호도 메일도 없는 사람\r\nEND:VCARD\r\n";
+const CARDS: &str = "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:김영희\r\nN:김;영희;;;\r\nNICKNAME:영희씨\r\nORG:한빛상사;영업팀\r\nTITLE:과장\r\nEMAIL;TYPE=WORK:YH@hanbit.example\r\nEMAIL:yh.home@x.example\r\nTEL;TYPE=CELL:+82 10-1234-5678\r\nADR;TYPE=WORK:;;테헤란로 1;서울;;06000;대한민국\r\nURL:https://hanbit.example\r\nBDAY:1990-05-01\r\nNOTE:생일 선물\\, 꽃\r\nCATEGORIES:거래처,영업\r\nX-SOCIALPROFILE:x\r\nEND:VCARD\r\nBEGIN:VCARD\r\nVERSION:4.0\r\nN:Lee;Andy;;;\r\nEMAIL:andy@istec.exa\r\n mple\r\nEND:VCARD\r\nBEGIN:VCARD\r\nFN:번호도 메일도 없는 사람\r\nNOTE:메모만\r\nEND:VCARD\r\n";
 
 #[test]
-fn vcards_become_contacts_with_names_mail_and_phones_only() {
+fn vcards_become_contacts_with_everything_they_hold() {
     let got = carddav::parse_vcards(CARDS);
-    assert_eq!(got.len(), 2, "a card with nothing to reach them by is left out");
-    assert_eq!(got[0].name, "김영희");
-    assert_eq!(got[0].org, "한빛상사");
-    assert_eq!(got[0].emails, ["yh@hanbit.example", "yh.home@x.example"]);
-    assert_eq!(got[0].phones, ["+82 10-1234-5678"]);
+    assert_eq!(got.len(), 3, "every card is kept, also one without mail or phone");
+    let c = &got[0];
+    assert_eq!((c.name.as_str(), c.nickname.as_str()), ("김영희", "영희씨"));
+    assert_eq!(c.orgs, [serde_json::json!({"company": "한빛상사", "department": "영업팀", "title": "과장"})]);
+    assert_eq!(c.emails[0], serde_json::json!({"type": "work", "value": "yh@hanbit.example"}));
+    assert_eq!(c.phones[0], serde_json::json!({"type": "cell", "value": "+82 10-1234-5678"}));
+    assert_eq!(c.addresses[0]["value"], "테헤란로 1, 서울, 06000, 대한민국");
+    assert_eq!(
+        (c.urls.clone(), c.notes.clone()),
+        (vec!["https://hanbit.example".to_string()], vec!["생일 선물, 꽃".to_string()])
+    );
+    assert_eq!(c.events, [serde_json::json!({"type": "birthday", "date": "1990-05-01"})]);
+    assert_eq!(c.groups, ["거래처", "영업"]);
+    assert!(c.raw.contains("X-SOCIALPROFILE:x"), "the card as it came is kept too");
     assert_eq!(got[1].name, "Andy Lee", "no FN: the name from N");
-    assert_eq!(got[1].emails, ["andy@istec.example"], "folded lines are joined");
+    assert_eq!(got[1].emails[0]["value"], "andy@istec.example", "folded lines are joined");
     let line = carddav::lines(&got, "carddav:abc", 7).join("\n");
-    assert!(!line.contains("생일"), "notes are not kept: {line}");
+    assert!(line.contains("생일 선물"), "{line}");
 }
 
 #[test]
@@ -33,8 +42,12 @@ fn a_book_is_written_only_when_it_changed() {
     assert!(carddav::keep(&p, "https://dav.example/books/me/", &cards[..1]).unwrap(), "one deleted: written");
     let files: Vec<_> = fs::read_dir(p.raw().join("contacts")).unwrap().map(|e| e.unwrap().path()).collect();
     let newest = newest_contacts(&files);
-    assert_eq!(newest.len(), 1, "the newest list of that book");
+    assert_eq!(newest.len(), 1, "the newest list of that book (the card without mail or phone gives no address)");
     assert_eq!(newest[0].name, "김영희");
+    assert!(
+        newest[0].addrs.contains(&"yh@hanbit.example".to_string())
+            && newest[0].addrs.contains(&"tel:01012345678".to_string())
+    );
 }
 
 #[test]

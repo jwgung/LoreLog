@@ -19,7 +19,7 @@ The actual collection is done by mail-sync, mail-files and calendar-sync; this c
 commands:
   add mail          mail account (IMAP): server, account, password (hidden), then folders to collect
   add calendar      calendars (CalDAV) of the account from `life add mail`
-  add contacts      address books (CardDAV) of that account: names, mail and phone numbers only
+  add contacts      address books (CardDAV) of that account: everything a card holds but photos
   sync [--dry-run]  collect from every configured source; last, the librarian's index is brought up to date
                     (`life-librarian update`; not with --dry-run). Mail is capped at 300 messages per run.
   status            last run and result per source
