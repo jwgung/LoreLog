@@ -158,6 +158,7 @@ static ROUTES: LazyLock<Vec<(Method, Regex, Handler)>> = LazyLock::new(|| {
             Ok(Reply::ok(json!({"messages": chat::chat_history(&app.paths, &c[1])})))
         }),
         (Method::POST, r(&format!("/diary/{DAY}/chat")), chat_post),
+        (Method::POST, r("/corrections"), correction_post),
         (Method::GET, r(&format!("/diary/{DAY}(\\?refresh=1)?")), draft_get),
         (Method::POST, r(&format!("/diary/{DAY}")), diary_post),
         (Method::POST, r("/transcribe"), transcribe),
@@ -256,13 +257,44 @@ fn chat_post(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, 
         return Ok(Reply::new(400, json!({"error": "bad body"})));
     };
     let wrong = payload.get("wrong").and_then(Value::as_str).filter(|w| !w.is_empty());
+    let fix = match (wrong, payload.get("about").and_then(Value::as_str)) {
+        (None, _) => None,
+        (Some(w), None | Some("summary")) => Some(chat::Fix::Summary(w)),
+        (Some(w), Some("answer")) => Some(chat::Fix::Answer(w)),
+        (Some(_), Some(_)) => return Ok(Reply::new(400, json!({"error": "bad about"}))),
+    };
     let recall = |m: &str, d: &str, said: &[String], before: Option<&str>| (app.recall)(m, d, said, before);
-    match chat::chat_reply(&app.paths, app.model.as_ref(), &recall, &caps[1], message, wrong) {
-        Ok(reply) => Ok(Reply::ok(json!({"reply": reply}))),
+    match chat::chat_answer(&app.paths, app.model.as_ref(), &recall, &caps[1], message, fix) {
+        Ok(chat::Answer { reply, changed: None }) => Ok(Reply::ok(json!({"reply": reply}))),
+        Ok(chat::Answer { reply, changed: Some(c) }) => Ok(Reply::ok(json!({"reply": reply, "changed": c}))),
         Err(e) => {
             Ok(Reply::new(502, json!({"error": format!("chat failed: {e}").chars().take(300).collect::<String>()})))
         }
     }
+}
+
+/// `{wrong, right, ref}` (#10): keep it, apply it where it refers to, and say what changed.
+fn correction_post(app: &App, req: &Request, _: &regex::Captures) -> Result<Reply, Reply> {
+    use crate::assistant::corrections::{self, Correction, Ref};
+    let payload = req.json(100_000)?;
+    let s = |k: &str| payload.get(k).and_then(Value::as_str).unwrap_or("");
+    let Some(c) = Ref::parse(s("ref")).and_then(|r| Correction::new(s("wrong"), s("right"), r)) else {
+        return Ok(Reply::new(400, json!({"error": "bad body"})));
+    };
+    match &c.refers {
+        Ref::Todo(id) => match todos::rename(&app.paths, id, &c.right).map_err(|e| internal(req, &e))? {
+            todos::Acted::Changed => {}
+            todos::Acted::Missing => return Ok(Reply::new(404, json!({"error": "not found"}))),
+            todos::Acted::NotNow => return Ok(Reply::new(409, json!({"error": "not in a state for that"}))),
+        },
+        Ref::Summary(day) => {
+            let fix = json!({"append": true, "corrections": [{"wrong": c.wrong, "right": c.right}]});
+            diary::save_user(&app.paths, day, &fix).map_err(|e| internal(req, &e))?;
+        }
+        Ref::Chat(_) => {}
+    }
+    corrections::keep(&app.paths, &c).map_err(|e| internal(req, &e))?;
+    Ok(Reply::ok(json!({"saved": true, "changed": c.changed()})))
 }
 
 fn draft_get(app: &App, _: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {

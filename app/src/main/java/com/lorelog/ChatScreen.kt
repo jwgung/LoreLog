@@ -117,6 +117,9 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
     val extra = remember { mutableStateListOf<Msg>() }
     var selected by remember { mutableStateOf<Int?>(null) }
     var fixing by remember { mutableStateOf<String?>(null) }
+    // 고치는 것이 정리의 문장인지("summary") 비서의 답인지("answer")
+    var fixingAbout by remember { mutableStateOf("summary") }
+    var pickedAnswer by remember { mutableStateOf<String?>(null) }
     var input by remember { mutableStateOf("") }
     var todoCount by remember { mutableStateOf(0) }
     LaunchedEffect(Unit) { todoCount = DiaryClient.fetchTodos(context)?.let { it.open.size + it.proposed.size } ?: 0 }
@@ -191,16 +194,17 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
         input = ""
         extra.add(Msg.Mine(t))
         val wrong = fixing
-        fixing = null; selected = null
+        val about = fixingAbout
+        fixing = null; selected = null; pickedAnswer = null; fixingAbout = "summary"
         extra.add(Msg.Typing)
         scope.launch {
-            val reply = DiaryClient.chat(context, day, t, wrong)
+            val r = DiaryClient.chat(context, day, t, wrong, about)
             extra.remove(Msg.Typing)
-            if (reply == null) {
+            if (r == null) {
                 extra.add(Msg.Assistant("연결이 안 돼서 답을 못 드렸어요. 말씀하신 건 다시 보내 주시면 남길게요."))
                 return@launch
             }
-            extra.add(Msg.Assistant(reply))
+            extra.add(Msg.Assistant(r.reply))
             if (wrong != null) extra.add(Msg.Fixed(wrong, t))
         }
     }
@@ -262,7 +266,7 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
                                         styledSentence(line), color = Text0, fontSize = 15.sp, lineHeight = 26.sp, fontFamily = FontFamily.Serif,
                                         modifier = Modifier.clip(RoundedCornerShape(6.dp))
                                             .background(if (selected == i) Picked else Color.Transparent)
-                                            .clickable { selected = if (selected == i) null else i; fixing = null }
+                                            .clickable { selected = if (selected == i) null else i; fixing = null; pickedAnswer = null }
                                             .padding(horizontal = 4.dp, vertical = 2.dp),
                                     )
                                 }
@@ -270,7 +274,7 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
                         }
                         selected?.let { i ->
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 8.dp)) {
-                                Button(onClick = { fixing = d.summary[i] }) { Text("이 문장이 틀렸어요") }
+                                Button(onClick = { fixing = d.summary[i]; fixingAbout = "summary" }) { Text("이 문장이 틀렸어요") }
                                 TextButton(onClick = { selected = null; fixing = null }) { Text("닫기", color = Sub) }
                             }
                         }
@@ -289,7 +293,16 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
                         modifier = Modifier.align(Alignment.End).widthIn(max = bubbleMax(0.78f))
                             .clip(RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp)).background(Accent).padding(horizontal = 16.dp, vertical = 12.dp),
                     ) { Text(m.text, color = Ink, fontSize = 15.sp, lineHeight = 23.sp) }
-                    is Msg.Assistant -> AssistantBubble(m.text)
+                    is Msg.Assistant -> {
+                        // 비서의 답도 눌러서 틀렸다고 알려 줄 수 있다(#10)
+                        AssistantBubble(m.text, onClick = { pickedAnswer = if (pickedAnswer == m.text) null else m.text; selected = null; fixing = null })
+                        if (pickedAnswer == m.text) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 8.dp)) {
+                                Button(onClick = { fixing = m.text; fixingAbout = "answer" }) { Text("이 답이 틀렸어요") }
+                                TextButton(onClick = { pickedAnswer = null; fixing = null }) { Text("닫기", color = Sub) }
+                            }
+                        }
+                    }
                     Msg.Typing -> AssistantBubble("…")
                     is Msg.Fixed -> Column(
                         modifier = Modifier.padding(start = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -340,10 +353,12 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
 }
 
 @Composable
-private fun AssistantBubble(text: String, topGap: Int = 0) {
+private fun AssistantBubble(text: String, topGap: Int = 0, onClick: (() -> Unit)? = null) {
     Box(
         modifier = Modifier.padding(top = topGap.dp).widthIn(max = bubbleMax())
-            .clip(RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp)).background(Bubble).padding(horizontal = 16.dp, vertical = 14.dp),
+            .clip(RoundedCornerShape(4.dp, 18.dp, 18.dp, 18.dp)).background(Bubble)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
     ) { Text(text, color = Text0, fontSize = 15.sp, lineHeight = 26.sp, fontFamily = FontFamily.Serif) }
 }
 

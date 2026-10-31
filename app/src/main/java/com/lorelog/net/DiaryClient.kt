@@ -92,18 +92,26 @@ object DiaryClient {
         }
     }
 
-    /** 사용자가 한 말을 일기에 남기고 비서의 답을 받는다(서버의 로컬 LLM). [wrong]이 있으면 그 문장을 고치는 말이다. 실패하면 null. */
-    suspend fun chat(context: Context, day: String, message: String, wrong: String? = null): String? = withContext(Dispatchers.IO) {
+    /** 비서의 답, 그리고 정정이었으면 무엇이 바뀌었는지 한 줄(서버가 만든다). */
+    data class ChatReply(val reply: String, val changed: String?)
+
+    /**
+     * 사용자가 한 말을 일기에 남기고 비서의 답을 받는다(서버의 로컬 LLM). [wrong]이 있으면 그것을 고치는 말이다:
+     * [about]이 "summary"면 오늘 정리의 문장, "answer"면 비서의 답. 실패하면 null.
+     */
+    suspend fun chat(context: Context, day: String, message: String, wrong: String? = null, about: String = "summary"): ChatReply? = withContext(Dispatchers.IO) {
         var conn: HttpURLConnection? = null
         try {
             conn = open(context, "/diary/$day/chat", "POST") ?: return@withContext null
             conn.readTimeout = 150_000
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json")
-            val body = JSONObject().put("message", message).apply { if (wrong != null) put("wrong", wrong) }
+            val body = JSONObject().put("message", message).apply { if (wrong != null) { put("wrong", wrong); put("about", about) } }
             conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             if (conn.responseCode !in 200..299) return@withContext null
-            JSONObject(conn.inputStream.bufferedReader().readText()).optString("reply").takeIf { it.isNotBlank() }
+            val o = JSONObject(conn.inputStream.bufferedReader().readText())
+            val reply = o.optString("reply").takeIf { it.isNotBlank() } ?: return@withContext null
+            ChatReply(reply, o.optString("changed").takeIf { it.isNotBlank() })
         } catch (e: Exception) {
             null
         } finally {
@@ -167,6 +175,27 @@ object DiaryClient {
         post(context, "/todos/$id", JSONObject().put("action", action))
 
     suspend fun addTodo(context: Context, text: String): Boolean = post(context, "/todos", JSONObject().put("text", text))
+
+    /**
+     * 틀린 것 하나를 고친다(#10): [wrong]은 틀린 것, [right]는 맞는 것, [ref]는 무엇에 대한 것인지("todo:<id>",
+     * "summary:<날짜>", "chat:<날짜>"). 무엇이 바뀌었는지 한 줄을 돌려준다. 실패하면 null.
+     */
+    suspend fun correct(context: Context, wrong: String, right: String, ref: String): String? = withContext(Dispatchers.IO) {
+        var conn: HttpURLConnection? = null
+        try {
+            conn = open(context, "/corrections", "POST") ?: return@withContext null
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            val body = JSONObject().put("wrong", wrong).put("right", right).put("ref", ref)
+            conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            if (conn.responseCode !in 200..299) return@withContext null
+            JSONObject(conn.inputStream.bufferedReader().readText()).optString("changed").takeIf { it.isNotBlank() }
+        } catch (e: Exception) {
+            null
+        } finally {
+            conn?.disconnect()
+        }
+    }
 
     /** 정정(틀린 것 → 맞는 것 쌍)과 회고를 저장한다. */
     suspend fun save(context: Context, day: String, corrections: List<Pair<String, String>>, reflection: String, append: Boolean = true): Boolean =

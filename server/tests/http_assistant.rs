@@ -156,3 +156,87 @@ fn speech_is_transcribed_and_a_failure_names_only_its_kind() {
     assert_eq!(status, 502);
     assert!(body["error"].as_str().unwrap().starts_with("asr failed: "));
 }
+
+// ---------- "틀렸어": one pair wherever it is said (#10) ----------
+
+/// The corrections kept so far: `{wrong, right, ref}` of each line of `raw/corrections/`.
+fn kept(s: &Server) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    for f in std::fs::read_dir(s.paths.raw().join("corrections"))
+        .map(|d| d.flatten().collect::<Vec<_>>())
+        .unwrap_or_default()
+    {
+        for l in std::fs::read_to_string(f.path()).unwrap().lines() {
+            let v: serde_json::Value = serde_json::from_str(l).unwrap();
+            assert_eq!(v["type"], "correction");
+            assert!(v["ts"].as_i64().is_some_and(|t| t > 0));
+            out.push(json!({"wrong": v["wrong"], "right": v["right"], "ref": v["ref"]}));
+        }
+    }
+    out
+}
+
+#[test]
+fn a_todo_said_wrong_is_renamed_and_the_reply_says_what_changed() {
+    let s = Server::start();
+    s.post_json("/todos", &json!({"text": "A 님께 견적 보내기"}));
+    let id = s.get("/todos").1["open"][0]["id"].as_str().unwrap().to_string();
+    let fix = json!({"wrong": "A 님께 견적 보내기", "right": "B 님께 견적 보내기", "ref": format!("todo:{id}")});
+    assert_eq!(
+        s.post_json("/corrections", &fix),
+        (200, json!({"saved": true, "changed": "할 일을 바꿨어요: A 님께 견적 보내기 → B 님께 견적 보내기"}))
+    );
+    assert_eq!(s.get("/todos").1["open"][0]["title"], "B 님께 견적 보내기");
+    assert_eq!(kept(&s), [fix]);
+    assert_eq!(s.post_json("/corrections", &json!({"wrong": "x", "right": "y", "ref": "todo:0000000000"})).0, 404);
+    for bad in [
+        json!({"wrong": "x", "right": "  ", "ref": format!("todo:{id}")}),
+        json!({"wrong": "x", "right": "y", "ref": "elsewhere:1"}),
+        json!({"wrong": "x", "right": "y"}),
+    ] {
+        assert_eq!(s.post_json("/corrections", &bad).0, 400, "{bad}");
+    }
+    assert_eq!(kept(&s).len(), 1, "nothing kept of a refused one");
+}
+
+#[test]
+fn a_summary_sentence_corrected_in_chat_is_one_pair_and_said_back_in_one_line() {
+    let s = Server::start_full(1 << 20, FakeModel::plain());
+    let (status, body) = s.post_json("/diary/2026-02-03/chat", &json!({"message": "20분 했어", "wrong": "10초 통화"}));
+    assert_eq!(status, 200);
+    assert_eq!(body["changed"], "정리를 고쳤어요: 10초 통화 → 20분 했어 (다시 정리할 때 반영해요)");
+    assert_eq!(kept(&s), [json!({"wrong": "10초 통화", "right": "20분 했어", "ref": "summary:2026-02-03"})]);
+    let note = std::fs::read_to_string(s.paths.vault.join("Diary/2026-02-03.md")).unwrap();
+    assert!(note.contains("- 10초 통화 → 20분 했어"), "the day's note keeps it too");
+    assert!(s.post_json("/diary/2026-02-03/chat", &json!({"message": "고마워"})).1.get("changed").is_none());
+}
+
+#[test]
+fn an_answer_said_wrong_is_kept_and_the_next_answer_is_given_with_it() {
+    let model = FakeModel::plain();
+    let s = Server::start_full(1 << 20, model.clone());
+    let (_, body) = s.post_json(
+        "/diary/2026-02-05/chat",
+        &json!({"message": "회의는 3시였어", "wrong": "회의는 2시였어요", "about": "answer"}),
+    );
+    assert_eq!(body["changed"], "답을 고쳤어요: 회의는 2시였어요 → 회의는 3시였어 (오늘 대화에 반영해요)");
+    assert_eq!(kept(&s), [json!({"wrong": "회의는 2시였어요", "right": "회의는 3시였어", "ref": "chat:2026-02-05"})]);
+    assert_eq!(
+        s.get("/diary/2026-02-05/chat").1["messages"][0],
+        json!({"role": "user", "text": "회의는 3시였어", "wrong": "회의는 2시였어요", "about": "answer"})
+    );
+    s.post_json("/diary/2026-02-05/chat", &json!({"message": "회의 몇 시였지?"}));
+    let system = model.last()[0]["content"].as_str().unwrap().to_string();
+    assert!(system.contains("[사용자가 고쳐 준 것]\n- 회의는 2시였어요 → 회의는 3시였어"), "{system}");
+    assert_eq!(s.post_json("/diary/2026-02-05/chat", &json!({"message": "x", "wrong": "y", "about": "?"})).0, 400);
+}
+
+#[test]
+fn the_days_summary_is_made_again_with_what_the_user_corrected() {
+    let model = FakeModel::new(|_| Ok(r#"{"summary": "오전 9시 통화했어요.", "question": "어떠셨어요?"}"#.into()));
+    let s = Server::start_full(1 << 20, model.clone());
+    s.post_json("/corrections", &json!({"wrong": "10초 통화", "right": "20분 통화했어", "ref": "summary:2026-02-06"}));
+    life_server::assistant::summary::generate(&s.paths, model.as_ref(), "2026-02-06", true).unwrap();
+    let asked = model.last().last().unwrap()["content"].as_str().unwrap().to_string();
+    assert!(asked.contains("[사용자가 고쳐 준 것]\n- 10초 통화 → 20분 통화했어"), "{asked}");
+}

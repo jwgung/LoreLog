@@ -62,6 +62,10 @@ internal fun TodosScreen(onBack: () -> Unit) {
     var todos by remember { mutableStateOf<DiaryClient.Todos?>(null) }
     var failed by remember { mutableStateOf(false) }
     var input by remember { mutableStateOf("") }
+    // 이름이 틀린 할 일을 고치는 중: (id, 지금 이름)
+    var editing by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var editText by remember { mutableStateOf("") }
+    var changed by remember { mutableStateOf("") }
 
     suspend fun reload() {
         val t = DiaryClient.fetchTodos(context)
@@ -77,6 +81,17 @@ internal fun TodosScreen(onBack: () -> Unit) {
         }
     }
     fun act(id: String, action: String) = scope.launch { DiaryClient.actTodo(context, id, action); reload() }
+    fun edit(item: DiaryClient.Todo) { editing = item.id to item.title; editText = item.title; changed = "" }
+    fun saveEdit() {
+        val (id, old) = editing ?: return
+        val right = editText.trim()
+        editing = null
+        if (right.isEmpty() || right == old) return
+        scope.launch {
+            changed = DiaryClient.correct(context, old, right, "todo:$id") ?: "고치지 못했어요. 연결을 확인하고 다시 해 주세요."
+            reload()
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize().background(TGround).safeDrawingPadding().imePadding()) {
         Row(
@@ -92,9 +107,27 @@ internal fun TodosScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(
-                "기록에서 찾은 건 위에 제안으로 올려요. 맞으면 받아 주시고, 아닌 건 지워 주세요. 지운 건 다시 올리지 않아요.",
+                "기록에서 찾은 건 위에 제안으로 올려요. 맞으면 받아 주시고, 아닌 건 지워 주세요. 지운 건 다시 올리지 않아요. 이름이 틀렸으면 눌러서 고쳐 주세요.",
                 color = TSub, fontSize = 13.sp, lineHeight = 20.sp, modifier = Modifier.padding(vertical = 6.dp),
             )
+            if (changed.isNotEmpty()) Text(changed, color = TAccent, fontSize = 13.sp, lineHeight = 20.sp)
+            editing?.let {
+                Column(
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).border(1.dp, TAccent, RoundedCornerShape(16.dp)).padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("맞는 이름으로 고쳐 주세요", color = TSub, fontSize = 12.sp)
+                    BasicTextField(
+                        value = editText, onValueChange = { editText = it }, maxLines = 3,
+                        textStyle = TextStyle(color = TText, fontSize = 15.sp, lineHeight = 22.sp),
+                        cursorBrush = SolidColor(TAccent), modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        Text("고치기", color = TAccent, fontSize = 14.sp, modifier = Modifier.clickable { saveEdit() }.padding(vertical = 6.dp))
+                        Text("그만두기", color = TSub, fontSize = 14.sp, modifier = Modifier.clickable { editing = null }.padding(vertical = 6.dp))
+                    }
+                }
+            }
             val t = todos
             when {
                 t == null && failed -> Text("서버에 연결하지 못했어요. 연결을 확인하고 다시 열어 주세요.", color = TSub, fontSize = 13.sp)
@@ -102,7 +135,7 @@ internal fun TodosScreen(onBack: () -> Unit) {
                 else -> {
                     if (t.proposed.isNotEmpty()) {
                         Text("기록에서 찾은 할 일", color = TSub, fontSize = 12.sp, modifier = Modifier.padding(start = 4.dp))
-                        t.proposed.forEach { item -> ProposedRow(item, onAccept = { act(item.id, "accept") }, onDismiss = { act(item.id, "dismiss") }) }
+                        t.proposed.forEach { item -> ProposedRow(item, onAccept = { act(item.id, "accept") }, onDismiss = { act(item.id, "dismiss") }, onEdit = { edit(item) }) }
                         androidx.compose.foundation.layout.Spacer(Modifier.size(6.dp))
                     }
                     if (t.open.isEmpty() && t.proposed.isEmpty()) {
@@ -112,7 +145,7 @@ internal fun TodosScreen(onBack: () -> Unit) {
                         )
                     }
                     t.open.forEach { item ->
-                        TodoRow(item, done = false, onToggle = { act(item.id, "done") }, onDismiss = { act(item.id, "dismiss") })
+                        TodoRow(item, done = false, onToggle = { act(item.id, "done") }, onDismiss = { act(item.id, "dismiss") }, onEdit = { edit(item) })
                     }
                     if (t.open.isNotEmpty() && t.extracting) Text("더 찾고 있어요…", color = TSub, fontSize = 12.sp)
                     if (t.done.isNotEmpty()) {
@@ -148,13 +181,16 @@ internal fun TodosScreen(onBack: () -> Unit) {
 
 /** 비서의 제안: 받으면(+) 할 일이 되고, 지우면(×) 다시 올리지 않는다. */
 @Composable
-private fun ProposedRow(item: DiaryClient.Todo, onAccept: () -> Unit, onDismiss: () -> Unit) {
+private fun ProposedRow(item: DiaryClient.Todo, onAccept: () -> Unit, onDismiss: () -> Unit, onEdit: () -> Unit) {
     Row(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).border(1.dp, TLine, RoundedCornerShape(16.dp))
             .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(modifier = Modifier.weight(1f).padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Column(
+            modifier = Modifier.weight(1f).clickable(onClick = onEdit).semantics { contentDescription = "이름 고치기" }.padding(vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
             Text(item.title, fontSize = 15.sp, lineHeight = 22.sp, color = TText)
             val meta = listOf(item.source.takeIf { it.isNotBlank() }?.let { "${it}에서" }, item.due.takeIf { it.isNotBlank() })
                 .filterNotNull().joinToString(" · ")
@@ -172,7 +208,7 @@ private fun ProposedRow(item: DiaryClient.Todo, onAccept: () -> Unit, onDismiss:
 }
 
 @Composable
-private fun TodoRow(item: DiaryClient.Todo, done: Boolean, onToggle: () -> Unit, onDismiss: (() -> Unit)?) {
+private fun TodoRow(item: DiaryClient.Todo, done: Boolean, onToggle: () -> Unit, onDismiss: (() -> Unit)?, onEdit: (() -> Unit)? = null) {
     Row(
         modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(if (done) Color.Transparent else TSurface)
             .then(if (done) Modifier else Modifier.border(1.dp, TLine, RoundedCornerShape(16.dp)))
@@ -190,7 +226,12 @@ private fun TodoRow(item: DiaryClient.Todo, done: Boolean, onToggle: () -> Unit,
                 contentAlignment = Alignment.Center,
             ) { if (done) Icon(Lucide.Check, contentDescription = null, tint = Color(0xFFC9D6F5), modifier = Modifier.size(15.dp)) }
         }
-        Column(modifier = Modifier.weight(1f).padding(vertical = 8.dp, horizontal = 6.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Column(
+            modifier = Modifier.weight(1f)
+                .then(if (onEdit != null) Modifier.clickable(onClick = onEdit).semantics { contentDescription = "이름 고치기" } else Modifier)
+                .padding(vertical = 8.dp, horizontal = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+        ) {
             Text(
                 item.title, fontSize = 15.sp, lineHeight = 22.sp,
                 color = if (done) TSub else TText, textDecoration = if (done) TextDecoration.LineThrough else null,

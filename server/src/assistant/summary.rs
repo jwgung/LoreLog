@@ -22,6 +22,7 @@ pub const SYSTEM: &str = r#"너는 사용자의 개인 비서다. 오늘 수집�
 - 메신저 알림은 제목보다 내용을 근거로 한다. 점심·잡담은 업무로 쓰지 않고 한 줄 이내로 쓰거나 뺀다.
 - 시각은 기록에 적힌 시각을 그대로 옮긴다. 24시간제를 오전/오후로 바꿀 때 틀리지 않게 한다(19:15 = 저녁 7시 15분, 08:34 = 오전 8시 34분).
 - 정리는 존댓말로 비서가 말하듯 쓰고 "~했어요", "~셨어요", "~보여요"로 끝낸다. 글머리 기호를 붙이지 않는다.
+- [사용자가 고쳐 준 것]이 있으면 그 내용이 맞다. 고친 일은 고친 대로 쓰고, 틀렸다고 한 내용은 다시 쓰지 않는다.
 - 질문은 하나만. 오늘 가장 의미 있는 일(통화, 일정 변경, 결정이 필요한 요청) 하나를 골라 "그때 어떠셨어요?"를 묻는 식으로, 사용자의 마음이나 선택 이유를 부드러운 존댓말 한 문장으로 묻는다. 다른 사람의 말을 사용자의 말로 단정하는 질문은 하지 않는다.
 JSON만 출력: {"summary": "문장1\n문장2\n...", "question": "..."}"#;
 
@@ -75,7 +76,11 @@ pub fn ask(model: &dyn Model, context: &str, day: &str) -> anyhow::Result<Value>
 
 /// Build the day's draft with the model and write it into the day's note (unless `dry_run`). -> the note text
 pub fn generate(paths: &Paths, model: &dyn Model, day: &str, dry_run: bool) -> anyhow::Result<String> {
-    let ai = ask(model, &build_context(paths, day, true), day)?;
+    use super::corrections::{Ref, about, section};
+    let fixed = section(&about(paths, &[Ref::Summary(day.into())]));
+    let context = build_context(paths, day, true);
+    let context = if fixed.is_empty() { context } else { format!("{context}\n\n{fixed}") };
+    let ai = ask(model, &context, day)?;
     let path = paths.vault.join("Diary").join(format!("{day}.md"));
     let existing = crate::note::read(&path).unwrap_or_default();
     let s = |k: &str| ai.get(k).and_then(Value::as_str).unwrap_or("").to_string();
