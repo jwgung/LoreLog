@@ -818,3 +818,69 @@ fn a_file_that_came_with_a_mail_is_found_as_that_mails_thread() {
     assert!(hits[0]["snippet"].as_str().unwrap().contains("9900"));
     assert_eq!(t.find("견적").len(), 1, "the mail and its file are one hit");
 }
+
+// ---------- one matter beyond one thread (#8) ----------
+
+fn event(t: &T, name: &str, day: &str, title: &str, attendees: &[&str]) {
+    let list: String = attendees.iter().map(|a| format!("  - {a}\n")).collect();
+    write(
+        &t.p.vault.join("Events").join(name),
+        &format!(
+            "---\ntype: event\ndav_uid: {name}\ntitle: {title}\nstart: {day}T10:00:00\nend: {day}T11:00:00\nattendees:\n{list}---\n건문구\n"
+        ),
+    );
+}
+
+/// a sent mail makes `me@x.com` the user's own address
+fn sent(t: &T, name: &str, subject: &str, day: &str, to: &str) {
+    write(
+        &t.p.vault.join("Mail").join(&day[..4]).join(name),
+        &format!(
+            "---\ntype: mail\nmail_id: <{name}@x>\nmail_source: account/Sent Messages\ndate: {day}\ntime: 09:00\nfrom: 나 <me@x.com>\nto: {to}\nsubject: \"{subject}\"\nin_reply_to: \nreferences: []\nattachments: []\n---\n## Message\n건문구 보냅니다\n"
+        ),
+    );
+}
+
+#[test]
+fn mails_of_one_subject_with_someone_in_common_are_one_matter_with_its_events() {
+    let mut t = T::new();
+    t.mail_full("c1.md", "납품 일정 확인", "건문구 처음", "2026-03-02", None, "[]", "", "거래처 <b@y.com>");
+    sent(&t, "c2.md", "FW: 납품 일정 확인", "2026-03-10", "거래처 <b@y.com>"); // a new mail, not a reply
+    event(&t, "e1.md", "2026-03-12", "납품 일정 확인", &["거래처 <b@y.com>", "나 <me@x.com>"]);
+    event(&t, "e2.md", "2026-03-30", "납품 일정 확인", &["거래처 <b@y.com>"]); // weeks after: another meeting
+    t.update();
+    let hits = t.find("건문구");
+    let matter: Vec<&Value> = hits.iter().filter(|h| h["count"].as_i64() == Some(3)).collect();
+    assert_eq!(matter.len(), 1, "two mails and the meeting about them are one: {hits:?}");
+    assert_eq!((matter[0]["first"].as_str(), matter[0]["last"].as_str()), (Some("2026-03-02"), Some("2026-03-12")));
+    assert_eq!(matter[0]["latest"], "납품 일정 확인", "what came last in it");
+    assert_eq!(hits.len(), 2, "the later meeting stands alone: {hits:?}");
+}
+
+#[test]
+fn a_subject_in_common_without_anyone_in_common_or_only_the_user_or_too_far_apart_is_not_one_matter() {
+    let mut t = T::new();
+    sent(&t, "s0.md", "주간 보고서", "2026-04-01", "갑 <a@y.com>");
+    t.mail_full("m1.md", "주간 보고서", "건문구 갑", "2026-04-01", None, "[]", "", "갑 <a@y.com>");
+    t.mail_full("m2.md", "주간 보고서", "건문구 을", "2026-04-03", None, "[]", "", "을 <b@z.com>"); // only the user in common
+    t.mail_full("m3.md", "RE: 주간 보고서", "건문구 갑 나중", "2026-06-01", None, "[]", "", "갑 <a@y.com>"); // two months on
+    t.update();
+    let hits = t.find("건문구");
+    let counts: Vec<i64> = hits.iter().map(|h| h["count"].as_i64().unwrap()).collect();
+    assert_eq!(counts.iter().sum::<i64>(), 4, "{hits:?}");
+    assert!(counts.contains(&2), "the user's mail to 갑 and 갑's mail: {counts:?}");
+    assert_eq!(hits.len(), 3, "{counts:?}");
+}
+
+#[test]
+fn a_matter_follows_new_mail_and_is_kept_apart_again_when_a_mail_goes() {
+    let mut t = T::new();
+    t.mail_full("p1.md", "장비 반입 요청", "건문구 하나", "2026-05-01", None, "[]", "", "현장 <c@y.com>");
+    t.update();
+    let p2 = t.mail_full("p2.md", "장비 반입 요청", "건문구 둘", "2026-05-04", None, "[]", "", "현장 <c@y.com>");
+    t.update();
+    assert_eq!(t.find("건문구")[0]["count"], 2);
+    fs::remove_file(p2).unwrap();
+    t.update();
+    assert_eq!(t.find("건문구")[0]["count"], 1);
+}
