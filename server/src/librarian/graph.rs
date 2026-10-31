@@ -307,8 +307,15 @@ pub fn extract(lib: &mut Librarian, model: &dyn Model, run: &Run) -> anyhow::Res
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         let Some((_, _, text)) = todo.get(i) else { break };
                         let key = sha(text);
-                        let kept = std::fs::read_to_string(cache_file(&dir, &key)).ok();
-                        let got = kept.or_else(|| ask(model, text).ok());
+                        let path = cache_file(&dir, &key);
+                        let kept = std::fs::read_to_string(&path).ok();
+                        let got = kept.or_else(|| {
+                            let answer = ask(model, text).ok()?;
+                            // kept at once, so a run cut off midway does not ask it again
+                            let _ = crate::fsutil::ensure_private_dir(path.parent().unwrap_or(&dir))
+                                .and_then(|_| crate::fsutil::write_private_atomic(&path, answer.as_bytes()));
+                            Some(answer)
+                        });
                         out.lock().unwrap_or_else(|e| e.into_inner()).push((i, got));
                     }
                 });
