@@ -44,6 +44,8 @@ fn a_backup_is_sealed_checked_and_opens_only_with_the_password() {
     assert_eq!(backup::restore(&done.file, "correct horse battery", &out).unwrap(), 2);
     assert!(backup::restore(&done.file, "wrong", &dir.path().join("x.zip")).is_err());
     assert!(!dir.path().join("x.zip").exists(), "nothing is left of a failed restore");
+    let st = life_server::collect::setup::load_status(&life_server::collect::sync::status_file(&p));
+    assert_eq!(st["backup"]["ok"], true, "life status shows a copy made by hand too: {st:?}");
     assert!(!backup::due(&p, at("2026-03-02", 20)), "once a day");
     assert!(backup::due(&p, at("2026-03-03", 4)));
     let left: Vec<_> = fs::read_dir(&to).unwrap().flatten().map(|e| e.file_name()).collect();

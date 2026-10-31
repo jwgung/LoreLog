@@ -164,6 +164,12 @@ pub fn run_at(paths: &Paths, now: DateTime<Local>, work: u8) -> anyhow::Result<D
         }
     }
     crate::fsutil::write_private_atomic(&status_file(paths), status.to_string().as_bytes())?;
+    // what `life status` and the screens show, whoever made the copy (the sync, `life backup`, the button)
+    let detail = match &result {
+        Ok(d) => format!("{} files sealed and checked: {}", d.files, d.file.display()),
+        Err(e) => format!("backup failed: {e}"),
+    };
+    let _ = crate::collect::setup::record(&crate::collect::sync::status_file(paths), "backup", result.is_ok(), &detail);
     result
 }
 
