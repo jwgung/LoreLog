@@ -952,8 +952,9 @@ impl Librarian {
             }
         }
         a.people = people;
+        // a word naming an organization, when no one is named (with a person named, a word tells which one: #9)
         for w in std::mem::take(&mut a.words) {
-            if self.org_exactly(&w)?.is_some() && !a.orgs.contains(&w) {
+            if a.people.is_empty() && self.org_exactly(&w)?.is_some() && !a.orgs.contains(&w) {
                 a.orgs.push(w);
             }
         }
