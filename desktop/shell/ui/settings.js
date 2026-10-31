@@ -43,7 +43,7 @@ async function loadHost() {
     const failed = info.failed.length ? " · 열지 못한 주소: " + info.failed.join(", ") : "";
     $("hostNote").textContent = "받는 곳: " + info.listening.join(", ") + failed + " · 노트: " + info.notes_dir;
   }
-  await Promise.all([loadSources(), loadModels(), loadSync()]);
+  await Promise.all([loadSources(), loadModels(), loadSync(), loadHeld()]);
   try { $("asks").checked = await invoke("asks_get"); }
   catch (e) { $("asks").disabled = true; $("asksMsg").textContent = "설정을 읽지 못했습니다: " + e; }
 }
@@ -228,6 +228,48 @@ async function loadSync() {
 $("syncNow").onclick = async () => {
   try { await invoke("sync_now"); say("syncMsg", "동기화하는 중…", true); setTimeout(loadSync, 1500); }
   catch (e) { say("syncMsg", String(e), false); }
+};
+
+// ---------- what the vault holds, and forgetting part of it ----------
+const mb = (b) => (b / 1e6 < 1 ? "1MB 미만" : Math.round(b / 1e6) + "MB");
+async function loadHeld() {
+  let held = [];
+  try { held = await invoke("vault_holdings"); } catch (e) { $("forgetMsg").textContent = String(e); return; }
+  const rows = $("heldRows"); rows.replaceChildren();
+  const pick = $("forgetSource"); pick.replaceChildren();
+  for (const h of held) {
+    const tr = el("tr");
+    for (const t of [h.label, String(h.files), mb(h.bytes), h.first + " ~ " + h.last]) tr.append(el("td", t));
+    rows.append(tr);
+    const o = el("option", h.label); o.value = h.source; pick.append(o);
+  }
+}
+const span = () => ({ from: $("forgetFrom").value, to: $("forgetTo").value });
+let planned = null; // the request the plan was shown for: 지우기 forgets exactly that
+for (const id of ["forgetSource", "forgetFrom", "forgetTo"]) $(id).onchange = () => { planned = null; $("forgetGo").disabled = true; };
+$("forgetPlan").onclick = async () => {
+  const req = { source: $("forgetSource").value, span: span() };
+  try {
+    const p = await invoke("vault_plan", req);
+    planned = p.files.length || p.todos ? req : null;
+    $("forgetGo").disabled = !planned;
+    $("forgetMsg").textContent = planned
+      ? `파일 ${p.files.length}개(${mb(p.bytes)})와 받지 않은 할 일 제안 ${p.todos}개가 지워집니다.` +
+        (p.comes_back ? " 이 출처는 동기화 때마다 원래 서비스에서 다시 읽어 옵니다. 거기에 남아 있으면 다시 들어오니, 원래 서비스에서 지우거나 수집을 끄세요." : "")
+      : "그 기간에는 지울 것이 없습니다.";
+  } catch (e) { planned = null; $("forgetGo").disabled = true; $("forgetMsg").textContent = String(e); }
+};
+$("forgetGo").onclick = async () => {
+  if (!planned) return;
+  const label = $("forgetSource").selectedOptions[0]?.textContent || planned.source;
+  if (!confirm(`${label}의 ${planned.span.from} ~ ${planned.span.to} 기록을 지웁니다. 되돌릴 수 없습니다. 먼저 내보내기를 해 두면 안전합니다. 지울까요?`)) return;
+  $("forgetGo").disabled = true;
+  try {
+    const p = await invoke("vault_forget", planned);
+    $("forgetMsg").textContent = `지웠습니다: 파일 ${p.files.length}개, 할 일 제안 ${p.todos}개. 검색에서는 다음 갱신 때 빠집니다.`;
+  } catch (e) { $("forgetMsg").textContent = String(e); }
+  planned = null;
+  await loadHeld();
 };
 
 $("exportVault").onclick = async () => {
