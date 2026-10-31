@@ -239,6 +239,7 @@ impl Picked {
     pub fn graph(&self) -> crate::librarian::graph::Ask1 {
         crate::librarian::graph::Ask1 {
             people: self.people.clone(),
+            words: self.words.clone(),
             orgs: self.orgs.clone(),
             things: self.things.clone(),
             roles: self.roles.clone(),
@@ -329,6 +330,12 @@ pub trait Index {
 /// graph adds what they cannot (an organization by its domain, a role, a state), and its noise does not push them out.
 fn merged(graph: Vec<Value>, words: Vec<Value>, limit: usize) -> Vec<Value> {
     let key = |h: &Value| h.get("case").and_then(Value::as_str).map(str::to_string);
+    // the matters of an organization asked about by its exact name: those first, then the words'
+    if !graph.is_empty() && graph.iter().all(|h| h.get("sure") == Some(&Value::Bool(true))) {
+        let seen: std::collections::HashSet<String> = graph.iter().filter_map(key).collect();
+        let rest = words.into_iter().filter(|h| key(h).is_none_or(|k| !seen.contains(&k)));
+        return graph.into_iter().chain(rest).take(limit).collect();
+    }
     let in_graph: std::collections::HashSet<String> = graph.iter().filter_map(key).collect();
     let in_words: std::collections::HashSet<String> = words.iter().filter_map(key).collect();
     let (both, words_only): (Vec<Value>, Vec<Value>) =
@@ -352,7 +359,12 @@ fn merged(graph: Vec<Value>, words: Vec<Value>, limit: usize) -> Vec<Value> {
 /// as words then, so "OO 건" still finds the records that name them).
 pub fn lookup(lib: &mut dyn Index, p: &Picked, limit: usize, day: &str, said: &[String]) -> anyhow::Result<Named> {
     // the graph, when the question asks it something (a graph not there yet, or broken, is no answer: the words are)
-    let graph = if p.graph().is_empty() { Vec::new() } else { lib.with_graph(p, day, limit).unwrap_or_default() };
+    // (a name taken for a person or a word may be an organization: the graph is asked whenever there is a name)
+    let graph = if p.graph().is_empty() && p.people.is_empty() && p.words.is_empty() {
+        Vec::new()
+    } else {
+        lib.with_graph(p, day, limit).unwrap_or_default()
+    };
     if !p.people.is_empty()
         && let Some(named) = lib.with_names(&p.people, &p.words.join(" "), day, limit)?
     {

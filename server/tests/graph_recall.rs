@@ -311,3 +311,21 @@ fn a_company_named_in_a_colleagues_mail_is_not_the_users_own_company() {
     let got = titles(&ask(&mut lib, Picked { orgs: vec!["다른상사".into()], ..Picked::default() }));
     assert!(!got.contains(&"점심 메뉴".to_string()), "the user's own company is not the one named: {got:?}");
 }
+
+#[test]
+fn a_name_the_picker_took_for_a_person_or_a_word_is_tried_as_an_organization_when_it_is_exactly_one() {
+    let (t, mut lib) = world();
+    t.mail("m1.md", "2026-06-01", "영업 <s@monnit.com>", ME, "센서 단가", "단가표입니다", false, "[]");
+    lib.update(false).unwrap();
+    let guess = FakeModel::new(|_| Ok(r#"{"a": {"org:monnit.com": ["모닛"]}}"#.into()));
+    graph::abbreviate_orgs(&lib, guess.as_ref()).unwrap();
+    for p in [
+        Picked { people: vec!["모닛".into()], ..Picked::default() },
+        Picked { words: vec!["모닛".into()], ..Picked::default() },
+    ] {
+        assert!(titles(&ask(&mut lib, p)).contains(&"센서 단가".to_string()));
+    }
+    // a word that is only part of an organization's name is a word
+    let p = Picked { words: vec!["센서".into()], ..Picked::default() };
+    assert_eq!(titles(&ask(&mut lib, p)), titles(&lib.search("센서", 8, None).unwrap()));
+}

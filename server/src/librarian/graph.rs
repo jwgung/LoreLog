@@ -652,7 +652,7 @@ pub fn abbreviate_orgs(lib: &Librarian, model: &dyn Model) -> anyhow::Result<usi
     if todo.is_empty() {
         return Ok(0);
     }
-    let system = "회사·기관마다, 사람들이 대화나 메일에서 줄여 부르는 이름만 적는다: 영문 약자(한국표준협회 → KSA, 한국산업기술기획평가원 → KEIT), 앞뒤를 뗀 이름(한국표준협회 → 표준협회, CJ올리브네트웍스 → CJ올리브, 씨제이올리브), 한글·영어 바꿔 쓴 이름(SL 코퍼레이션 → 에스엘). 이미 적힌 이름은 다시 적지 않는다. 널리 쓰이는 줄임말이 아니면 적지 않는다. JSON 만: {\"a\": {\"org:도메인\": [\"이름\", ...]}}";
+    let system = "회사·기관 목록을 보고, 사람들이 말로 부를 때 쓰는 다른 이름을 적는다. 두 가지를 적는다: (1) 줄여 부르는 이름 — 영문 약자, 앞뒤를 뗀 이름. (2) 영어 이름이나 도메인만 있으면 그것을 한글로 읽은 이름. 목록에 이미 있는 이름은 빼고 새 이름만. 모르면 빈 목록.\n예) 입력:\norg:ksa.or.kr: ksa.or.kr / 한국표준협회\norg:softwareag.com: softwareag.com / Software AG\norg:kakaocorp.com: kakaocorp.com\n출력: {\"a\": {\"org:ksa.or.kr\": [\"KSA\", \"표준협회\"], \"org:softwareag.com\": [\"소프트웨어에이지\", \"SAG\"], \"org:kakaocorp.com\": [\"카카오\"]}}\nJSON 만.";
     let user: String = todo.iter().map(|(id, names)| format!("{id}: {}\n", names.join(" / "))).collect();
     let answer = model.complete(
         &[json!({"role": "system", "content": system}), json!({"role": "user", "content": user})],
@@ -689,6 +689,8 @@ pub fn abbreviate_orgs(lib: &Librarian, model: &dyn Model) -> anyhow::Result<usi
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Ask1 {
     pub people: Vec<String>,
+    /// the other words: one that is exactly an organization's name is asked about as it
+    pub words: Vec<String>,
     pub orgs: Vec<String>,
     pub things: Vec<String>,
     /// roles someone has in the matters (the record's words, or a group of them)
@@ -909,8 +911,53 @@ impl Librarian {
             .flatten()
     }
 
-    /// The matters this question asks the graph about, as hits: the user's own and the latest first.
+    /// The organization a name is exactly (by a name, an alias, a short name or its domain), if one.
+    fn org_exactly(&self, name: &str) -> anyhow::Result<Option<String>> {
+        let key = org_key(name);
+        if key.chars().count() < 2 {
+            return Ok(None);
+        }
+        let short = short_names(&self.paths);
+        let mut st =
+            self.db.prepare("select id, name, aliases from nodes where kind = 'org' and id not like 'org:~%'")?;
+        let rows: Vec<(String, String, String)> =
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        let hits: Vec<String> = rows
+            .into_iter()
+            .filter(|(id, n, a)| {
+                let label = id.strip_prefix("org:").and_then(|d| d.split('.').next()).unwrap_or("").to_string();
+                std::iter::once(n.clone())
+                    .chain(std::iter::once(label))
+                    .chain(serde_json::from_str::<Vec<String>>(a).unwrap_or_default())
+                    .chain(short.get(id).cloned().unwrap_or_default())
+                    .any(|x| org_key(&x) == key)
+            })
+            .map(|(id, ..)| id)
+            .collect();
+        Ok((hits.len() == 1).then(|| hits[0].clone()))
+    }
+
+    /// The matters this question asks the graph about, as hits: the user's own and the latest first. A name the
+    /// question gives as a person or a word that is exactly one organization is asked about as that organization.
     pub fn graph_lookup(&mut self, a: &Ask1, day: &str, limit: usize) -> anyhow::Result<Vec<Value>> {
+        let mut a = a.clone();
+        let mut people = Vec::new();
+        for p in std::mem::take(&mut a.people) {
+            if self.nodes_named(&p, &["person"])?.is_empty()
+                && let Some(_) = self.org_exactly(&p)?
+            {
+                a.orgs.push(p);
+            } else {
+                people.push(p);
+            }
+        }
+        a.people = people;
+        for w in std::mem::take(&mut a.words) {
+            if self.org_exactly(&w)?.is_some() && !a.orgs.contains(&w) {
+                a.orgs.push(w);
+            }
+        }
+        let a = &a;
         if a.is_empty() {
             return Ok(Vec::new());
         }
@@ -918,7 +965,10 @@ impl Librarian {
         let groups = groups(&self.paths);
         // who and what
         let mut ids = Vec::new();
+        // sure: every organization asked about is exactly one known by its mail domain, and nothing else is asked
+        let mut sure = !a.orgs.is_empty() && a.things.is_empty() && a.roles.is_empty() && a.states.is_empty();
         for o in &a.orgs {
+            sure &= self.org_exactly(o)?.is_some();
             ids.extend(self.orgs_named(o)?);
         }
         for t in &a.things {
@@ -1055,6 +1105,9 @@ impl Librarian {
             };
             if !roles.is_empty() {
                 h["roles"] = json!(roles.join(", "));
+            }
+            if sure {
+                h["sure"] = json!(true); // the matters of the one asked about: before what the words find
             }
             out.push(h);
         }
