@@ -6,8 +6,9 @@
 //! Kinds of question and what counts as found in the top `k`:
 //!   status     "그 건 어떻게 됐지"        the thread it is about
 //!   precedent  "전에 어떻게 했지"          the earlier thread it is about
-//!   person     "이 사람이랑 뭐 있었지"      any of the latest five threads with that address (and how many of the hits
-//!                                          are with them)
+//!   person     "이 사람이랑 뭐 있었지"      any of the latest five things with that address up to today: threads of mail
+//!                                          they sent or received (not copied, not mass mail) and events they attended
+//!                                          (read from the notes, not from the index), and how many hits are with them
 //!   pending    "이번 달에 뭐가 걸려 있지"   not scored: kept to see what is asked
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -99,19 +100,38 @@ fn involves(file: &str, addr: &str) -> bool {
     ["from", "to", "cc"].iter().any(|k| note::field(&head, k).is_some_and(|v| v.contains(addr)))
 }
 
-/// The threads of the latest five mails with that address, newest first.
+/// Was this mail with that address: sent or received by them, not a mass mail (#22)?
+fn with(head: &str, addr: &str) -> bool {
+    let people = |k: &str| super::records::addresses(note::field(head, k).unwrap_or(""), "");
+    let (to, cc) = (people("to"), people("cc"));
+    let direct = people("from").iter().chain(&to).any(|p| p.addr == addr);
+    direct && (to.len() + cc.len()) as i64 <= super::index::MASS_MAIL
+}
+
+/// The latest five things with that address up to today, newest first: threads of mail they sent or received, and
+/// events they attended (an event is known by its title: a weekly meeting is one).
 fn person_threads(lib: &Librarian, vault: &Path, addr: &str) -> HashSet<String> {
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let events = crate::assistant::util::files_like(&vault.join("Events"), "", ".md").into_iter().filter_map(|p| {
+        let text = note::head(&p, 4000);
+        let (front, _) = note::split(&text);
+        let attended = front.to_lowercase().contains(&format!("<{addr}>"));
+        let day: String = note::field(front, "start")?.chars().take(10).collect();
+        (attended && day <= today).then(|| (day, format!("event:{}", note::field(front, "title").unwrap_or(""))))
+    });
     let mut dated: Vec<(String, String)> = files_like_nested(&vault.join("Mail"), "", ".md")
         .into_iter()
         .filter_map(|p| {
             let f = p.to_string_lossy().to_string();
-            if !involves(&f, addr) {
+            let head = note::head(&p, 3000);
+            if !with(&head, addr) {
                 return None;
             }
-            let head = note::head(&p, 3000);
             let when = format!("{} {}", note::field(&head, "date")?, note::field(&head, "time").unwrap_or(""));
             Some((when, lib.thread_of(&f)?))
         })
+        .filter(|(when, _)| when[..10.min(when.len())] <= *today)
+        .chain(events)
         .collect();
     dated.sort_by(|a, b| b.0.cmp(&a.0));
     let mut out = Vec::new();
@@ -127,9 +147,11 @@ fn person_threads(lib: &Librarian, vault: &Path, addr: &str) -> HashSet<String> 
 }
 
 fn rank(lib: &Librarian, hits: &[serde_json::Value], targets: &HashSet<String>) -> Option<usize> {
-    hits.iter()
-        .position(|h| h["ref"].as_str().and_then(|r| lib.thread_of(r)).is_some_and(|t| targets.contains(&t)))
-        .map(|i| i + 1)
+    let key = |h: &serde_json::Value| match h["source"].as_str() {
+        Some("event") => h["title"].as_str().map(|t| format!("event:{t}")),
+        _ => h["ref"].as_str().and_then(|r| lib.thread_of(r)),
+    };
+    hits.iter().position(|h| key(h).is_some_and(|t| targets.contains(&t))).map(|i| i + 1)
 }
 
 /// Measure every case against the index, with the user's words and (if a model is given) the words it picks.
@@ -157,12 +179,14 @@ pub fn run(
         });
         let (model_words, model_rank) = match model {
             None => (None, None),
-            Some(m) => match recall::search_words(m, &c.q) {
+            Some(m) => match recall::pick(m, &c.q) {
                 None => (Some(Vec::new()), None), // the model chose not to look anything up
-                Some(words) => {
-                    let hits = lib.search(&words.join(" "), k, None)?;
+                Some(p) => {
+                    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+                    let hits = recall::lookup(lib, &p, k, &today, &[])?; // as the chat does today
                     let r = if scored { rank(lib, &hits, &targets) } else { None };
-                    (Some(words), r)
+                    let shown = p.people.iter().map(|n| format!("@{n}")).chain(p.words.iter().cloned()).collect();
+                    (Some(shown), r)
                 }
             },
         };

@@ -20,7 +20,7 @@
 //! update empties and fills it in one transaction. A file that cannot be read (or holds a record that cannot be
 //! understood) is skipped and its old documents are dropped; the next update tries it again. The index is a copy built
 //! from the records: `reset` empties it, `update` builds it again.
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -100,7 +100,10 @@ const SNIPPET_AFTER: usize = 140;
 const WINDOW: i64 = 400;
 /// Bump when the tables or what goes in them change: an index of another version is built again. (6 was the last
 /// Python version; the Rust index is built anew once.)
-pub const SCHEMA_VERSION: &str = "7";
+pub const SCHEMA_VERSION: &str = "8"; // 8: who each record is with (#22)
+
+/// A mail sent to more people than this is a mass mail: not counted as with any one of them.
+pub const MASS_MAIL: i64 = 10;
 
 const TABLES: &str = "
 create table if not exists meta(key text primary key, value text);
@@ -111,6 +114,9 @@ create index if not exists docs_thread on docs(thread);
 create table if not exists convs(file text, seq integer, id text, data text);
 create index if not exists convs_file on convs(file);
 create virtual table if not exists fts using fts5(terms);
+create table if not exists people(n integer, role text, name text, key text, addr text);
+create index if not exists people_n on people(n);
+create index if not exists people_addr on people(addr);
 ";
 
 /// The index is of another version, or no update has finished yet: it is not searched, because it may hold what the
@@ -188,6 +194,23 @@ pub fn to_query(q: &str) -> String {
         dedup(WORD_RE.find_iter(&fold(q)).map(|m| m.as_str().to_string())).into_iter().take(MAX_QUERY_WORDS).collect();
     let parts = words.iter().map(|w| phrase(w)).chain(words.iter().filter_map(|w| stem(w)).map(|s| phrase(&s)));
     dedup(parts).join(" OR ")
+}
+
+/// A name as compared: folded, lower case, without spaces and dots (`김영희 수석`, `김 영희` → `김영희수석`, `김영희`).
+pub fn name_key(name: &str) -> String {
+    fold(name).to_lowercase().chars().filter(|c| !c.is_whitespace() && !matches!(c, '.' | '·' | '"' | '\'')).collect()
+}
+
+/// Someone the records are with, by address.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct Someone {
+    pub addr: String,
+    /// the names they were written with, most used first
+    pub names: Vec<String>,
+    /// records with them (mass mail not counted)
+    pub count: i64,
+    /// the day of the latest
+    pub last: String,
 }
 
 /// The part of the text around the first word of the query (or its stem) that appears in it.
@@ -340,6 +363,7 @@ impl Librarian {
 
     fn forget(&self, path: &str) -> rusqlite::Result<()> {
         self.db.execute("delete from fts where rowid in (select n from docs where file = ?)", [path])?;
+        self.db.execute("delete from people where n in (select n from docs where file = ?)", [path])?;
         self.db.execute("delete from docs where file = ?", [path])?;
         Ok(())
     }
@@ -354,6 +378,10 @@ impl Librarian {
             "insert into fts(rowid, terms) values (?, ?)",
             params![n, terms(&format!("{}\n{}\n{}", d.title, d.extra, d.text))],
         )?;
+        let mut st = self.db.prepare_cached("insert into people(n, role, name, key, addr) values (?, ?, ?, ?, ?)")?;
+        for p in &d.people {
+            st.execute(params![n, p.role, p.name, name_key(&p.name), p.addr])?;
+        }
         Ok(())
     }
 
@@ -652,24 +680,140 @@ impl Librarian {
         chosen.extend(spill.into_iter().take(room));
         let mut out = Vec::new();
         for (n, thread, _) in chosen {
-            let (source, kind, day, title, text, file): (String, String, String, String, String, String) =
-                self.db.query_row("select source, kind, day, title, text, file from docs where n = ?", [n], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
-                })?;
-            let (count, first, last) = match thread {
-                Some(t) => self.thread_span(t)?,
-                None => (1, Some(day.clone()), Some(day.clone())),
-            };
-            let first = first.filter(|f| !f.is_empty()).unwrap_or_else(|| day.clone());
-            let last = last.filter(|f| !f.is_empty()).unwrap_or_else(|| day.clone());
-            out.push(json!({"source": source, "kind": kind, "day": day, "title": title, "snippet": snippet(&text, q), "ref": file,
-                            "count": count, "first": first, "last": last}));
+            out.push(self.hit(*n, thread.as_deref(), q)?);
             if let Some(hook) = self.after_first_hit.as_mut() {
                 hook();
                 self.after_first_hit = None;
             }
         }
         Ok(out)
+    }
+
+    /// One hit as the assistant gets it: `{source, kind, day, title, snippet, ref, count, first, last}`.
+    fn hit(&self, n: i64, thread: Option<&str>, q: &str) -> anyhow::Result<Value> {
+        let (source, kind, day, title, text, file): (String, String, String, String, String, String) =
+            self.db.query_row("select source, kind, day, title, text, file from docs where n = ?", [n], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))
+            })?;
+        let (count, first, last) = match thread {
+            Some(t) => self.thread_span(&t.to_string())?,
+            None => (1, Some(day.clone()), Some(day.clone())),
+        };
+        let first = first.filter(|f| !f.is_empty()).unwrap_or_else(|| day.clone());
+        let last = last.filter(|f| !f.is_empty()).unwrap_or_else(|| day.clone());
+        Ok(
+            json!({"source": source, "kind": kind, "day": day, "title": title, "snippet": snippet(&text, q), "ref": file,
+                  "count": count, "first": first, "last": last}),
+        )
+    }
+
+    fn ready(&self) -> anyhow::Result<()> {
+        if self.version().as_deref() != Some(SCHEMA_VERSION) {
+            return Err(
+                Outdated(format!("index version {:?}, expected {SCHEMA_VERSION}: run update", self.version())).into()
+            );
+        }
+        if self.meta("policy").is_none() {
+            return Err(Outdated("index not built yet: run update".into()).into());
+        }
+        Ok(())
+    }
+
+    /// The people whose name contains `name` (compared as [`name_key`]), one per address: a name alone never makes
+    /// two addresses one person. The user's own addresses (the senders of their sent mail) are left out. Most
+    /// records first.
+    pub fn people(&self, name: &str) -> anyhow::Result<Vec<Someone>> {
+        self.ready()?;
+        let key = name_key(name);
+        if key.chars().count() < 2 {
+            return Ok(Vec::new());
+        }
+        let sql = format!(
+            "with mine as (select distinct p.addr from people p join docs d on d.n = p.n where d.kind = '보낸 메일' and p.role = 'from'),
+                  mass as (select n from people where role in ('to', 'cc') group by n having count(*) > {MASS_MAIL}),
+                  who as (select distinct addr from people where instr(key, ?) > 0 and addr not in (select addr from mine))
+             select p.addr, p.name, count(distinct p.n), max(d.day) from people p join docs d on d.n = p.n
+             where p.addr in (select addr from who) and p.n not in (select n from mass)
+             group by p.addr, p.name"
+        );
+        let rows: Vec<(String, String, i64, String)> = {
+            let mut st = self.db.prepare(&sql)?;
+            st.query_map([key], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                .collect::<rusqlite::Result<_>>()?
+        };
+        let mut by: BTreeMap<String, (Vec<(i64, String)>, i64, String)> = BTreeMap::new();
+        for (addr, name, count, last) in rows {
+            let e = by.entry(addr).or_insert_with(|| (Vec::new(), 0, String::new()));
+            if !name.is_empty() {
+                e.0.push((count, name));
+            }
+            e.1 = e.1.max(count);
+            if last > e.2 {
+                e.2 = last;
+            }
+        }
+        let mut out: Vec<Someone> = by
+            .into_iter()
+            .map(|(addr, (mut names, count, last))| {
+                names.sort_by(|a, b| b.0.cmp(&a.0));
+                Someone { addr, names: names.into_iter().map(|(_, n)| n).collect(), count, last }
+            })
+            .collect();
+        out.sort_by(|a, b| b.count.cmp(&a.count));
+        Ok(out)
+    }
+
+    /// What was with these people up to `until` (YYYY-MM-DD, that day included; later events are not "what was"):
+    /// mail they sent or received and events they attended, newest first, then mail they were only copied on; mass
+    /// mail left out; one hit per thread, and per title for events (a weekly meeting is one). `q` (if any) narrows it
+    /// to records with its words.
+    pub fn with_people(&mut self, addrs: &[String], q: &str, until: &str, limit: usize) -> anyhow::Result<Vec<Value>> {
+        self.ready()?;
+        if addrs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let marks = vec!["?"; addrs.len()].join(",");
+        let expr = to_query(q);
+        let narrow =
+            if expr.is_empty() { String::new() } else { "and d.n in (select rowid from fts where fts match ?)".into() };
+        let sql = format!(
+            "with mass as (select n from people where role in ('to', 'cc') group by n having count(*) > {MASS_MAIL})
+             select d.n, d.thread, max(p.role != 'cc') as direct, d.day, d.source, d.title from people p join docs d on d.n = p.n
+             where p.addr in ({marks}) and d.n not in (select n from mass) and d.day <= ? {narrow}
+             group by d.n order by direct desc, d.day desc, d.n desc"
+        );
+        let mut args: Vec<String> = addrs.to_vec();
+        args.push(until.to_string());
+        if !expr.is_empty() {
+            args.push(expr);
+        }
+        self.db.execute_batch("begin")?;
+        let result = (|| {
+            let rows: Vec<(i64, Option<String>, String, String)> = {
+                let mut st = self.db.prepare(&sql)?;
+                st.query_map(params_from_iter(args.iter()), |r| Ok((r.get(0)?, r.get(1)?, r.get(4)?, r.get(5)?)))?
+                    .collect::<rusqlite::Result<_>>()?
+            };
+            let mut seen = HashSet::new();
+            let mut out = Vec::new();
+            for (n, thread, source, title) in rows {
+                let key = match (&thread, source.as_str()) {
+                    (Some(t), _) => t.clone(),
+                    (None, "event") => format!("event:{title}"),
+                    (None, _) => format!("#{n}"),
+                };
+                if !seen.insert(key) {
+                    continue;
+                }
+                out.push(self.hit(n, thread.as_deref(), q)?);
+                if out.len() >= limit {
+                    break;
+                }
+            }
+            Ok(out)
+        })();
+        let _ = self.db.execute_batch("rollback");
+        result
     }
 
     /// The thread an indexed file belongs to (a mail's `mail:<id>`); None for a file not indexed or not in a thread.

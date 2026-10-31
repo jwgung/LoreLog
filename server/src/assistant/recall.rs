@@ -94,8 +94,9 @@ pub const WORDS_SYSTEM: &str = r#"사용자의 말에서 지난 기록을 찾아
 - 회사·제품·기술 이름이나 외래어는 원래 표기도 넣는다(예: "트렌드마이너" → "트렌드마이너", "TrendMiner"; "브로커" → "브로커", "broker").
 - 같은 것을 메일에서 흔히 부르는 다른 말이 있으면 하나 더 넣는다(예: "거래처" → "거래처", "고객사").
 - 낱말은 모두 합쳐 8개를 넘지 않는다.
+- 사람에 대해 묻거나 사람이 나오면 그 사람의 이름을 people 에 넣는다. 이름만 넣고 호칭과 직급(님, 씨, 수석, 팀장, 대리 …)은 뺀다. 회사 이름은 people 이 아니라 words 에 넣는다. 그 사람과의 일 가운데 특정한 주제를 물으면 그 주제 낱말만 words 에 넣고, 그 사람과 뭐가 있었는지만 물으면 words 는 비운다.
 - 기분이나 상태만 말하거나, 인사나 맞장구면 search 를 false 로 한다.
-JSON 으로만 답한다: {"search": true 또는 false, "words": ["낱말", ...]}"#;
+JSON 으로만 답한다: {"search": true 또는 false, "people": ["이름", ...], "words": ["낱말", ...]}"#;
 
 pub const LIMIT: usize = 8;
 pub const MAX_WORDS: usize = 10;
@@ -105,8 +106,27 @@ pub const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 /// the phone's 150 s read timeout. If the model is busy, the user's own words are searched instead.
 pub const WORDS_TIMEOUT_S: u64 = 15;
 
+/// What to look up for a message: the people it is about and the words.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Picked {
+    pub people: Vec<String>,
+    pub words: Vec<String>,
+}
+
 /// Words to search for this message, or None if there is nothing to look up. A model that cannot pick: the user's words.
+/// (The names the model picks are counted as words here; [`pick`] keeps them apart.)
 pub fn search_words(model: &dyn crate::llm::Model, message: &str) -> Option<Vec<String>> {
+    pick(model, message).map(|p| {
+        let mut all = p.people;
+        all.extend(p.words);
+        all.truncate(MAX_WORDS);
+        all
+    })
+}
+
+/// The people and words to look up for this message, or None if there is nothing to look up. A model that cannot
+/// pick: the user's words. With no people, there is always a word (the message itself if the model gave none).
+pub fn pick(model: &dyn crate::llm::Model, message: &str) -> Option<Picked> {
     let messages = [
         serde_json::json!({"role": "system", "content": WORDS_SYSTEM}),
         serde_json::json!({"role": "user", "content": message}),
@@ -114,28 +134,54 @@ pub fn search_words(model: &dyn crate::llm::Model, message: &str) -> Option<Vec<
     let picked = model
         .complete(&messages, crate::llm::Ask::new(0.0, 80, true, WORDS_TIMEOUT_S))
         .and_then(|t| crate::llm::parse_json(&t));
-    let Ok(d) = picked else { return Some(vec![message.to_string()]) };
+    let Ok(d) = picked else { return Some(Picked { people: Vec::new(), words: vec![message.to_string()] }) };
     if !matches!(d.get("search"), Some(Value::Bool(true))) && d.get("search").and_then(Value::as_str) != Some("true") {
         return None;
     }
-    let words: Vec<String> = d
-        .get("words")
-        .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .map(|w| super::util::pystr(Some(w)).trim().to_string())
-                .filter(|w| !w.is_empty())
-                .take(MAX_WORDS)
-                .collect()
-        })
-        .unwrap_or_default();
-    Some(if words.is_empty() { vec![message.to_string()] } else { words })
+    let list = |k: &str| -> Vec<String> {
+        d.get(k)
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .map(|w| super::util::pystr(Some(w)).trim().to_string())
+                    .filter(|w| !w.is_empty())
+                    .take(MAX_WORDS)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let (people, words) = (list("people"), list("words"));
+    let words = if words.is_empty() && people.is_empty() { vec![message.to_string()] } else { words };
+    Some(Picked { people, words })
 }
 
 /// What recall needs of an index (the librarian; a test can stand in).
 pub trait Index {
     fn update(&mut self) -> anyhow::Result<crate::librarian::Report>;
     fn search(&mut self, q: &str, limit: usize, day: &str, said: &[String]) -> anyhow::Result<Vec<Value>>;
+    /// What was with the people of these names up to `day` (narrowed by `q`), or None when no name is someone in the
+    /// records.
+    fn with_names(
+        &mut self,
+        _names: &[String],
+        _q: &str,
+        _day: &str,
+        _limit: usize,
+    ) -> anyhow::Result<Option<Vec<Value>>> {
+        Ok(None)
+    }
+}
+
+/// Look up what was picked: by person when a name is someone in the records, else by the words (the names counted
+/// as words then, so "OO 건" still finds the records that name them).
+pub fn lookup(lib: &mut dyn Index, p: &Picked, limit: usize, day: &str, said: &[String]) -> anyhow::Result<Vec<Value>> {
+    if !p.people.is_empty()
+        && let Some(hits) = lib.with_names(&p.people, &p.words.join(" "), day, limit)?
+    {
+        return Ok(hits);
+    }
+    let all: Vec<String> = p.people.iter().chain(&p.words).cloned().collect();
+    lib.search(&all.join(" "), limit, day, said)
 }
 
 impl Index for crate::librarian::Librarian {
@@ -145,6 +191,27 @@ impl Index for crate::librarian::Librarian {
 
     fn search(&mut self, q: &str, limit: usize, day: &str, said: &[String]) -> anyhow::Result<Vec<Value>> {
         crate::librarian::Librarian::search(self, q, limit, Some(crate::librarian::Exclude::Words(day, said)))
+    }
+
+    fn with_names(&mut self, names: &[String], q: &str, day: &str, limit: usize) -> anyhow::Result<Option<Vec<Value>>> {
+        let mut addrs: Vec<String> = Vec::new();
+        for n in names {
+            for someone in self.people(n)? {
+                if !addrs.contains(&someone.addr) {
+                    addrs.push(someone.addr); // every address of that name: the assistant asks which one (#9)
+                }
+            }
+        }
+        if addrs.is_empty() {
+            return Ok(None);
+        }
+        let hits = self.with_people(&addrs, q, day, limit)?;
+        if hits.is_empty() && !q.trim().is_empty() {
+            // the other words were how the user knows them (a company written another way in the records): the
+            // person is known, so what was with them is the answer, not "not found"
+            return self.with_people(&addrs, "", day, limit).map(Some);
+        }
+        Ok(Some(hits))
     }
 }
 
@@ -173,7 +240,8 @@ fn asked(
     said: &[String],
 ) -> (Option<String>, Option<Vec<String>>, crate::librarian::asks::Found) {
     use crate::librarian::asks::Found;
-    let Some(words) = search_words(model, message) else { return (None, None, Found::NotSearched) };
+    let Some(picked) = pick(model, message) else { return (None, None, Found::NotSearched) };
+    let words: Vec<String> = picked.people.iter().chain(&picked.words).cloned().collect();
     let mut notes = Vec::new();
     let found = (|| -> anyhow::Result<Vec<Value>> {
         let mut lib = open()?;
@@ -187,7 +255,7 @@ fn asked(
         }
         let mut all = said.to_vec();
         all.push(message.to_string());
-        lib.search(&words.join(" "), LIMIT, day, &all)
+        lookup(lib.as_mut(), &picked, LIMIT, day, &all)
     })();
     match found {
         Ok(hits) => {
