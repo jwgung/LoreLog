@@ -26,8 +26,9 @@ static AI_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(&format!("(?s){}(.*?){}", regex::escape(AI_BEGIN), regex::escape(AI_END))).unwrap());
 static GENERATED_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^ai_generated:[ \t]*(.+)$").unwrap());
 static GENERATED_LINE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?m)^ai_generated:.*$").unwrap());
-static CORRECTION_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(?s)^\(정리의 이 문장이 틀렸다고 알려 주셨어요: "(.*?)"\)\n(.*)$"#).unwrap());
+static CORRECTION_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?s)^\((정리의 이 문장|비서의 이 답)이 틀렸다고 알려 주셨어요: "(.*?)"\)\n(.*)$"#).unwrap()
+});
 
 // ---------- corrections said in chat ----------
 
@@ -36,9 +37,19 @@ pub fn wrap_correction(wrong: &str, message: &str) -> String {
     format!("(정리의 이 문장이 틀렸다고 알려 주셨어요: \"{wrong}\")\n{message}")
 }
 
+/// The same for an answer of the assistant the user said was wrong (#10).
+pub fn wrap_answer_correction(wrong: &str, message: &str) -> String {
+    format!("(비서의 이 답이 틀렸다고 알려 주셨어요: \"{wrong}\")\n{message}")
+}
+
 /// (wrong sentence, what the user said) for a stored correction line, else None.
 pub fn split_correction(text: &str) -> Option<(String, String)> {
-    CORRECTION_RE.captures(text).map(|c| (c[1].to_string(), c[2].to_string()))
+    split_fix(text).map(|(w, said, _)| (w, said))
+}
+
+/// (wrong, what the user said, whether it was an answer rather than a summary sentence) for a correction line.
+pub fn split_fix(text: &str) -> Option<(String, String, bool)> {
+    CORRECTION_RE.captures(text).map(|c| (c[2].to_string(), c[3].to_string(), &c[1] == "비서의 이 답"))
 }
 
 // ---------- sections ----------

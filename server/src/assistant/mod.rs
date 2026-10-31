@@ -1,6 +1,7 @@
 //! The diary assistant: what it reads about a day, the day's note, the senders the user allowed, the chat and to-dos.
 pub mod chat;
 pub mod context;
+pub mod corrections;
 pub mod diary;
 pub mod recall;
 pub mod senders;

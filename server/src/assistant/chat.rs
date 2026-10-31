@@ -4,7 +4,8 @@ use chrono::Local;
 use serde_json::{Map, Value, json};
 
 use super::context::{build_context, read_records};
-use super::diary::{read_day, save_user, split_correction, wrap_correction};
+use super::corrections::{Correction, Ref};
+use super::diary::{read_day, save_user, split_fix, wrap_answer_correction, wrap_correction};
 use super::util::pystr;
 use crate::config::Paths;
 use crate::fsutil::append_private;
@@ -24,7 +25,8 @@ pub const CHAT_SYSTEM: &str = r#"너는 사용자의 개인 비서다. 사용자
 - 같은 일에 대해 기록끼리 서로 다르면 어느 쪽이 맞는지 정하지 말고, 다르다는 것을 날짜와 함께 그대로 알려 준다. 이때는 세 문장까지 말해도 된다.
 - 사용자가 한 말은 그대로 존중한다. 기록과 다르면 사용자의 말이 맞다. 기록과 어긋나도 따지지 않는다.
 - 감정이나 이유를 단정하거나 진단하지 않는다. 위로나 조언은 사용자가 원할 때만 짧게 한다.
-- 사용자가 틀린 문장을 고쳐 주면 "알겠어요"로 받고, 고친 내용을 한 줄로 다시 확인한다.
+- 사용자가 틀린 문장이나 답을 고쳐 주면 "알겠어요"로 짧게 받는다. 무엇이 바뀌었는지는 화면에 따로 보이므로 되풀이하지 않는다.
+- [사용자가 고쳐 준 것]이 있으면 그 내용이 맞다. 기록이 달라도 고친 내용으로 답한다.
 - 질문은 꼭 필요할 때만 하나만 한다. 같은 질문을 반복하지 않는다.
 - 다른 사람의 사생활을 새로 꺼내거나 추측하지 않는다."#;
 
@@ -33,7 +35,23 @@ pub const CHAT_SYSTEM: &str = r#"너는 사용자의 개인 비서다. 사용자
 /// when there is nothing to look up.
 pub type Recall<'a> = &'a dyn Fn(&str, &str, &[String], Option<&str>) -> Option<String>;
 
-/// Save what the user said (a correction or a word for the diary), then answer it with the model.
+/// What the user said was wrong, when the message corrects something.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Fix<'a> {
+    /// a sentence of the day's summary
+    Summary(&'a str),
+    /// an answer of the assistant
+    Answer(&'a str),
+}
+
+/// An answer, and what changed when the message corrected something (one line, #10).
+#[derive(Debug, PartialEq)]
+pub struct Answer {
+    pub reply: String,
+    pub changed: Option<String>,
+}
+
+/// Save what the user said (a correction of a summary sentence, or a word for the diary), then answer it.
 pub fn chat_reply(
     paths: &Paths,
     model: &dyn Model,
@@ -42,10 +60,34 @@ pub fn chat_reply(
     message: &str,
     wrong: Option<&str>,
 ) -> anyhow::Result<String> {
+    chat_answer(paths, model, recall, day, message, wrong.map(Fix::Summary)).map(|a| a.reply)
+}
+
+/// Save what the user said (a correction, or a word for the diary), then answer it with the model. A correction is
+/// kept as one pair ([`super::corrections`]) and the answer says what changed.
+pub fn chat_answer(
+    paths: &Paths,
+    model: &dyn Model,
+    recall: Recall,
+    day: &str,
+    message: &str,
+    fix: Option<Fix>,
+) -> anyhow::Result<Answer> {
     let draft = read_day(paths, day);
-    match wrong {
-        Some(w) => save_user(paths, day, &json!({"append": true, "corrections": [{"wrong": w, "right": message}]}))?,
+    let correction = match fix {
+        Some(Fix::Summary(w)) => Correction::new(w, message, Ref::Summary(day.into())),
+        Some(Fix::Answer(w)) => Correction::new(w, message, Ref::Chat(day.into())),
+        None => None,
+    };
+    match fix {
+        Some(Fix::Summary(w)) => {
+            save_user(paths, day, &json!({"append": true, "corrections": [{"wrong": w, "right": message}]}))?
+        }
+        Some(Fix::Answer(_)) => {} // about the chat, not the day's note: kept below with the others
         None => save_user(paths, day, &json!({"append": true, "reflection": message}))?,
+    }
+    if let Some(c) = &correction {
+        super::corrections::keep(paths, c)?;
     }
     let exists = draft["exists"].as_bool().unwrap_or(false);
     let mut head = format!("{CHAT_SYSTEM}\n\n[오늘 기록]\n{}", build_context(paths, day, false));
@@ -53,6 +95,13 @@ pub fn chat_reply(
         let lines: Vec<String> =
             draft["summary"].as_array().map(|a| a.iter().map(|v| pystr(Some(v))).collect()).unwrap_or_default();
         head += &format!("\n\n[비서가 오늘 정리해서 전한 말]\n{}", lines.join("\n"));
+    }
+    let fixed = super::corrections::section(&super::corrections::about(
+        paths,
+        &[Ref::Summary(day.into()), Ref::Chat(day.into())],
+    ));
+    if !fixed.is_empty() {
+        head += &format!("\n\n{fixed}");
     }
     let mut msgs = vec![json!({"role": "system", "content": head})];
     if let Some(q) = draft["question"].as_str().filter(|q| exists && !q.is_empty()) {
@@ -63,25 +112,26 @@ pub fn chat_reply(
     for t in turns {
         msgs.push(json!({"role": pystr(t.get("role")), "content": pystr(t.get("text"))}));
     }
-    let user = match wrong {
-        Some(w) => wrap_correction(w, message),
+    let user = match fix {
+        Some(Fix::Summary(w)) => wrap_correction(w, message),
+        Some(Fix::Answer(w)) => wrap_answer_correction(w, message),
         None => message.to_string(),
     };
     // what the librarian found is quoted material (other people's mail, messengers): it goes into the user's turn, not
-    // among the rules, and is not kept as the user's words. A correction is about today's summary, not a question.
+    // among the rules, and is not kept as the user's words. A correction is about today, not a question.
     let said: Vec<String> = turns
         .iter()
         .filter(|t| t.get("role").and_then(Value::as_str) == Some("user"))
         .map(|t| pystr(t.get("text")))
         .collect();
-    let past = if wrong.is_some() { None } else { recall(message, day, &said, asked_before(turns).as_deref()) };
+    let past = if fix.is_some() { None } else { recall(message, day, &said, asked_before(turns).as_deref()) };
     let asked = past.as_deref().and_then(super::recall::asked_candidates);
     let quoted = past.map(|p| format!("{}\n\n", super::recall::quote(&p))).unwrap_or_default();
     msgs.push(json!({"role": "user", "content": format!("{quoted}{user}")}));
     let reply = model.complete(&msgs, Ask::new(0.5, 300, false, 120))?.trim().to_string();
     append_chat(paths, day, "user", &user)?;
     append_turn(paths, day, "assistant", &reply, asked.as_deref())?;
-    Ok(reply)
+    Ok(Answer { reply, changed: correction.map(|c| c.changed()) })
 }
 
 /// When the last turn asked back which person was meant: the question, the reply and its candidates, for the words of
@@ -130,8 +180,9 @@ pub fn chat_history(paths: &Paths, day: &str) -> Vec<Value> {
         .map(|t| {
             let role = pystr(t.get("role"));
             let text = pystr(t.get("text"));
-            match (role == "user").then(|| split_correction(&text)).flatten() {
-                Some((wrong, said)) => json!({"role": role, "text": said, "wrong": wrong}),
+            match (role == "user").then(|| split_fix(&text)).flatten() {
+                Some((wrong, said, true)) => json!({"role": role, "text": said, "wrong": wrong, "about": "answer"}),
+                Some((wrong, said, false)) => json!({"role": role, "text": said, "wrong": wrong}),
                 None => json!({"role": role, "text": text}),
             }
         })

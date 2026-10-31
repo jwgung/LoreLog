@@ -197,6 +197,21 @@ pub fn act(paths: &Paths, id: &str, action: &str) -> std::io::Result<Acted> {
     Ok(Acted::Changed)
 }
 
+/// Name a to-do as the user said (#10). A dismissed one stays dismissed.
+pub fn rename(paths: &Paths, id: &str, title: &str) -> std::io::Result<Acted> {
+    let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut d = load(paths);
+    let Some(i) = items(&mut d).iter_mut().find(|i| i.get("id").and_then(Value::as_str) == Some(id)) else {
+        return Ok(Acted::Missing);
+    };
+    if status(i) == DISMISSED {
+        return Ok(Acted::NotNow);
+    }
+    i["title"] = json!(title.trim().chars().take(200).collect::<String>());
+    save(paths, &d)?;
+    Ok(Acted::Changed)
+}
+
 /// The user's own to-do.
 pub fn add_user(paths: &Paths, text: &str, day: &str) -> std::io::Result<bool> {
     let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());

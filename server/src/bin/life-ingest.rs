@@ -21,7 +21,10 @@ const HELP: &str = r#"life-ingest: collection endpoint that any client (phone, P
   GET  /diary/allow          the allowed list as stored
   POST /diary/senders        body: {allow: ["<app>: <sender>" | "<app>: *"]}; which messengers may feed the diary
   GET  /diary/<date>/chat    the day's chat exchange (to show it again)
-  POST /diary/<date>/chat    body: {message, wrong?}; stores it in the diary and returns the assistant's reply
+  POST /diary/<date>/chat    body: {message, wrong?, about?: summary|answer}; stores it in the diary and returns the
+                             assistant's {reply}, and with wrong {changed}: what the correction changed, in one line
+  POST /corrections          body: {wrong, right, ref: summary:<date>|chat:<date>|todo:<id>}; keeps the pair in
+                             raw/corrections, applies it (the day's note, the chat, the to-do's name), returns {changed}
   POST /transcribe           body: audio (wav); returns {text} from the speech model (LIFE_ASR_URL); nothing is stored
   GET  /todos                proposed (found by the model), open and recently done to-dos (+ extracting flag)
   POST /todos                body: {text}; add the user's own to-do
