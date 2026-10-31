@@ -11,7 +11,7 @@ use life_server::llm::{Http, HttpSpeech, Model};
 use serde_json::Value;
 
 const HELP: &str = "\
-usage: life-librarian {update,rebuild,search,stats,eval} ...
+usage: life-librarian {update,rebuild,search,stats,eval,graph} ...
 
 Command line of the librarian (사서): keep the index of every record and search it.
 
@@ -20,6 +20,8 @@ Command line of the librarian (사서): keep the index of every record and searc
   search WORDS... [--limit N]
                          what the librarian finds for these words, across all days
   stats                  how much is indexed
+  graph [--limit N]      the model reads up to N records not read yet (default 300; life sync does this each run) and
+                         puts what they say into the graph: who and what they are about, roles, states, documents
   eval FILE [--k N] [--no-model]
                          how well the librarian finds what the questions in FILE are about (recall@N, default 8),
                          with the words as asked and with the words the chat model picks (--no-model: only the
@@ -33,7 +35,7 @@ const OUTDATED: &str =
     "the index is from another version or not built yet, and is not searched: run `life-librarian update` first";
 
 fn usage(msg: &str) -> ExitCode {
-    eprintln!("usage: life-librarian {{update,rebuild,search,stats,eval}} ...\nlife-librarian: error: {msg}");
+    eprintln!("usage: life-librarian {{update,rebuild,search,stats,eval,graph}} ...\nlife-librarian: error: {msg}");
     ExitCode::from(2)
 }
 
@@ -54,7 +56,7 @@ fn main() -> ExitCode {
     let mut rest = args[1..].iter();
     while let Some(a) = rest.next() {
         match a.as_str() {
-            "--limit" if cmd == "search" => match rest.next().map(|v| v.parse::<usize>()) {
+            "--limit" if cmd == "search" || cmd == "graph" => match rest.next().map(|v| v.parse::<usize>()) {
                 Some(Ok(n)) => limit = n,
                 _ => return usage("argument --limit: invalid int value"),
             },
@@ -67,7 +69,7 @@ fn main() -> ExitCode {
             other => return usage(&format!("unrecognized arguments: {other}")),
         }
     }
-    if !matches!(cmd, "update" | "rebuild" | "search" | "stats" | "eval") {
+    if !matches!(cmd, "update" | "rebuild" | "search" | "stats" | "eval" | "graph") {
         return usage(&format!("argument cmd: invalid choice: '{cmd}'"));
     }
     if cmd == "search" && words.is_empty() {
@@ -80,6 +82,10 @@ fn main() -> ExitCode {
     if cmd == "eval" && !life_server::librarian::index::default_path(&paths).exists() {
         eprintln!("{OUTDATED}"); // measuring writes nothing, so it does not make an index either
         return ExitCode::FAILURE;
+    }
+    if cmd == "graph" {
+        let n = if args.iter().any(|a| a == "--limit") { limit } else { sync::GRAPH_LIMIT };
+        return ExitCode::from(sync::graph(&paths, n, &mut sync::console).exit_code());
     }
     if matches!(cmd, "update" | "rebuild") {
         return ExitCode::from(sync::librarian(&paths, cmd == "rebuild", &mut sync::console).exit_code());

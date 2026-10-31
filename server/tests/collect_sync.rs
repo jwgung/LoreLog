@@ -35,7 +35,7 @@ fn a_job_that_is_not_set_up_is_recorded_as_failed_and_the_librarian_still_runs()
     let (r, seen) = run(&paths, false);
     assert_eq!(r, Ok(false));
     let jobs: Vec<(Job, Outcome)> = seen.iter().map(|(j, o, _)| (*j, *o)).collect();
-    assert_eq!(jobs, [(Job::Calendar, Outcome::NotSetUp), (Job::Librarian, Outcome::Ok)]);
+    assert_eq!(jobs, [(Job::Calendar, Outcome::NotSetUp), (Job::Librarian, Outcome::Ok), (Job::Graph, Outcome::Ok)]);
     assert!(matches!(&seen[0].2[..], [Line::Problem(p)] if p.starts_with("Missing calendar URL or credentials")));
 
     let st: Value = serde_json::from_str(&fs::read_to_string(sync::status_file(&paths)).unwrap()).unwrap();
