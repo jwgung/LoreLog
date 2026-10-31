@@ -324,7 +324,7 @@ impl Librarian {
 
     /// Drop every table and make them again; the caller holds the write lock.
     fn make_tables(&self) -> rusqlite::Result<()> {
-        for t in ["docs", "files", "convs", "fts", "meta"] {
+        for t in ["docs", "files", "convs", "fts", "meta", "people"] {
             self.db.execute_batch(&format!("drop table if exists {t}"))?;
         }
         self.db.execute_batch(TABLES)?;

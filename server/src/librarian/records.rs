@@ -67,6 +67,9 @@ pub struct Person {
     pub addr: String,
 }
 
+/// At most this many people are kept of one header (a mail to more is a mass mail either way).
+const MAX_PEOPLE: usize = 200;
+
 /// The `name <addr>` (or bare `addr`) entries of a header value or list.
 pub fn addresses(value: &str, role: &'static str) -> Vec<Person> {
     static ENTRY: LazyLock<Regex> = LazyLock::new(|| {
@@ -79,8 +82,9 @@ pub fn addresses(value: &str, role: &'static str) -> Vec<Person> {
                 c.get(2).or_else(|| c.get(3))?.as_str().trim_matches(|ch| ch == '"' || ch == '\'').to_lowercase();
             let name =
                 c.get(1).map(|m| m.as_str().trim().trim_matches(|ch| ch == '"' || ch == '\'').trim()).unwrap_or("");
-            Some(Person { role, name: name.to_string(), addr })
+            Some(Person { role, name: name.chars().take(100).collect(), addr })
         })
+        .take(MAX_PEOPLE)
         .collect()
 }
 

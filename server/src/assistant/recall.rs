@@ -100,6 +100,8 @@ JSON 으로만 답한다: {"search": true 또는 false, "people": ["이름", ...
 
 pub const LIMIT: usize = 8;
 pub const MAX_WORDS: usize = 10;
+/// a name shared by more people than this is looked up for the ones with the most records
+pub const MAX_PEOPLE: usize = 50;
 /// if `life sync` is writing the index, wait this long at most; the chat must not hang
 pub const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 /// picking the words must stay short: 15 s + the lock wait + the reply (120 s) leaves the index update about 10 s before
@@ -197,7 +199,7 @@ impl Index for crate::librarian::Librarian {
         let mut addrs: Vec<String> = Vec::new();
         for n in names {
             for someone in self.people(n)? {
-                if !addrs.contains(&someone.addr) {
+                if !addrs.contains(&someone.addr) && addrs.len() < MAX_PEOPLE {
                     addrs.push(someone.addr); // every address of that name: the assistant asks which one (#9)
                 }
             }

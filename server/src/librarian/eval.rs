@@ -130,7 +130,7 @@ fn person_threads(lib: &Librarian, vault: &Path, addr: &str) -> HashSet<String> 
             let when = format!("{} {}", note::field(&head, "date")?, note::field(&head, "time").unwrap_or(""));
             Some((when, lib.thread_of(&f)?))
         })
-        .filter(|(when, _)| when[..10.min(when.len())] <= *today)
+        .filter(|(when, _)| when.chars().take(10).collect::<String>() <= today)
         .chain(events)
         .collect();
     dated.sort_by(|a, b| b.0.cmp(&a.0));

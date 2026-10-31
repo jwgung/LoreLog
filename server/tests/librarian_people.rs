@@ -130,6 +130,22 @@ fn what_was_with_a_person_is_their_own_mail_and_events_newest_first_without_mass
     assert_eq!(titles(&only), ["RE: 견적 요청"], "other words narrow it");
 }
 
+#[test]
+fn a_rebuild_leaves_no_one_on_a_record_they_were_not_on() {
+    let t = world();
+    let mut lib = t.lib();
+    let before: Vec<String> = titles(&lib.with_people(&["yh@x.com".to_string()], "", "2026-12-31", 8).unwrap());
+    fs::remove_file(t.p.vault.join("Mail/2026/b1.md")).unwrap();
+    t.mail("z1.md", "2026-07-01", "남 <other@x.com>", ME, "", "새 메일", "다른 사람", "[]", false);
+    lib.update(true).unwrap(); // the tables are made again: the record numbers start over
+    let after = titles(&lib.with_people(&["yh@x.com".to_string()], "", "2026-12-31", 8).unwrap());
+    assert!(!after.contains(&"새 메일".to_string()), "a new record does not inherit an old record's people: {after:?}");
+    assert_eq!(after, before.into_iter().filter(|x| x != "회의록").collect::<Vec<_>>());
+    lib.reset().unwrap();
+    lib.update(false).unwrap();
+    assert_eq!(titles(&lib.with_people(&["yh@x.com".to_string()], "", "2026-12-31", 8).unwrap()), after);
+}
+
 struct Picks(&'static str);
 impl Model for Picks {
     fn complete(&self, _: &[Value], _: Ask) -> anyhow::Result<String> {
