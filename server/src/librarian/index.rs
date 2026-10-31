@@ -100,7 +100,7 @@ const SNIPPET_AFTER: usize = 140;
 const WINDOW: i64 = 400;
 /// Bump when the tables or what goes in them change: an index of another version is built again. (6 was the last
 /// Python version; the Rust index is built anew once.)
-pub const SCHEMA_VERSION: &str = "14"; // 14: the graph (#45), 8: who each record is with, 9: the phone's address book (#22), 10: its company (#9), 11: attachments and the mail they came with (#15), 12: one matter beyond a thread (#8), 13: the matters the user took part in
+pub const SCHEMA_VERSION: &str = "15"; // 15: organizations the user said are one (#47), 14: the graph (#45), 8: who each record is with, 9: the phone's address book (#22), 10: its company (#9), 11: attachments and the mail they came with (#15), 12: one matter beyond a thread (#8), 13: the matters the user took part in
 
 /// A mail sent to more people than this is a mass mail: not counted as with any one of them.
 pub const MASS_MAIL: i64 = 10;
@@ -136,6 +136,7 @@ create index if not exists edges_src on edges(src, rel);
 create index if not exists edges_dst on edges(dst, rel);
 create index if not exists edges_file on edges(file);
 create table if not exists graph_seen(file text, n integer, sha text);
+create table if not exists org_same(a text, b text, primary key (a, b));
 create index if not exists graph_seen_file on graph_seen(file);
 ";
 
@@ -351,7 +352,9 @@ impl Librarian {
 
     /// Drop every table and make them again; the caller holds the write lock.
     fn make_tables(&self) -> rusqlite::Result<()> {
-        for t in ["docs", "files", "convs", "fts", "meta", "people", "contacts", "nodes", "edges", "graph_seen"] {
+        for t in
+            ["docs", "files", "convs", "fts", "meta", "people", "contacts", "nodes", "edges", "graph_seen", "org_same"]
+        {
             self.db.execute_batch(&format!("drop table if exists {t}"))?;
         }
         self.db.execute_batch(TABLES)?;
@@ -651,6 +654,7 @@ impl Librarian {
                 super::graph::rules(&me.db)?;
                 super::graph::restore(&me.db, &super::graph::cache_dir(&me.paths))?; // the model's answers kept
             }
+            super::graph::apply_fixes(&me.db, &me.paths)?; // what the user corrected, on every update (cheap)
             me.db.execute("insert or replace into meta(key, value) values ('policy', ?)", [&policy])?;
             Ok((indexed, skipped, removed.len()))
         })?;

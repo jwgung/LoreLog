@@ -970,7 +970,8 @@ impl Librarian {
         let mut sure = !a.orgs.is_empty() && a.things.is_empty() && a.roles.is_empty() && a.states.is_empty();
         for o in &a.orgs {
             sure &= self.org_exactly(o)?.is_some();
-            ids.extend(self.orgs_named(o)?);
+            let named = self.orgs_named(o)?;
+            ids.extend(self.with_same(named)?);
         }
         for t in &a.things {
             ids.extend(self.nodes_named(t, &["thing", "case", "doc"])?);
@@ -1165,4 +1166,125 @@ pub fn group_labels(lib: &Librarian, model: &dyn Model) -> anyhow::Result<usize>
     crate::fsutil::ensure_private_dir(&cache_dir(&lib.paths))?;
     crate::fsutil::write_private_atomic(&path, json!(known).to_string().as_bytes())?;
     Ok(n)
+}
+
+// ---------- what the user corrected (#47) ----------
+
+/// The key a relation is corrected by: its ends, kind and record (stable across rebuilds).
+pub fn edge_key(e: &Edge) -> String {
+    let s = format!("{}|{}|{}|{}", e.src, e.rel, e.dst, e.doc);
+    hex::encode(&Sha256::digest(s.as_bytes())[..8])
+}
+
+/// Apply every correction of the graph kept so far (idempotent): the user's names for organizations, organizations
+/// said to be one, relations taken away or renamed.
+pub fn apply_fixes(db: &Connection, paths: &Paths) -> anyhow::Result<usize> {
+    use crate::assistant::corrections::{Ref, of_graph};
+    let fixes = of_graph(paths);
+    if fixes.is_empty() {
+        return Ok(0);
+    }
+    let edges: Vec<(i64, Edge)> = {
+        let mut st = db.prepare("select rowid, src, rel, dst, label, since, file, evidence, origin from edges")?;
+        st.query_map([], |r| {
+            Ok((
+                r.get(0)?,
+                Edge {
+                    src: r.get(1)?,
+                    rel: r.get(2)?,
+                    dst: r.get(3)?,
+                    label: r.get(4)?,
+                    since: r.get(5)?,
+                    doc: r.get(6)?,
+                    evidence: r.get(7)?,
+                    origin: r.get(8)?,
+                },
+            ))
+        })?
+        .collect::<rusqlite::Result<_>>()?
+    };
+    let by_key: std::collections::HashMap<String, i64> = edges.iter().map(|(id, e)| (edge_key(e), *id)).collect();
+    let mut done = 0;
+    for f in &fixes {
+        match &f.refers {
+            Ref::Org(d) => {
+                let id = format!("org:{d}");
+                match f.right.strip_prefix("org:") {
+                    Some(other) => {
+                        let other = format!("org:{other}");
+                        db.execute(
+                            "insert or ignore into org_same(a, b) values (?1, ?2), (?2, ?1)",
+                            params![id, other],
+                        )?;
+                    }
+                    None => add_alias(db, &id, &f.right)?,
+                }
+                done += 1;
+            }
+            Ref::Edge(k) => {
+                if let Some(rowid) = by_key.get(k) {
+                    if f.right == "-" {
+                        db.execute("delete from edges where rowid = ?", [rowid])?;
+                    } else {
+                        db.execute("update edges set label = ? where rowid = ?", params![f.right, rowid])?;
+                    }
+                    done += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(done)
+}
+
+impl Librarian {
+    /// Is what this correction of the graph is about there (an organization, the one it is said to be, a relation)?
+    pub fn graph_fix_fits(&self, c: &crate::assistant::corrections::Correction) -> bool {
+        use crate::assistant::corrections::Ref;
+        let org = |d: &str| self.node(&format!("org:{d}")).is_some();
+        match &c.refers {
+            Ref::Org(d) => org(d) && c.right.strip_prefix("org:").is_none_or(|o| o != d && org(o)),
+            Ref::Edge(k) => {
+                let mut st =
+                    match self.db.prepare("select src, rel, dst, label, since, file, evidence, origin from edges") {
+                        Ok(st) => st,
+                        Err(_) => return false,
+                    };
+                st.query_map([], |r| {
+                    Ok(Edge {
+                        src: r.get(0)?,
+                        rel: r.get(1)?,
+                        dst: r.get(2)?,
+                        label: r.get(3)?,
+                        since: r.get(4)?,
+                        doc: r.get(5)?,
+                        evidence: r.get(6)?,
+                        origin: r.get(7)?,
+                    })
+                })
+                .map(|rows| rows.flatten().any(|e| edge_key(&e) == *k))
+                .unwrap_or(false)
+            }
+            _ => false,
+        }
+    }
+
+    /// Apply the graph's corrections now (they are applied on every update too).
+    pub fn apply_graph_fixes(&mut self) -> anyhow::Result<usize> {
+        self.in_write(|me| apply_fixes(&me.db, &me.paths))
+    }
+
+    /// The organizations said to be one with these (and these).
+    fn with_same(&self, ids: Vec<String>) -> anyhow::Result<Vec<String>> {
+        let mut out = ids.clone();
+        for id in &ids {
+            let mut st = self.db.prepare("select b from org_same where a = ?")?;
+            for b in st.query_map([id], |r| r.get::<_, String>(0))?.flatten() {
+                if !out.contains(&b) {
+                    out.push(b);
+                }
+            }
+        }
+        Ok(out)
+    }
 }

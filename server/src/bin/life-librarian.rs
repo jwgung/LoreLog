@@ -22,6 +22,8 @@ Command line of the librarian (사서): keep the index of every record and searc
   stats                  how much is indexed
   graph [--limit N]      the model reads up to N records not read yet (default 300; life sync does this each run) and
                          puts what they say into the graph: who and what they are about, roles, states, documents
+  graph show NODE        a node (org:<domain>, person:<address>, case:<n>, …) with its names and relations, each with
+                         the key to correct it by (POST /corrections, ref edge:<key>)
   eval FILE [--k N] [--no-model]
                          how well the librarian finds what the questions in FILE are about (recall@N, default 8),
                          with the words as asked and with the words the chat model picks (--no-model: only the
@@ -65,7 +67,7 @@ fn main() -> ExitCode {
                 _ => return usage("argument --k: invalid int value"),
             },
             "--no-model" if cmd == "eval" => no_model = true,
-            _ if cmd == "search" || (cmd == "eval" && words.is_empty()) => words.push(a.clone()),
+            _ if cmd == "search" || (cmd == "eval" && words.is_empty()) || cmd == "graph" => words.push(a.clone()),
             other => return usage(&format!("unrecognized arguments: {other}")),
         }
     }
@@ -82,6 +84,34 @@ fn main() -> ExitCode {
     if cmd == "eval" && !life_server::librarian::index::default_path(&paths).exists() {
         eprintln!("{OUTDATED}"); // measuring writes nothing, so it does not make an index either
         return ExitCode::FAILURE;
+    }
+    if cmd == "graph" && words.first().map(String::as_str) == Some("show") {
+        let Some(id) = words.get(1) else { return usage("graph show: the node is required") };
+        let lib = match Librarian::open(&paths, None, Duration::from_secs(30)) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("life-librarian: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let Some(n) = lib.node(id) else {
+            eprintln!("no such node: {id}");
+            return ExitCode::FAILURE;
+        };
+        println!("{} [{}] {}  {}", n.id, n.kind, n.name, n.aliases.join(", "));
+        for e in lib.edges_from(id, None).into_iter().chain(lib.edges_to(id, None)) {
+            println!(
+                "  edge:{}  {} -{}-> {}  {}  {}  «{}»",
+                life_server::librarian::graph::edge_key(&e),
+                e.src,
+                e.rel,
+                e.dst,
+                e.label,
+                e.since,
+                e.evidence
+            );
+        }
+        return ExitCode::SUCCESS;
     }
     if cmd == "graph" {
         let n = if args.iter().any(|a| a == "--limit") { limit } else { sync::GRAPH_LIMIT };
