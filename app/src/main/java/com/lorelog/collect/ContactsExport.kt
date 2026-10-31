@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.provider.ContactsContract
+import android.util.Log
 import com.lorelog.net.EndpointConfig
 import com.lorelog.net.HttpSink
 import org.json.JSONArray
@@ -18,6 +19,7 @@ import java.security.MessageDigest
  * 생일·기념일, 관계, 메신저, 그룹, 그리고 원본으로 연락처 데이터 행 그대로(사진만 뺀다). 권한이 없거나 꺼 두면 보내지 않는다.
  */
 object ContactsExport {
+    private const val TAG = "ContactsExport"
     private const val PREF = "contacts_export"
     private const val KEY_DIGEST = "digest"
     private const val MAX_EACH = 50
@@ -136,7 +138,9 @@ object ContactsExport {
      * 바뀐 주소록을 보낸다. 꺼 두었거나 권한을 거둔 뒤에는 빈 목록을 한 번 보내 서버에서도 지운다.
      * 반환: 보낸 연락처 수, 0 바뀐 것 없음(또는 빈 목록을 보냄), -1 보내지 않음(권한·설정·주소 없음), -2 전송 실패.
      */
-    suspend fun push(context: Context): Int {
+    suspend fun push(context: Context): Int = pushInner(context).also { Log.i(TAG, "push -> $it") }
+
+    private suspend fun pushInner(context: Context): Int {
         val url = url(context) ?: return -1
         val prefs = context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
         val key = "$KEY_DIGEST:$url" // per server: a new server gets the list even if the phone's did not change
@@ -149,7 +153,10 @@ object ContactsExport {
             prefs.edit().remove(key).apply()
             return 0
         }
-        val entries = runCatching { read(context) }.getOrElse { return -1 }
+        val entries = runCatching { read(context) }.getOrElse {
+            Log.w(TAG, "reading the address book failed: ${it.javaClass.simpleName}")
+            return -1
+        }
         val d = digest(entries)
         if (prefs.getString(key, null) == d) return 0
         // an empty book is sent too (one marker line), so contacts deleted on the phone go from the server as well

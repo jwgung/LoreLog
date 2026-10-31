@@ -203,7 +203,6 @@ object LogRepository {
         val prefs = context.getSharedPreferences("export_state", Context.MODE_PRIVATE)
         val lastIds = store.tables().associateWith { prefs.getLong("last_$it", 0L) }
         val result = store.newRows(lastIds, includeSummary = SummaryPrefs.enabled(context))
-        com.lorelog.collect.ContactsExport.push(context) // only when the address book changed; its result is its own
         if (result.lines.isEmpty()) return@withContext 0
         val dir = File(context.getExternalFilesDir(null), "exports").apply { mkdirs() }
         val date = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
@@ -268,6 +267,7 @@ object LogRepository {
         val prefs = context.getSharedPreferences("http_state", Context.MODE_PRIVATE)
         val lastIds = store.tables().associateWith { prefs.getLong("last_$it", 0L) }
         val result = store.newRows(lastIds, includeSummary = SummaryPrefs.enabled(context))
+        com.lorelog.collect.ContactsExport.push(context) // only when the address book changed; its result is its own
         if (result.lines.isEmpty()) return@withContext 0
         val body = result.lines.joinToString("\n", postfix = "\n")
         val ok = HttpSink.post(url, EndpointConfig.token(context), body)
