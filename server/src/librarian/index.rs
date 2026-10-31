@@ -100,7 +100,7 @@ const SNIPPET_AFTER: usize = 140;
 const WINDOW: i64 = 400;
 /// Bump when the tables or what goes in them change: an index of another version is built again. (6 was the last
 /// Python version; the Rust index is built anew once.)
-pub const SCHEMA_VERSION: &str = "15"; // 15: organizations the user said are one (#47), 14: the graph (#45), 8: who each record is with, 9: the phone's address book (#22), 10: its company (#9), 11: attachments and the mail they came with (#15), 12: one matter beyond a thread (#8), 13: the matters the user took part in
+pub const SCHEMA_VERSION: &str = "16"; // 16: a mail the vault holds more than once is indexed once, 15: organizations the user said are one (#47), 14: the graph (#45), 8: who each record is with, 9: the phone's address book (#22), 10: its company (#9), 11: attachments and the mail they came with (#15), 12: one matter beyond a thread (#8), 13: the matters the user took part in
 
 /// A mail sent to more people than this is a mass mail: not counted as with any one of them.
 pub const MASS_MAIL: i64 = 10;
@@ -115,7 +115,8 @@ pub const FILE_WEIGHT: f64 = 0.5;
 
 const TABLES: &str = "
 create table if not exists meta(key text primary key, value text);
-create table if not exists files(path text primary key, kind text, stamp text);
+create table if not exists files(path text primary key, kind text, stamp text, mid text, copy integer not null default 0);
+create index if not exists files_mid on files(mid);
 create table if not exists docs(n integer primary key, file text, source text, kind text, day text, title text, thread text, text text, mid text, case_key text, involved integer);
 create index if not exists docs_case on docs(case_key);
 create index if not exists docs_mid on docs(mid);
@@ -423,11 +424,44 @@ impl Librarian {
         for d in docs {
             self.add(path, d)?;
         }
+        let mid = if kind == Kind::Mail { docs.iter().find_map(|d| d.mid.clone()) } else { None };
         self.db.execute(
-            "insert or replace into files(path, kind, stamp) values (?, ?, ?)",
-            params![path, kind.name(), stamp],
+            "insert or replace into files(path, kind, stamp, mid) values (?, ?, ?, ?)",
+            params![path, kind.name(), stamp, mid],
         )?;
         Ok(())
+    }
+
+    /// A mail the vault holds in more than one note (one `mail_id`; a collector that wrote it again on every sync
+    /// leaves that) is indexed from the first note by path. The other notes are known, so not read again, but hold
+    /// nothing; when the first one goes, the next one is read. -> whether anything changed
+    fn one_per_mail(&self) -> anyhow::Result<bool> {
+        let paths = |sql: &str| -> rusqlite::Result<Vec<String>> {
+            let mut st = self.db.prepare(sql)?;
+            st.query_map([], |r| r.get(0))?.collect()
+        };
+        let earlier = "exists (select 1 from files g where g.kind = 'mail' and g.mid = f.mid and g.path < f.path)";
+        let copies = paths(&format!(
+            "select path from files f where kind = 'mail' and mid is not null and {earlier}
+             and (copy = 0 or exists (select 1 from docs d where d.file = f.path))"
+        ))?;
+        for path in &copies {
+            self.forget(path)?;
+            self.db.execute("update files set copy = 1 where path = ?", [path])?;
+        }
+        let firsts = paths(&format!("select path from files f where kind = 'mail' and copy = 1 and not {earlier}"))?;
+        for path in &firsts {
+            match records::docs(Kind::Mail, Path::new(path)) {
+                Ok(docs) => {
+                    for d in &docs {
+                        self.add(path, d)?;
+                    }
+                    self.db.execute("update files set copy = 0 where path = ?", [path])?;
+                }
+                Err(e) => self.skip(path, &e)?,
+            }
+        }
+        Ok(!copies.is_empty() || !firsts.is_empty())
     }
 
     fn skip(&self, path: &str, why: &dyn std::fmt::Display) -> rusqlite::Result<()> {
@@ -649,6 +683,7 @@ impl Librarian {
                     }
                 }
             }
+            relink |= me.one_per_mail()?;
             if relink {
                 super::cases::relink(&me.db)?; // in the same write: a search never sees a matter half made
                 super::graph::rules(&me.db)?;
