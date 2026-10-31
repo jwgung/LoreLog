@@ -146,12 +146,13 @@ fn person_threads(lib: &Librarian, vault: &Path, addr: &str) -> HashSet<String> 
     out.into_iter().collect()
 }
 
+/// Where the first hit that holds a target is: a hit is a matter, which holds the threads and events of it (#8).
 fn rank(lib: &Librarian, hits: &[serde_json::Value], targets: &HashSet<String>) -> Option<usize> {
-    let key = |h: &serde_json::Value| match h["source"].as_str() {
-        Some("event") => h["title"].as_str().map(|t| format!("event:{t}")),
-        _ => h["ref"].as_str().and_then(|r| lib.thread_of(r)),
+    let holds = |h: &serde_json::Value| {
+        h["ref"].as_str().is_some_and(|r| !lib.case_threads(r).is_disjoint(targets))
+            || (h["source"] == "event" && h["title"].as_str().is_some_and(|t| targets.contains(&format!("event:{t}"))))
     };
-    hits.iter().position(|h| key(h).is_some_and(|t| targets.contains(&t))).map(|i| i + 1)
+    hits.iter().position(holds).map(|i| i + 1)
 }
 
 /// Measure every case against the index, with the user's words and (if a model is given) the words it picks.

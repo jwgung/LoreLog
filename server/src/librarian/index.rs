@@ -100,17 +100,22 @@ const SNIPPET_AFTER: usize = 140;
 const WINDOW: i64 = 400;
 /// Bump when the tables or what goes in them change: an index of another version is built again. (6 was the last
 /// Python version; the Rust index is built anew once.)
-pub const SCHEMA_VERSION: &str = "11"; // 8: who each record is with, 9: the phone's address book (#22), 10: its company (#9), 11: attachments and the mail they came with (#15)
+pub const SCHEMA_VERSION: &str = "12"; // 8: who each record is with, 9: the phone's address book (#22), 10: its company (#9), 11: attachments and the mail they came with (#15), 12: one matter beyond a thread (#8)
 
 /// A mail sent to more people than this is a mass mail: not counted as with any one of them.
 pub const MASS_MAIL: i64 = 10;
+/// mails of one subject this many days apart at most, with someone in common, are one matter (#8)
+pub const CASE_MAIL_DAYS: i64 = 30;
+/// an event of that subject this close to one of its mails, with someone in common, is part of it
+pub const CASE_EVENT_DAYS: i64 = 7;
 /// how much an attachment's match counts against a mail's (#15)
 pub const FILE_WEIGHT: f64 = 0.5;
 
 const TABLES: &str = "
 create table if not exists meta(key text primary key, value text);
 create table if not exists files(path text primary key, kind text, stamp text);
-create table if not exists docs(n integer primary key, file text, source text, kind text, day text, title text, thread text, text text, mid text);
+create table if not exists docs(n integer primary key, file text, source text, kind text, day text, title text, thread text, text text, mid text, case_key text);
+create index if not exists docs_case on docs(case_key);
 create index if not exists docs_mid on docs(mid);
 create index if not exists docs_file on docs(file);
 create index if not exists docs_thread on docs(thread);
@@ -124,6 +129,9 @@ create index if not exists contacts_person on contacts(person);
 create index if not exists people_n on people(n);
 create index if not exists people_addr on people(addr);
 ";
+
+/// A matter's (records, first day, last day, latest title).
+type CaseSpan = (i64, Option<String>, Option<String>, Option<String>);
 
 /// The index is of another version, or no update has finished yet: it is not searched, because it may hold what the
 /// current rules leave out, or nothing at all.
@@ -572,10 +580,19 @@ impl Librarian {
                 .collect();
             let allow = (me.allowed)(&me.paths); // read once: the documents are made with it and it is what we remember
             let policy = records::policy_stamp(&allow);
-            if reset || me.version().as_deref() != Some(SCHEMA_VERSION) {
+            let remade = reset || me.version().as_deref() != Some(SCHEMA_VERSION);
+            if remade {
                 me.make_tables()?;
             }
             let (dirty, removed) = me.changes(&mut found, &policy)?;
+            let kinds_removed: Vec<String> = removed
+                .iter()
+                .filter_map(|p: &String| {
+                    me.db.query_row("select kind from files where path = ?", [p], |r| r.get::<_, String>(0)).ok()
+                })
+                .collect();
+            let linked = |k: &str| [Kind::Mail.name(), Kind::Event.name(), Kind::MailFile.name()].contains(&k);
+            let mut relink = remade || kinds_removed.iter().any(|k| linked(k));
             let book_removed = removed.iter().any(|p: &String| {
                 me.db
                     .query_row("select kind from files where path = ?", [p], |r| r.get::<_, String>(0))
@@ -605,6 +622,7 @@ impl Librarian {
                 if *kind == Kind::Lorelog || *kind == Kind::Contacts || !dirty.contains(path) {
                     continue;
                 }
+                relink |= linked(kind.name());
                 match stamp(p).map_err(anyhow::Error::from).and_then(|s| records::docs(*kind, p).map(|d| (s, d))) {
                     Ok((s, docs)) => {
                         me.keep(path, *kind, &s, &docs)?;
@@ -616,6 +634,9 @@ impl Librarian {
                     }
                 }
             }
+            if relink {
+                super::cases::relink(&me.db)?; // in the same write: a search never sees a matter half made
+            }
             me.db.execute("insert or replace into meta(key, value) values ('policy', ?)", [&policy])?;
             Ok((indexed, skipped, removed.len()))
         })?;
@@ -623,10 +644,23 @@ impl Librarian {
         Ok(Report { indexed, removed, skipped, docs: docs as usize })
     }
 
-    fn thread_span(&self, thread: &str) -> rusqlite::Result<(i64, Option<String>, Option<String>)> {
-        self.db.query_row("select count(*), min(day), max(day) from docs where thread = ?", [thread], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-        })
+    /// A matter's size (its mails and events; the files that came with them not counted), the days it spans and the
+    /// title of its latest record.
+    fn case_span(&self, case: &str) -> rusqlite::Result<CaseSpan> {
+        let (count, first, last): (i64, Option<String>, Option<String>) = self.db.query_row(
+            "select count(*), min(day), max(day) from docs where case_key = ? and source != 'file'",
+            [case],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )?;
+        let latest = self
+            .db
+            .query_row(
+                "select title from docs where case_key = ? and source != 'file' order by day desc, n desc limit 1",
+                [case],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok((count, first, last, latest))
     }
 
     /// Documents matching the words of q, best first. The mails of one thread come back as one hit (its best-matching
@@ -657,12 +691,9 @@ impl Librarian {
     }
 
     fn search_in(&mut self, expr: &str, q: &str, limit: usize, exclude: Option<Exclude>) -> anyhow::Result<Vec<Value>> {
-        // a file that came with a mail is in that mail's thread: one hit with it, not a hit of its own
+        // a matter (a thread, mails of one subject and their events, the files that came with them) is one hit
         let mut sql =
-            "select d.n, coalesce(d.thread, (select m.thread from docs m where d.source = 'file' and m.mid = d.mid
-                                                    and m.source = 'mail' and m.day = d.day order by m.n limit 1)), d.source
-             from fts join docs d on d.n = fts.rowid where fts match ?"
-                .to_string();
+            "select d.n, d.case_key, d.source from fts join docs d on d.n = fts.rowid where fts match ?".to_string();
         let mut args: Vec<String> = vec![expr.to_string()];
         match exclude {
             Some(Exclude::Day(day)) => {
@@ -694,12 +725,10 @@ impl Librarian {
             st.query_map(params_from_iter(args.iter()), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
                 .collect::<rusqlite::Result<_>>()?
         };
-        // thread (or the document itself) -> its best-ranked document, in rank order
+        // matter (or the document itself) -> its best-ranked document, in rank order
         let mut seen = HashSet::new();
-        let best: Vec<&(i64, Option<String>, String)> = rows
-            .iter()
-            .filter(|(n, thread, _)| seen.insert(thread.clone().unwrap_or_else(|| format!("#{n}"))))
-            .collect();
+        let best: Vec<&(i64, Option<String>, String)> =
+            rows.iter().filter(|(n, case, _)| seen.insert(case.clone().unwrap_or_else(|| format!("#{n}")))).collect();
         let (mut chosen, mut spill, mut words) = (Vec::new(), Vec::new(), 0);
         for g in best {
             if chosen.len() >= limit {
@@ -717,8 +746,8 @@ impl Librarian {
         let room = limit.saturating_sub(chosen.len());
         chosen.extend(spill.into_iter().take(room));
         let mut out = Vec::new();
-        for (n, thread, _) in chosen {
-            out.push(self.hit(*n, thread.as_deref(), q)?);
+        for (n, case, _) in chosen {
+            out.push(self.hit(*n, case.as_deref(), q)?);
             if let Some(hook) = self.after_first_hit.as_mut() {
                 hook();
                 self.after_first_hit = None;
@@ -727,9 +756,10 @@ impl Librarian {
         Ok(out)
     }
 
-    /// One hit as the assistant gets it: `{source, kind, day, title, snippet, ref, count, first, last}`. A file that came
-    /// with a mail is shown as that mail's (its title and where it is), the file named: what the user knows is the mail.
-    fn hit(&self, n: i64, thread: Option<&str>, q: &str) -> anyhow::Result<Value> {
+    /// One hit as the assistant gets it: `{source, kind, day, title, snippet, ref, count, first, last, latest}` (`latest`:
+    /// the title of the matter's last record, when it has more than one). A file that came with a mail is shown as that
+    /// mail's (its title and where it is), the file named: what the user knows is the mail.
+    fn hit(&self, n: i64, case: Option<&str>, q: &str) -> anyhow::Result<Value> {
         let (source, kind, day, mut title, text, mut file, mid): (
             String,
             String,
@@ -755,16 +785,21 @@ impl Librarian {
             title = format!("{mail_title} (첨부 {title})");
             file = mail_file;
         }
-        let (count, first, last) = match thread {
-            Some(t) => self.thread_span(t)?,
-            None => (1, Some(day.clone()), Some(day.clone())),
+        let (count, first, last, latest) = match case {
+            Some(c) => self.case_span(c)?,
+            None => (1, None, None, None),
         };
+        let count = count.max(1);
         let first = first.filter(|f| !f.is_empty()).unwrap_or_else(|| day.clone());
         let last = last.filter(|f| !f.is_empty()).unwrap_or_else(|| day.clone());
-        Ok(
-            json!({"source": source, "kind": kind, "day": day, "title": title, "snippet": snippet(&text, q), "ref": file,
-                  "count": count, "first": first, "last": last}),
-        )
+        let mut hit = json!({"source": source, "kind": kind, "day": day, "title": title, "snippet": snippet(&text, q),
+                             "ref": file, "count": count, "first": first, "last": last});
+        if count > 1
+            && let Some(l) = latest
+        {
+            hit["latest"] = json!(l);
+        }
+        Ok(hit)
     }
 
     fn ready(&self) -> anyhow::Result<()> {
@@ -881,7 +916,7 @@ impl Librarian {
 
     /// What was with these people up to `until` (YYYY-MM-DD, that day included; later events are not "what was"):
     /// mail they sent or received and events they attended, newest first, then mail they were only copied on; mass
-    /// mail left out; one hit per thread, and per title for events (a weekly meeting is one). `q` (if any) narrows it
+    /// mail left out; one hit per matter ([`super::cases`]), and per title for other events (a weekly meeting is one). `q` (if any) narrows it
     /// to records with its words.
     pub fn with_people(&mut self, addrs: &[String], q: &str, until: &str, limit: usize) -> anyhow::Result<Vec<Value>> {
         self.ready()?;
@@ -894,7 +929,7 @@ impl Librarian {
             if expr.is_empty() { String::new() } else { "and d.n in (select rowid from fts where fts match ?)".into() };
         let sql = format!(
             "with mass as (select n from people where role in ('to', 'cc') group by n having count(*) > {MASS_MAIL})
-             select d.n, d.thread, max(p.role != 'cc') as direct, d.day, d.source, d.title from people p join docs d on d.n = p.n
+             select d.n, d.case_key, max(p.role != 'cc') as direct, d.day, d.source, d.title from people p join docs d on d.n = p.n
              where p.addr in ({marks}) and d.n not in (select n from mass) and d.day <= ? {narrow}
              group by d.n order by direct desc, d.day desc, d.n desc"
         );
@@ -912,8 +947,8 @@ impl Librarian {
             };
             let mut seen = HashSet::new();
             let mut out = Vec::new();
-            for (n, thread, source, title) in rows {
-                let key = match (&thread, source.as_str()) {
+            for (n, case, source, title) in rows {
+                let key = match (&case, source.as_str()) {
                     (Some(t), _) => t.clone(),
                     (None, "event") => format!("event:{title}"),
                     (None, _) => format!("#{n}"),
@@ -921,7 +956,7 @@ impl Librarian {
                 if !seen.insert(key) {
                     continue;
                 }
-                out.push(self.hit(n, thread.as_deref(), q)?);
+                out.push(self.hit(n, case.as_deref(), q)?);
                 if out.len() >= limit {
                     break;
                 }
@@ -930,6 +965,32 @@ impl Librarian {
         })();
         let _ = self.db.execute_batch("rollback");
         result
+    }
+
+    /// What the matter of an indexed file holds, as the eval names it: its mails' threads and its events
+    /// (`event:<title>`). A file in no matter: its own thread, or its event.
+    pub fn case_threads(&self, file: &str) -> HashSet<String> {
+        let rows = |sql: &str| -> Vec<(String, Option<String>, String)> {
+            self.db
+                .prepare(sql)
+                .and_then(|mut st| {
+                    st.query_map([file], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()
+                })
+                .unwrap_or_default()
+        };
+        let mut found = rows(
+            "select source, thread, title from docs where case_key in (select case_key from docs where file = ? and case_key is not null)",
+        );
+        if found.is_empty() {
+            found = rows("select source, thread, title from docs where file = ?");
+        }
+        found
+            .into_iter()
+            .filter_map(|(source, thread, title)| match source.as_str() {
+                "event" => Some(format!("event:{title}")),
+                _ => thread,
+            })
+            .collect()
     }
 
     /// The thread an indexed file belongs to (a mail's `mail:<id>`); None for a file not indexed or not in a thread.

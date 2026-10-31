@@ -51,7 +51,8 @@ pub fn plain(text: &str) -> String {
         .collect()
 }
 
-/// The hits as lines of the section (`NOT_FOUND` for none). A hit: `{day, kind, title, snippet, count, first, last}`.
+/// The hits as lines of the section (`NOT_FOUND` for none). A hit: `{day, kind, title, snippet, count, first, last,
+/// latest}`.
 pub fn render(hits: &[Value]) -> String {
     if hits.is_empty() {
         return NOT_FOUND.to_string();
@@ -63,9 +64,12 @@ pub fn render(hits: &[Value]) -> String {
             let body: String = plain(&s("snippet")).chars().take(MAX_SNIPPET).collect();
             let count = h.get("count").and_then(Value::as_u64).unwrap_or(1);
             if count > 1 {
-                // a mail thread: when it started comes first, then how long it ran
+                // one matter (a thread, mails of one subject, their meetings): when it started comes first, then how
+                // it stands (its last record)
+                let latest = plain(&s("latest"));
+                let last = if latest.is_empty() { s("last") } else { format!("{} \"{latest}\"", s("last")) };
                 format!(
-                    "- {}~{} [{}] {title} (같은 메일 스레드 {count}통, {}에 시작, 아래 내용은 {} 메일): {body}",
+                    "- {}~{} [{}] {title} (같은 건 기록 {count}개, {}에 시작, 마지막 기록 {last}, 아래 내용은 {} 기록): {body}",
                     s("first"),
                     s("last"),
                     s("kind"),
@@ -498,14 +502,14 @@ mod tests {
     }
 
     #[test]
-    fn a_thread_says_when_it_started() {
+    fn a_matter_says_when_it_started_and_what_came_last() {
         let section = render(&[
-            json!({"day": "2025-01-03", "kind": "받은 메일", "title": "건", "count": 3, "first": "2025-01-01",
-                                      "last": "2025-01-03", "snippet": "내용"}),
+            json!({"day": "2025-01-02", "kind": "받은 메일", "title": "건", "count": 3, "first": "2025-01-01",
+                   "last": "2025-01-05", "latest": "건 [확정]", "snippet": "내용"}),
         ]);
         assert_eq!(
             section,
-            "- 2025-01-01~2025-01-03 [받은 메일] 건 (같은 메일 스레드 3통, 2025-01-01에 시작, 아래 내용은 2025-01-03 메일): 내용"
+            "- 2025-01-01~2025-01-05 [받은 메일] 건 (같은 건 기록 3개, 2025-01-01에 시작, 마지막 기록 2025-01-05 \"건 (확정)\", 아래 내용은 2025-01-02 기록): 내용"
         );
     }
 }
