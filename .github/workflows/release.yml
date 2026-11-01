@@ -1,24 +1,30 @@
 name: Release
 
+# A `v*` tag builds every app and publishes them together:
+#   draft release → APK (Android) + desktop bundles (Windows, macOS, Linux) upload to it → published only when all
+#   succeeded. The phone and the desktop updater read only the published latest release, so they never see a
+#   half-uploaded one.
+# Run by hand (workflow_dispatch, no tag) it builds everything with a dev version and publishes nothing: the files are
+# kept as workflow artifacts, so a branch can be checked before tagging.
 on:
   push:
     tags: ['v*']
-  workflow_dispatch: {}   # 태그 없이 수동 실행해 빌드만 검증할 때
+  workflow_dispatch: {}
 
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  release:
+  version:
     runs-on: ubuntu-latest
+    outputs:
+      name: ${{ steps.ver.outputs.name }}
+      code: ${{ steps.ver.outputs.code }}
+      desktop: ${{ steps.ver.outputs.desktop }}
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
       - name: Resolve version
         id: ver
         run: |
@@ -29,10 +35,43 @@ jobs:
             IFS=. read -r a b c <<< "${name%%-*}"
             echo "name=${name}" >> "$GITHUB_OUTPUT"
             echo "code=$(( ${a:-0} * 10000 + ${b:-0} * 100 + ${c:-0} ))" >> "$GITHUB_OUTPUT"
+            echo "desktop=${name}" >> "$GITHUB_OUTPUT"
           else
             echo "name=0.0.0-dev${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
             echo "code=${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+            # the Windows installer takes only numbers in a version, so the dev desktop build is 0.0.<run>
+            echo "desktop=0.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           fi
+
+  draft:
+    if: github.ref_type == 'tag'
+    needs: version
+    runs-on: ubuntu-latest
+    outputs:
+      id: ${{ steps.create.outputs.id }}
+    steps:
+      - name: Create draft release
+        id: create
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases" \
+            -f tag_name="${GITHUB_REF_NAME}" -f name="LoreLog ${GITHUB_REF_NAME}" \
+            -F draft=true -F generate_release_notes=true --jq .id)
+          echo "id=${id}" >> "$GITHUB_OUTPUT"
+
+  apk:
+    needs: [version, draft]
+    # the draft job is skipped without a tag; build anyway
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.draft.result != 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
       - name: Decode keystore
         run: echo "${{ secrets.RELEASE_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.jks"
@@ -47,22 +86,119 @@ jobs:
           -Plifelog.storePassword="${{ secrets.RELEASE_STORE_PASSWORD }}"
           -Plifelog.keyAlias="${{ secrets.RELEASE_KEY_ALIAS }}"
           -Plifelog.keyPassword="${{ secrets.RELEASE_KEY_PASSWORD }}"
-          -PappVersionName="${{ steps.ver.outputs.name }}"
-          -PappVersionCode="${{ steps.ver.outputs.code }}"
+          -PappVersionName="${{ needs.version.outputs.name }}"
+          -PappVersionCode="${{ needs.version.outputs.code }}"
 
       - name: Rename APK
-        run: cp app/build/outputs/apk/release/app-release.apk "LoreLog-${{ steps.ver.outputs.name }}.apk"
+        run: cp app/build/outputs/apk/release/app-release.apk "LoreLog-${{ needs.version.outputs.name }}.apk"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LoreLog-${{ steps.ver.outputs.name }}
-          path: LoreLog-${{ steps.ver.outputs.name }}.apk
+          name: LoreLog-${{ needs.version.outputs.name }}
+          path: LoreLog-${{ needs.version.outputs.name }}.apk
 
-      - name: Publish GitHub Release
+      - name: Upload to the draft release
         if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@v2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" "LoreLog-${{ needs.version.outputs.name }}.apk" --clobber
+
+  desktop:
+    needs: [version, draft]
+    if: ${{ !cancelled() && needs.version.result == 'success' && needs.draft.result != 'failure' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            args: ''
+          - os: macos-latest
+            args: --target universal-apple-darwin
+          - os: ubuntu-22.04
+            args: ''
+    runs-on: ${{ matrix.os }}
+    env:
+      # the updater artifacts (.sig, latest.json) are signed with this key; it has no password
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux packages for Tauri
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf \
+            libssl-dev libxdo-dev build-essential file
+
+      # the toolchain pinned in rust-toolchain.toml (the workspace's rust-version)
+      - name: Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install
+          if [ "${RUNNER_OS}" = "macOS" ]; then rustup target add aarch64-apple-darwin x86_64-apple-darwin; fi
+          rustc --version
+
+      - uses: Swatinem/rust-cache@v2
         with:
-          name: LoreLog ${{ github.ref_name }}
-          files: LoreLog-${{ steps.ver.outputs.name }}.apk
-          generate_release_notes: true
+          key: ${{ matrix.os }}
+
+      # the tag is the only version: it replaces the one in tauri.conf.json for this build
+      - name: Set the desktop version
+        shell: bash
+        run: >
+          node -e 'const f="desktop/shell/src-tauri/tauri.conf.json", fs=require("fs"), c=JSON.parse(fs.readFileSync(f));
+          c.version=process.argv[1]; fs.writeFileSync(f, JSON.stringify(c, null, 2))' "${{ needs.version.outputs.desktop }}"
+
+      - name: Build and upload the desktop app
+        id: tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          projectPath: desktop/shell
+          args: ${{ matrix.args }}
+          releaseId: ${{ needs.draft.outputs.id }}
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
+
+      - name: Keep the bundles (manual run)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: ${{ join(fromJSON(steps.tauri.outputs.artifactPaths), fromJSON('"\n"')) }}
+
+      - name: Build life-agent (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cargo build --release --locked -p life-agent
+          7z a "life-agent-${{ needs.version.outputs.desktop }}-windows-x64.zip" ./target/release/life-agent.exe
+
+      - name: Keep life-agent (manual run)
+        if: runner.os == 'Windows' && github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: life-agent-windows
+          path: life-agent-*.zip
+
+      - name: Upload life-agent to the draft release
+        if: runner.os == 'Windows' && github.ref_type == 'tag'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${GITHUB_REF_NAME}" life-agent-*.zip --clobber
+
+  publish:
+    if: github.ref_type == 'tag'
+    needs: [draft, apk, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh api -X PATCH "repos/${GITHUB_REPOSITORY}/releases/${{ needs.draft.outputs.id }}"
+          -F draft=false -f make_latest=true

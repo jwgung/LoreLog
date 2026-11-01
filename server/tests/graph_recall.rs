@@ -208,7 +208,7 @@ fn matters_are_found_by_how_they_stand_and_what_did_not_follow() {
     let got = titles(&hits);
     assert_eq!(got.first().map(String::as_str), Some("배관 교체 견적"), "{got:?}");
     assert!(!got.iter().take(1).any(|t| t.contains("설비")), "a quote followed by a contract is not one: {got:?}");
-    assert!(hits[0]["state"].as_str().unwrap().contains("견적서 발송"), "{:?}", hits[0]);
+    assert_eq!(hits[0]["state"]["label"], "견적서 발송", "{:?}", hits[0]);
 }
 
 #[test]
@@ -393,4 +393,56 @@ fn a_korean_name_sounds_like_a_domain_only_when_its_consonants_and_vowels_go_alo
     {
         assert!(!graph::sounds_like(name, word), "{name} !~ {word}");
     }
+}
+
+// ---------- how sure (#64) ----------
+
+#[test]
+fn what_the_graph_read_is_quoted_as_a_guess_with_its_evidence_and_day() {
+    let (_t, mut lib) = world();
+    let hits = ask(&mut lib, Picked { states: vec!["견적".into()], absent: vec!["계약".into()], ..Picked::default() });
+    assert_eq!(hits[0]["state"]["origin"], "model", "{:?}", hits[0]);
+    let section = recall::render(&hits[..1]);
+    assert!(section.contains("추정 마지막 상태: 견적서 발송 (2026-03-05, 근거 \"배관 견적\")"), "{section}");
+
+    let hits =
+        ask(&mut lib, Picked { people: vec!["정다운".into()], roles: vec!["지원자".into()], ..Picked::default() });
+    let section = recall::render(&hits[..1]);
+    assert!(section.contains("추정 역할: 정다운 지원자 (2026-04-10, 근거 \"지원자 정다운\")"), "{section}");
+}
+
+#[test]
+fn the_states_a_matter_went_through_are_quoted_with_its_last() {
+    let (_t, mut lib) = world();
+    let hits = ask(&mut lib, Picked { states: vec!["계약".into()], ..Picked::default() });
+    let section = recall::render(&hits[..1]);
+    assert!(
+        section.contains("추정 마지막 상태: 계약 (2026-03-10, 근거 \"계약 체결\"), 그 전 견적 발송 (2026-03-02)"),
+        "{section}"
+    );
+}
+
+#[test]
+fn the_chat_says_a_guess_as_one_and_answers_with_the_records_it_quoted() {
+    use life_server::assistant::chat::{CHAT_SYSTEM, chat_answer};
+    let (t, lib) = world();
+    drop(lib);
+    let m = FakeModel::new(|msgs| {
+        if msgs[0]["content"].as_str().unwrap_or("").starts_with(recall::WORDS_SYSTEM) {
+            return Ok(r#"{"search": true, "words": ["배관"], "states": ["견적"], "absent": ["계약"]}"#.into());
+        }
+        Ok("배관 교체는 견적을 보낸 단계로 보여요(3월 5일).".into())
+    });
+    let recall = |msg: &str, d: &str, said: &[String], before: Option<&str>| {
+        recall::find_with_sources(&t.p, m.as_ref(), msg, d, said, before)
+    };
+    let a = chat_answer(&t.p, m.as_ref(), &recall, "2026-10-31", "배관 건 어디까지 갔지?", None).unwrap();
+    let msgs = m.last();
+    assert!(CHAT_SYSTEM.contains("로 보여요") && msgs[0]["content"].as_str().unwrap().starts_with(CHAT_SYSTEM));
+    let turn = msgs.last().unwrap()["content"].as_str().unwrap();
+    assert!(turn.contains("추정 마지막 상태: 견적서 발송"), "{turn}");
+    let titles: Vec<&str> = a.sources.iter().map(|s| s.title.as_str()).collect();
+    assert_eq!(titles, ["배관 교체 견적"], "one per matter, only what was quoted");
+    assert_eq!((a.sources[0].day.as_str(), a.sources[0].kind.as_str()), ("2026-03-05", "보낸 메일"));
+    assert!(a.sources[0].refers.ends_with("q3.md"), "{:?}", a.sources[0]);
 }

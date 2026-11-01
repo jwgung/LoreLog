@@ -15,6 +15,7 @@
 //!
 //! The shell owns no judgement about the diary: it exposes the config to the UI as commands and runs the collector.
 mod host;
+mod update;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -453,11 +454,16 @@ fn set_autostart(app: AppHandle, on: bool) -> Result<bool, String> {
     m.is_enabled().map_err(|e| format!("시작 프로그램 설정을 읽지 못했습니다: {e}"))
 }
 
+/// Stop the collector and the server this app runs (the app is exiting, or an update is about to replace it).
+fn shutdown(app: &AppHandle) {
+    app.state::<Stop>().0.store(true, Ordering::SeqCst);
+    hosting(&app.state::<HostSlot>(), |h| h.stop());
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let started_at_login = std::env::args().any(|a| a == AUTOSTART_ARG);
     let stop = Arc::new(AtomicBool::new(false));
-    let stop_for_exit = stop.clone();
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app);
@@ -466,6 +472,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![AUTOSTART_ARG]),
         ))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             get_autostart,
             set_autostart,
@@ -495,10 +502,13 @@ pub fn run() {
             backup_status,
             backup_set,
             backup_now,
-            asks_set
+            asks_set,
+            update::update_check,
+            update::update_install
         ])
         .manage(HostSlot::default())
         .manage(Stop(stop.clone()))
+        .manage(update::Pending::default())
         .setup(move |app| {
             build_tray(app.handle())?;
             if config::load().ok().and_then(|c| c.mode) == Some(Mode::Host)
@@ -525,8 +535,7 @@ pub fn run() {
         .expect("error while building the app")
         .run(move |app, event| {
             if let tauri::RunEvent::ExitRequested { .. } = event {
-                stop_for_exit.store(true, Ordering::SeqCst);
-                hosting(&app.state::<HostSlot>(), |h| h.stop());
+                shutdown(app);
             }
         });
 }

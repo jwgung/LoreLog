@@ -68,8 +68,9 @@ impl T {
     }
 
     fn talk(&self, m: &FakeModel, message: &str, day: &str, wrong: Option<&str>) -> String {
-        let recall =
-            |msg: &str, d: &str, said: &[String], before: Option<&str>| recall::find(&self.p, m, msg, d, said, before);
+        let recall = |msg: &str, d: &str, said: &[String], before: Option<&str>| {
+            recall::find_with_sources(&self.p, m, msg, d, said, before)
+        };
         chat_reply(&self.p, m, &recall, day, message, wrong).unwrap()
     }
 }
@@ -255,4 +256,81 @@ fn a_search_flag_written_as_a_string_is_read_as_meant_and_too_many_words_are_cut
     let many: Vec<String> = (0..40).map(|i| format!("낱말{i}")).collect();
     let m = FakeModel::new(move |_| Ok(json!({"search": "true", "words": many}).to_string()));
     assert_eq!(search_words(m.as_ref(), "아무 말").unwrap().len(), MAX_WORDS);
+}
+
+// ---------- how sure (#64) ----------
+
+#[test]
+fn a_state_the_model_read_is_quoted_as_a_guess_with_short_evidence_and_its_day() {
+    let long = format!("[{}] 계약 체결 {}", recall::QUOTE_END, "가".repeat(100));
+    let section = recall::render(&[json!({"day": "2026-03-10", "kind": "받은 메일", "title": "설비 점검", "count": 1,
+        "snippet": "내용", "state": {"label": "계약", "since": "2026-03-10", "evidence": long, "origin": "model"}})]);
+    assert!(section.contains("추정 마지막 상태: 계약 (2026-03-10, 근거 \""), "{section}");
+    assert!(!section.contains(QUOTE_END) && !section.contains("[찾은"), "the evidence is quoted material: {section}");
+    let evidence = section.split("근거 \"").nth(1).unwrap().split('"').next().unwrap();
+    assert!(
+        (40..=recall::MAX_EVIDENCE + 1).contains(&evidence.chars().count()) && evidence.ends_with('…'),
+        "{evidence}"
+    );
+}
+
+#[test]
+fn a_fact_from_the_mail_headers_is_not_marked_as_a_guess() {
+    let section = recall::render(&[json!({"day": "2026-03-10", "kind": "받은 메일", "title": "설비 점검", "count": 1,
+        "snippet": "내용",
+        "state": {"label": "접수", "since": "2026-03-01", "evidence": "", "origin": "rule"},
+        "roles": [{"who": "고객사", "label": "고객", "since": "2026-03-01", "evidence": "c@client.co.kr", "origin": "rule"},
+                  {"who": "박담당", "label": "담당", "since": "2026-03-02", "evidence": "담당 박담당", "origin": "model"}]})]);
+    assert!(section.contains(" · 마지막 상태: 접수 (2026-03-01)") && !section.contains("추정 마지막"), "{section}");
+    assert!(section.contains(" · 역할: 고객사 고객 (2026-03-01)"), "{section}");
+    assert!(section.contains(" · 추정 역할: 박담당 담당 (2026-03-02, 근거 \"담당 박담당\")"), "{section}");
+}
+
+#[test]
+fn the_states_a_matter_went_through_are_quoted_together() {
+    let section = recall::render(&[json!({"day": "2026-03-10", "kind": "받은 메일", "title": "설비 점검", "count": 1,
+        "snippet": "내용",
+        "state": {"label": "계약", "since": "2026-03-10", "evidence": "계약 체결", "origin": "model"},
+        "earlier": [{"label": "견적 발송", "since": "2026-03-02"}]})]);
+    assert!(
+        section.contains("추정 마지막 상태: 계약 (2026-03-10, 근거 \"계약 체결\"), 그 전 견적 발송 (2026-03-02)"),
+        "{section}"
+    );
+}
+
+#[test]
+fn the_sources_are_the_records_quoted_one_per_matter() {
+    let hit = |day: &str, title: &str, case: Option<&str>, file: &str| {
+        let mut h = json!({"day": day, "kind": "받은 메일", "title": title, "ref": file, "count": 1, "snippet": ""});
+        if let Some(c) = case {
+            h["case"] = json!(c);
+        }
+        h
+    };
+    let s = recall::sources(&[
+        hit("2026-03-10", "설비\n점검", Some("case:1"), "Mail/a.md"),
+        hit("2026-03-02", "설비 점검 견적", Some("case:1"), "Mail/b.md"),
+        hit("2026-03-05", "배관", None, "Mail/c.md"),
+    ]);
+    assert_eq!(
+        serde_json::to_value(&s).unwrap(),
+        json!([{"day": "2026-03-10", "kind": "받은 메일", "title": "설비 점검", "ref": "Mail/a.md"},
+               {"day": "2026-03-05", "kind": "받은 메일", "title": "배관", "ref": "Mail/c.md"}])
+    );
+    assert!(recall::sources(&[]).is_empty());
+}
+
+#[test]
+fn the_chat_gets_the_records_quoted_and_none_for_a_mood() {
+    let t = T::new();
+    t.mail("2025-05-14-1000-q.md", "프레스 금형 견적", "금형칠번 단가는 다음 주에 확정합니다", "2025-05-14");
+    let m = model(Ok(Some(vec!["금형칠번"])));
+    let found =
+        recall::find_with_sources(&t.p, m.as_ref(), "금형칠번 견적 어떻게 됐지?", "2026-11-02", &[], None).unwrap();
+    assert!(found.section.contains("프레스 금형 견적"));
+    assert_eq!(found.sources.len(), 1);
+    assert_eq!((found.sources[0].day.as_str(), found.sources[0].title.as_str()), ("2025-05-14", "프레스 금형 견적"));
+    let m = model(Ok(Some(vec!["어디에도없는품목"])));
+    let none = recall::find_with_sources(&t.p, m.as_ref(), "어디에도없는품목", "2026-11-02", &[], None).unwrap();
+    assert!(none.sources.is_empty() && none.section.contains("찾지 못함"));
 }

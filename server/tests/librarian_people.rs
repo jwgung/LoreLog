@@ -316,7 +316,7 @@ fn the_answer_to_asking_back_is_read_with_the_question_and_its_candidates_and_on
     });
     let day = "2026-10-31";
     let recall = |msg: &str, d: &str, said: &[String], before: Option<&str>| {
-        recall::find(&t.p, m.as_ref(), msg, d, said, before)
+        recall::find_with_sources(&t.p, m.as_ref(), msg, d, said, before)
     };
     let words_asked = || -> String {
         let asked = m.asked.lock().unwrap();

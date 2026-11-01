@@ -6,7 +6,7 @@
 
 Personal use · Encrypted local storage · The phone only collects · Transcription and summaries in your vault (models you choose)
 
-[**Download APK**](https://github.com/jwgung/LoreLog/releases/latest) · [Releases](https://github.com/jwgung/LoreLog/releases)
+[**Download APK · desktop app**](https://github.com/jwgung/LoreLog/releases/latest) · [Releases](https://github.com/jwgung/LoreLog/releases)
 
 English · [한국어](README.ko.md)
 
@@ -83,6 +83,27 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 **Special permissions** (you enable these yourself): usage access, accessibility (on-screen content), notification access, background location.
 
 > 🔒 **New Android / Samsung note**: accessibility (on-screen content capture) may be hard-blocked for sideloaded apps by security hardening. You have to go through App info → ⋮ → "Allow restricted settings", and if it's still blocked, give up on-screen capture on that device and use the rest. The sources that don't depend on accessibility are the backbone.
+
+### Desktop app (Windows · macOS · Linux)
+
+The desktop app **holds the vault**: on first start choose "keep it on this PC" and the app runs the server itself (records, mail/calendar notes, the index); the phone and other PCs send to it over Tailscale. It also runs the assistant screen and the PC collector in the tray. Details: [desktop/README.md](desktop/README.md).
+
+Download from the same [Releases](https://github.com/jwgung/LoreLog/releases/latest) page as the Android APK (every release carries both; the phone app keeps updating from the APK as before):
+
+| OS | File | Install |
+|---|---|---|
+| Windows 10/11 (x64) | `LoreLog_<version>_x64-setup.exe` | Run it. Installs for your user only (no admin). Windows 10 may need the WebView2 Runtime. |
+| macOS 11+ (Apple silicon and Intel) | `LoreLog_<version>_universal.dmg` | Open it and drag LoreLog to Applications. |
+| Linux (x64) | `LoreLog_<version>_amd64.AppImage` or `.deb` | AppImage: `chmod +x LoreLog_*.AppImage` then run it. deb: `sudo apt install ./LoreLog_*.deb`. |
+
+`life-agent-<version>-windows-x64.zip` is the optional command-line collector for Windows (not needed with the desktop app).
+
+**The apps are not signed with an OS certificate yet**, so the first start shows a warning:
+- **Windows SmartScreen** "Windows protected your PC": click **More info → Run anyway**.
+- **macOS** "LoreLog can't be opened" / "Apple could not verify…": try to open it once, then go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to LoreLog, and confirm. (macOS 15 no longer offers right-click → Open.)
+- **Linux**: no warning; the AppImage just needs the execute bit (`chmod +x`).
+
+**Updates**: the app checks for a new version when it starts. If there is one, the drawer shows "새 버전 X가 있어요 [설치]"; it installs only when you click, then restarts. Updates are signed and checked by the app. On Linux this works for the AppImage; with the deb, install the new deb.
 
 ## Build
 

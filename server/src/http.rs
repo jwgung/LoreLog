@@ -28,7 +28,8 @@ use crate::store::RawStore;
 pub const BODY_LIMIT: usize = 1_000_000;
 
 /// What the librarian adds to a chat question (see [`chat::Recall`]); set by whoever builds the app.
-pub type RecallFn = Arc<dyn Fn(&str, &str, &[String], Option<&str>) -> Option<String> + Send + Sync>;
+pub type RecallFn =
+    Arc<dyn Fn(&str, &str, &[String], Option<&str>) -> Option<crate::assistant::recall::Recalled> + Send + Sync>;
 
 /// What the server needs to answer requests.
 pub struct App {
@@ -58,7 +59,7 @@ impl App {
         // a chat question asks the librarian of the same places
         let (p, m) = (paths.clone(), model.clone());
         let recall: RecallFn = Arc::new(move |message, day, said, before| {
-            crate::assistant::recall::find(&p, m.as_ref(), message, day, said, before)
+            crate::assistant::recall::find_with_sources(&p, m.as_ref(), message, day, said, before)
         });
         App {
             paths,
@@ -267,8 +268,17 @@ fn chat_post(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, 
     };
     let recall = |m: &str, d: &str, said: &[String], before: Option<&str>| (app.recall)(m, d, said, before);
     match chat::chat_answer(&app.paths, app.model.as_ref(), &recall, &caps[1], message, fix) {
-        Ok(chat::Answer { reply, changed: None }) => Ok(Reply::ok(json!({"reply": reply}))),
-        Ok(chat::Answer { reply, changed: Some(c) }) => Ok(Reply::ok(json!({"reply": reply, "changed": c}))),
+        // `changed` and `sources` only when there are some: older apps read `{reply}` as before
+        Ok(chat::Answer { reply, changed, sources }) => {
+            let mut body = json!({"reply": reply});
+            if let Some(c) = changed {
+                body["changed"] = json!(c);
+            }
+            if !sources.is_empty() {
+                body["sources"] = json!(sources);
+            }
+            Ok(Reply::ok(body))
+        }
         Err(e) => {
             Ok(Reply::new(502, json!({"error": format!("chat failed: {e}").chars().take(300).collect::<String>()})))
         }

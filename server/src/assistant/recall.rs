@@ -3,6 +3,8 @@
 //! The words to search are picked by the model; what the librarian finds is quoted material (other people's mail and
 //! messages: never among the rules, and not kept as the user's words). The quote cannot be ended from inside: its
 //! markers are removed from the quoted text and square brackets (and the brackets that look like them) become round.
+use std::collections::HashSet;
+
 use serde_json::Value;
 use unicode_normalization::UnicodeNormalization;
 
@@ -13,6 +15,8 @@ pub const UNAVAILABLE: &str = "- (찾아보지 못함: 지금은 사서의 색�
 pub const PARTIAL: &str = "- (일부 기록 파일을 지금 읽지 못해 빠진 것이 있을 수 있다)";
 pub const STALE: &str = "- (색인을 지금 최신으로 갱신하지 못해 가장 최근에 들어온 기록은 빠졌을 수 있다)";
 pub const MAX_SNIPPET: usize = 200;
+/// the words that say what the graph read, as quoted (#64): enough to show where it came from, not the record
+pub const MAX_EVIDENCE: usize = 60;
 
 /// Square brackets and the brackets that look like them, all made round.
 const OPENING: &str = "[【〔〖⟦〘⁅❲❬〚";
@@ -52,7 +56,7 @@ pub fn plain(text: &str) -> String {
 }
 
 /// The hits as lines of the section (`NOT_FOUND` for none). A hit: `{day, kind, title, snippet, count, first, last,
-/// latest}`.
+/// latest}`, and what the graph knows of its matter: `state` and `earlier` states, `roles` (see [`known`]).
 pub fn render(hits: &[Value]) -> String {
     if hits.is_empty() {
         return NOT_FOUND.to_string();
@@ -63,12 +67,7 @@ pub fn render(hits: &[Value]) -> String {
             let title = plain(&s("title"));
             let body: String = plain(&s("snippet")).chars().take(MAX_SNIPPET).collect();
             let count = h.get("count").and_then(Value::as_u64).unwrap_or(1);
-            // what the graph knows of the matter (#46): how it stands, who has what part in it
-            let known: String = [("state", "마지막 상태"), ("roles", "역할")]
-                .iter()
-                .filter_map(|(k, name)| h.get(*k).and_then(Value::as_str).map(|v| format!(" · {name}: {}", plain(v))))
-                .collect();
-            let title = format!("{title}{known}");
+            let title = format!("{title}{}", known(h));
             if count > 1 {
                 // one matter (a thread, mails of one subject, their meetings): when it started comes first, then how
                 // it stands (its last record)
@@ -93,6 +92,101 @@ pub fn render(hits: &[Value]) -> String {
 /// The section as it goes in front of the user's words: marked as quoted material.
 pub fn quote(section: &str) -> String {
     format!("{HEADER}\n{section}\n{QUOTE_END}")
+}
+
+// ---------- how sure (#64) ----------
+
+/// What the graph knows of a hit's matter (#46): how it stands and who has what part in it. What the model read from
+/// a record is a guess and is marked as one (`추정`), with the record's words that say it and their day; what the
+/// rules took from the mail headers is not.
+fn known(h: &Value) -> String {
+    let s = |v: &Value, k: &str| plain(v.get(k).and_then(Value::as_str).unwrap_or("")).trim().to_string();
+    let guess = |v: &Value| v.get("origin").and_then(Value::as_str) == Some("model");
+    // `label (since, 근거 "…")`
+    let said = |v: &Value, label: String| {
+        let mut why = vec![s(v, "since")];
+        let ev = evidence(&s(v, "evidence"));
+        if guess(v) && !ev.is_empty() {
+            why.push(format!("근거 \"{ev}\""));
+        }
+        why.retain(|w| !w.is_empty());
+        if why.is_empty() { label } else { format!("{label} ({})", why.join(", ")) }
+    };
+    let mut out = String::new();
+    if let Some(st) = h.get("state").filter(|v| v.is_object()) {
+        let mut line = said(st, s(st, "label"));
+        let earlier: Vec<String> = h
+            .get("earlier")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().map(|e| format!("{} ({})", s(e, "label"), s(e, "since"))).collect())
+            .unwrap_or_default();
+        if !earlier.is_empty() {
+            line += &format!(", 그 전 {}", earlier.join(", "));
+        }
+        out += &format!(" · {}마지막 상태: {line}", if guess(st) { "추정 " } else { "" });
+    }
+    if let Some(roles) = h.get("roles").and_then(Value::as_array) {
+        let (guessed, read): (Vec<&Value>, Vec<&Value>) = roles.iter().partition(|r| guess(r));
+        for (name, list) in [("역할", read), ("추정 역할", guessed)] {
+            let parts: Vec<String> =
+                list.iter().map(|r| said(r, format!("{} {}", s(r, "who"), s(r, "label")).trim().to_string())).collect();
+            if !parts.is_empty() {
+                out += &format!(" · {name}: {}", parts.join(", "));
+            }
+        }
+    }
+    out
+}
+
+/// The words that say it, on one line and short (they stay in the quote: no double quote of their own).
+fn evidence(text: &str) -> String {
+    let one = text.split_whitespace().collect::<Vec<_>>().join(" ").replace('"', "'");
+    if one.chars().count() > MAX_EVIDENCE {
+        format!("{}…", one.chars().take(MAX_EVIDENCE).collect::<String>())
+    } else {
+        one
+    }
+}
+
+/// A record the answer quoted, for the screen to show under it (#64).
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct Source {
+    pub day: String,
+    pub kind: String,
+    pub title: String,
+    /// where the record is
+    #[serde(rename = "ref")]
+    pub refers: String,
+}
+
+/// What the librarian adds to a question: the section quoted in front of the user's words, and the records it quotes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Recalled {
+    pub section: String,
+    pub sources: Vec<Source>,
+}
+
+impl From<String> for Recalled {
+    fn from(section: String) -> Recalled {
+        Recalled { section, sources: Vec::new() }
+    }
+}
+
+/// The records these hits quote, one per matter, in their order.
+pub fn sources(hits: &[Value]) -> Vec<Source> {
+    let mut seen = HashSet::new();
+    hits.iter()
+        .enumerate()
+        .filter(|(i, h)| {
+            let key = h.get("case").or_else(|| h.get("ref")).map(Value::to_string).unwrap_or_else(|| format!("#{i}"));
+            seen.insert(key)
+        })
+        .map(|(_, h)| {
+            let s = |k: &str| h.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+            let title = s("title").split_whitespace().collect::<Vec<_>>().join(" ");
+            Source { day: s("day"), kind: s("kind"), title: title.chars().take(80).collect(), refers: s("ref") }
+        })
+        .collect()
 }
 
 // ---------- people of one name (#9) ----------
@@ -339,8 +433,18 @@ fn merged(graph: Vec<Value>, words: Vec<Value>, limit: usize) -> Vec<Value> {
     }
     let in_graph: std::collections::HashSet<String> = graph.iter().filter_map(key).collect();
     let in_words: std::collections::HashSet<String> = words.iter().filter_map(key).collect();
-    let (both, words_only): (Vec<Value>, Vec<Value>) =
+    let (mut both, words_only): (Vec<Value>, Vec<Value>) =
         words.into_iter().partition(|h| key(h).is_some_and(|k| in_graph.contains(&k)));
+    // a matter both found keeps what the graph knows of it (how it stands, who has what part: #64)
+    for h in &mut both {
+        if let Some(g) = graph.iter().find(|g| key(g) == key(h)) {
+            for k in ["state", "earlier", "roles"] {
+                if let Some(v) = g.get(k) {
+                    h[k] = v.clone();
+                }
+            }
+        }
+    }
     let graph_only: Vec<Value> = graph.into_iter().filter(|h| key(h).is_none_or(|k| !in_words.contains(&k))).collect();
     let mut out = both;
     let (mut w, mut g) = (words_only.into_iter(), graph_only.into_iter());
@@ -484,10 +588,10 @@ pub fn find_with(
     day: &str,
     said: &[String],
 ) -> Option<String> {
-    asked(open, model, message, day, said, None).0
+    asked(open, model, message, day, said, None).0.map(|r| r.section)
 }
 
-/// [`find_with`], and what to keep of the question: the words searched and where the hits are.
+/// [`find_with`] with the records quoted, and what to keep of the question: the words searched and where the hits are.
 fn asked(
     open: impl FnOnce() -> anyhow::Result<Box<dyn Index>>,
     model: &dyn crate::llm::Model,
@@ -495,7 +599,7 @@ fn asked(
     day: &str,
     said: &[String],
     before: Option<&str>,
-) -> (Option<String>, Option<Vec<String>>, crate::librarian::asks::Found) {
+) -> (Option<Recalled>, Option<Vec<String>>, crate::librarian::asks::Found) {
     use crate::librarian::asks::Found;
     let Some(picked) = pick(model, message, before) else { return (None, None, Found::NotSearched) };
     let words: Vec<String> = picked.people.iter().chain(&picked.words).cloned().collect();
@@ -516,20 +620,21 @@ fn asked(
     })();
     match found {
         Ok(named) => {
-            let (body, found) = match &named {
+            let (body, sources, found) = match &named {
                 Named::Hits(hits) => (
                     render(hits),
+                    sources(hits),
                     Found::Hits(hits.iter().filter_map(|h| h["ref"].as_str().map(str::to_string)).collect()),
                 ),
-                Named::Ask(cands) => (render_candidates(cands), Found::Asked),
+                Named::Ask(cands) => (render_candidates(cands), Vec::new(), Found::Asked),
             };
             let section =
                 std::iter::once(body).chain(notes.iter().map(|n| n.to_string())).collect::<Vec<_>>().join("\n");
-            (Some(section), Some(words), found)
+            (Some(Recalled { section, sources }), Some(words), found)
         }
         Err(e) => {
             log::warn!("librarian unavailable: {}", first_word(&e));
-            (Some(UNAVAILABLE.to_string()), Some(words), Found::Unavailable)
+            (Some(UNAVAILABLE.to_string().into()), Some(words), Found::Unavailable)
         }
     }
 }
@@ -557,6 +662,18 @@ pub fn find(
     said: &[String],
     before: Option<&str>,
 ) -> Option<String> {
+    find_with_sources(paths, model, message, day, said, before).map(|r| r.section)
+}
+
+/// [`find`], and the records the section quotes (for the answer to show where it comes from, #64).
+pub fn find_with_sources(
+    paths: &crate::config::Paths,
+    model: &dyn crate::llm::Model,
+    message: &str,
+    day: &str,
+    said: &[String],
+    before: Option<&str>,
+) -> Option<Recalled> {
     let open = || -> anyhow::Result<Box<dyn Index>> {
         Ok(Box::new(crate::librarian::Librarian::open(paths, None, LOCK_WAIT)?))
     };

@@ -83,7 +83,7 @@ private val Picked = Color(0xFF3A4766)
 /** 대화 화면에 덧붙는 말풍선(서버 초안 뒤에 사용자가 주고받은 것). */
 private sealed class Msg {
     data class Mine(val text: String) : Msg()
-    data class Assistant(val text: String) : Msg()
+    data class Assistant(val text: String, val sources: List<DiaryClient.Source> = emptyList()) : Msg()
     data class Fixed(val wrong: String, val right: String) : Msg()
     data object Typing : Msg()
 }
@@ -204,7 +204,7 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
                 extra.add(Msg.Assistant("연결이 안 돼서 답을 못 드렸어요. 말씀하신 건 다시 보내 주시면 남길게요."))
                 return@launch
             }
-            extra.add(Msg.Assistant(r.reply))
+            extra.add(Msg.Assistant(r.reply, r.sources))
             if (wrong != null) extra.add(Msg.Fixed(wrong, t))
         }
     }
@@ -296,6 +296,13 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
                     is Msg.Assistant -> {
                         // 비서의 답도 눌러서 틀렸다고 알려 줄 수 있다(#10)
                         AssistantBubble(m.text, onClick = { pickedAnswer = if (pickedAnswer == m.text) null else m.text; selected = null; fixing = null })
+                        // 답이 인용한 기록: 날짜·종류·제목만 작게(#64)
+                        if (m.sources.isNotEmpty()) {
+                            Text(
+                                sourceLine(m.sources), color = Sub, fontSize = 11.sp, lineHeight = 16.sp,
+                                modifier = Modifier.widthIn(max = bubbleMax()).padding(start = 8.dp),
+                            )
+                        }
                         if (pickedAnswer == m.text) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 8.dp)) {
                                 Button(onClick = { fixing = m.text; fixingAbout = "answer" }) { Text("이 답이 틀렸어요") }
@@ -350,6 +357,23 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
             IconCircle(label = "보내기", enabled = input.isNotBlank(), filled = true, onClick = { send() }) { Icon(Lucide.Up, contentDescription = null, tint = if (input.isNotBlank()) Ink else Color(0xFF6F7785), modifier = Modifier.size(22.dp)) }
         }
     }
+}
+
+/** 출처 한 줄: "출처 · 3/5 보낸 메일 「배관 교체 견적」 · …", 셋까지 보이고 나머지는 "외 N건". */
+private fun sourceLine(sources: List<DiaryClient.Source>, max: Int = 3): String {
+    val year = SimpleDateFormat("yyyy", Locale.US).format(Date())
+    fun day(d: String): String {
+        val p = d.split("-")
+        if (p.size != 3) return d
+        val md = "${p[1].toIntOrNull() ?: p[1]}/${p[2].toIntOrNull() ?: p[2]}"
+        return if (p[0] == year) md else "${p[0]}/$md"
+    }
+    val shown = sources.take(max).joinToString(" · ") { s ->
+        val title = if (s.title.length > 30) s.title.take(30) + "…" else s.title
+        listOf(day(s.day), s.kind, if (title.isEmpty()) "" else "「$title」").filter { it.isNotEmpty() }.joinToString(" ")
+    }
+    val more = sources.size - max
+    return "출처 · $shown" + if (more > 0) " 외 ${more}건" else ""
 }
 
 @Composable
