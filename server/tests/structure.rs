@@ -11,6 +11,7 @@ use std::time::Duration;
 use common::{FakeModel, Server};
 use life_server::librarian::Librarian;
 use life_server::librarian::graph::{self, Ask1};
+use life_server::librarian::structure;
 use serde_json::{Value, json};
 
 const ME: &str = "나 <me@mine.co.kr>";
@@ -28,7 +29,8 @@ fn mail(s: &Server, name: &str, day: &str, subject: &str, body: &str) {
 
 /// The model's grouping of the record's words for states.
 fn model_groups() -> Value {
-    json!({"견적 요청": "견적", "견적서 송부": "견적", "가격 제안": "견적", "계약 체결": "계약", "납품 완료": "납품"})
+    json!({"견적 요청": "견적", "견적서 송부": "견적", "가격 제안": "견적", "계약 체결": "계약", "납품 완료": "납품",
+           "지원자": "지원자", "응시자": "지원자", "후보자": "지원자"})
 }
 
 /// The model: the states of each matter by the words of its mail, and the groups of their names.
@@ -61,6 +63,22 @@ fn reader() -> Arc<FakeModel> {
             ])
         } else if text.contains("도장 작업") {
             json!([st("도장 작업", "2026-04-03", "견적 요청", "견적 요청드립니다")])
+        } else if let Some((case, who, role)) = [
+            ("연구원 채용", "정다운", "지원자"),
+            ("인턴 채용", "김하나", "응시자"),
+            ("엔지니어 채용", "이수진", "후보자"),
+        ]
+        .into_iter()
+        .find(|(c, ..)| text.contains(c))
+        {
+            json!([[
+                format!("{who}:person"),
+                "role",
+                format!("{case}:case"),
+                role,
+                "2026-05-10",
+                format!("{role} {who}")
+            ]])
         } else {
             json!([])
         };
@@ -81,6 +99,9 @@ fn world() -> (Server, Librarian) {
     mail(&s, "b.md", "2026-03-12", "배관 교체", "배관 교체: 견적서 송부합니다. 계약 체결했습니다.");
     mail(&s, "c.md", "2026-04-09", "센서 설치", "센서 설치: 가격 제안드립니다. 납품 완료했습니다.");
     mail(&s, "d.md", "2026-04-03", "도장 작업", "도장 작업: 견적 요청드립니다.");
+    mail(&s, "h1.md", "2026-05-10", "연구원 채용", "연구원 채용: 지원자 정다운");
+    mail(&s, "h2.md", "2026-05-10", "인턴 채용", "인턴 채용: 응시자 김하나");
+    mail(&s, "h3.md", "2026-05-10", "엔지니어 채용", "엔지니어 채용: 후보자 이수진");
     let mut lib = Librarian::open(&s.paths, None, Duration::from_secs(5)).unwrap();
     lib.update(false).unwrap();
     let model = reader();
@@ -218,4 +239,72 @@ fn a_structure_correction_of_a_word_the_graph_does_not_have_is_refused() {
 
 fn percent(s: &str) -> String {
     s.bytes().map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+// ---------- asking the user about a group (#63) ----------
+
+const QUOTE: &str =
+    "'견적 요청·견적서 송부·가격 제안'을 '견적'으로 묶고 견적→계약→납품 순서로 볼까요? (예: 도장 작업 건은 지금 견적)";
+const ROLES: &str = "'응시자·지원자·후보자'를 '지원자'로 묶어 볼까요? (예: 연구원 채용 건)";
+
+fn evening(s: &Server, day: &str) -> String {
+    life_server::assistant::summary::generate(&s.paths, common::FakeModel::plain().as_ref(), day, false).unwrap();
+    life_server::assistant::diary::read_day(&s.paths, day)["question"].as_str().unwrap().to_string()
+}
+
+#[test]
+fn a_group_is_asked_about_once_it_held_still_over_two_updates_in_the_users_most_used_words() {
+    let (_s, lib) = world();
+    assert_eq!(structure::note(&lib).unwrap(), None, "seen once: it may still change");
+    assert_eq!(structure::note(&lib).unwrap().as_deref(), Some(QUOTE), "the group with the most matters first");
+}
+
+#[test]
+fn the_evening_question_is_the_structure_question_on_its_day_and_at_most_once_in_seven_days() {
+    let (s, lib) = world();
+    structure::note(&lib).unwrap();
+    structure::note(&lib).unwrap();
+    assert_eq!(evening(&s, "2026-11-01"), QUOTE);
+    assert_eq!(evening(&s, "2026-11-01"), QUOTE, "the same one when the day is drafted again");
+    structure::note(&lib).unwrap(); // the next group is due now
+    assert_eq!(evening(&s, "2026-11-04"), "어떠셨어요?", "not within seven days");
+    assert_eq!(evening(&s, "2026-11-08"), ROLES, "a group of roles asks no order");
+    structure::note(&lib).unwrap();
+    assert_eq!(evening(&s, "2026-11-20"), "어떠셨어요?", "nothing left to ask");
+}
+
+#[test]
+fn a_group_the_user_said_something_of_is_not_asked_about() {
+    let (s, lib) = world();
+    structure::note(&lib).unwrap();
+    name(&s, "가격 제안", "견적");
+    assert_eq!(structure::note(&lib).unwrap().as_deref(), Some(ROLES));
+}
+
+#[test]
+fn a_group_that_changed_since_the_last_update_waits() {
+    let (s, mut lib) = world();
+    structure::note(&lib).unwrap();
+    // the model put one more word in the group
+    mail(&s, "f.md", "2026-06-01", "조명 교체", "조명 교체: 단가 회신드립니다.");
+    lib.update(false).unwrap();
+    let m = FakeModel::new(|msgs| {
+        let system = msgs[0]["content"].as_str().unwrap_or("");
+        if system.starts_with("업무 기록에서 뽑은 역할·상태 이름들을") {
+            return Ok(json!({"g": {"단가 회신": "견적"}}).to_string());
+        }
+        let text = msgs.last().unwrap()["content"].as_str().unwrap_or("");
+        let r = if text.contains("조명 교체") {
+            json!([["조명 교체:case", "state", "2026-06-01", "단가 회신", "2026-06-01", "단가 회신드립니다"]])
+        } else {
+            json!([])
+        };
+        Ok(json!({"r": r}).to_string())
+    });
+    graph::extract(&mut lib, m.as_ref(), &graph::Run { limit: 50, workers: 1 }).unwrap();
+    graph::group_labels(&lib, m.as_ref()).unwrap();
+    assert_eq!(structure::note(&lib).unwrap().as_deref(), Some(ROLES), "견적 changed: the roles, which did not");
+    assert!(
+        structure::note(&lib).unwrap().unwrap().starts_with("'견적 요청·견적서 송부·가격 제안 외 1개'를 '견적'으로")
+    );
 }

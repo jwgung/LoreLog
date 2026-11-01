@@ -832,7 +832,7 @@ fn label_fits(label: &str, words: &[String], groups: &std::collections::HashMap<
 }
 
 /// The groups of the labels the model gave (label -> group), kept by [`group_labels`].
-fn model_groups(paths: &Paths) -> std::collections::HashMap<String, String> {
+pub(crate) fn model_groups(paths: &Paths) -> std::collections::HashMap<String, String> {
     std::fs::read_to_string(cache_dir(paths).join("labels.json"))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
