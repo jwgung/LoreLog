@@ -84,17 +84,27 @@ internal enum class AppScreen { CHAT, DRAWER, COLLECT, REMINDER, SENDERS, EXPORT
 /** 알림에서 대화 화면을 열라는 요청. 화면이 읽고 나면 false 로 되돌린다. */
 internal object DiaryNav {
     val requested = kotlinx.coroutines.flow.MutableStateFlow(false)
+    /** 비서 알림(#60)을 눌렀을 때 대화 입력란에 넣을 질문. 화면이 넣고 나면 null. */
+    val question = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+
+    fun from(intent: android.content.Intent) {
+        if (intent.getBooleanExtra(com.lorelog.work.DiaryReminderWorker.EXTRA_OPEN_DIARY, false)) requested.value = true
+        intent.getStringExtra(com.lorelog.work.AheadWorker.EXTRA_ASK)?.takeIf { it.isNotBlank() }?.let {
+            question.value = it.take(500)
+            requested.value = true
+        }
+    }
 }
 
 class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
-        if (intent.getBooleanExtra(com.lorelog.work.DiaryReminderWorker.EXTRA_OPEN_DIARY, false)) DiaryNav.requested.value = true
+        DiaryNav.from(intent)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (intent.getBooleanExtra(com.lorelog.work.DiaryReminderWorker.EXTRA_OPEN_DIARY, false)) DiaryNav.requested.value = true
+        DiaryNav.from(intent)
         enableEdgeToEdge()
         setContent {
             val context = LocalContext.current

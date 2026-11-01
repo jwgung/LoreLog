@@ -121,6 +121,8 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
     var fixingAbout by remember { mutableStateOf("summary") }
     var pickedAnswer by remember { mutableStateOf<String?>(null) }
     var input by remember { mutableStateOf("") }
+    val asked by DiaryNav.question.collectAsStateWithLifecycle()
+    LaunchedEffect(asked) { asked?.let { input = it; DiaryNav.question.value = null } }
     var todoCount by remember { mutableStateOf(0) }
     LaunchedEffect(Unit) { todoCount = DiaryClient.fetchTodos(context)?.let { it.open.size + it.proposed.size } ?: 0 }
     // 앱을 다시 열어도 오늘 나눈 대화가 이어서 보이게 서버에서 불러온다.
