@@ -92,4 +92,12 @@ internal object Lucide {
         icon("Check",
             "M20 6 9 17l-5-5")
     }
+
+    val Calendar: ImageVector by lazy {
+        icon("Calendar",
+            "M8 2v4",
+            "M16 2v4",
+            "M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2Z",
+            "M3 10h18")
+    }
 }

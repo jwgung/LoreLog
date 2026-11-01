@@ -161,6 +161,7 @@ static ROUTES: LazyLock<Vec<(Method, Regex, Handler)>> = LazyLock::new(|| {
         (Method::POST, r(&format!("/diary/{DAY}/chat")), chat_post),
         (Method::POST, r("/corrections"), correction_post),
         (Method::POST, r("/assistant/ahead"), ahead_post),
+        (Method::GET, r(&format!("/schedule(?:\\?from={DAY}&to={DAY})?")), schedule_get),
         (Method::GET, r("/graph/search\\?q=([^&]{0,300})"), graph_search),
         (Method::GET, r("/graph/node\\?id=([^&]{1,600})"), graph_node),
         (Method::GET, r(&format!("/diary/{DAY}(\\?refresh=1)?")), draft_get),
@@ -358,6 +359,27 @@ fn ahead_post(app: &App, req: &Request, _: &regex::Captures) -> Result<Reply, Re
     let lines = crate::assistant::ahead::take(&app.paths, &ask, now, crate::assistant::ahead::WINDOW)
         .map_err(|e| internal(req, &e.to_string()))?;
     Ok(Reply::ok(json!({"items": lines.iter().map(|l| l.json()).collect::<Vec<_>>()})))
+}
+
+/// The events of the days asked (the week from today when none) with the assistant's notes (#62).
+fn schedule_get(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {
+    use crate::assistant::schedule;
+    let today = Local::now().date_naive();
+    let Some((from, to)) = schedule::days_from(caps.get(1).map(|m| m.as_str()), caps.get(2).map(|m| m.as_str()), today)
+    else {
+        return Ok(Reply::new(400, json!({"error": "bad days"})));
+    };
+    match schedule::between(&app.paths, from, to, today) {
+        Ok(items) => Ok(Reply::ok(json!({
+            "from": from.format("%Y-%m-%d").to_string(),
+            "to": to.format("%Y-%m-%d").to_string(),
+            "items": items.iter().map(|i| i.json()).collect::<Vec<_>>(),
+        }))),
+        Err(e) if e.downcast_ref::<crate::librarian::Outdated>().is_some() => {
+            Ok(Reply::new(503, json!({"error": "index not ready"})))
+        }
+        Err(e) => Err(internal(req, &e.to_string())),
+    }
 }
 
 fn draft_get(app: &App, _: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {

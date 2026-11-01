@@ -244,6 +244,26 @@ object DiaryClient {
             }
         }
 
+    /** 일정 화면(#62)의 한 쪽: 금고가 아는 일정과 비서 메모. */
+    sealed class ScheduleResult {
+        data class Ready(val events: List<com.lorelog.data.Schedule.Event>) : ScheduleResult()
+        /** 금고의 색인이 아직 만들어지지 않았다 */
+        object NotReady : ScheduleResult()
+        object Failed : ScheduleResult()
+    }
+
+    suspend fun schedule(context: Context, span: com.lorelog.data.Schedule.Span): ScheduleResult = withContext(Dispatchers.IO) {
+        var conn: HttpURLConnection? = null
+        try {
+            conn = open(context, "/schedule?from=${span.from}&to=${span.to}", "GET") ?: return@withContext ScheduleResult.Failed
+            when (conn.responseCode) {
+                200 -> ScheduleResult.Ready(com.lorelog.data.Schedule.parse(JSONObject(conn.inputStream.bufferedReader().readText())))
+                503 -> ScheduleResult.NotReady
+                else -> ScheduleResult.Failed
+            }
+        } catch (e: Exception) { ScheduleResult.Failed } finally { conn?.disconnect() }
+    }
+
     /** 정정(틀린 것 → 맞는 것 쌍)과 회고를 저장한다. */
     suspend fun save(context: Context, day: String, corrections: List<Pair<String, String>>, reflection: String, append: Boolean = true): Boolean =
         withContext(Dispatchers.IO) {
