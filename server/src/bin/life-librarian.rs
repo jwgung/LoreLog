@@ -210,7 +210,7 @@ fn measure(lib: &mut Librarian, paths: &Paths, file: &std::path::Path, k: usize,
             Some(w) => format!("   모델 {} {:?}", mark(r.model_rank), w),
         };
         let share = r.person_share.map(|(a, b)| format!("  (그 사람과 {a}/{b})")).unwrap_or_default();
-        let raw = if r.kind == Kind::Pending { "  · ".into() } else { mark(r.raw_rank) };
+        let raw = if matches!(r.kind, Kind::Pending | Kind::Period) { "  · ".into() } else { mark(r.raw_rank) };
         println!("{raw}  {}{share}{model}", r.q);
     }
     println!();

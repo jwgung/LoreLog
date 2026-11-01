@@ -130,3 +130,52 @@ fn a_question_about_several_matters_is_found_only_when_all_of_them_are_and_at_th
     fs::write(&f, "[[case]]\nkind = \"graph\"\nq = \"뭐지\"\nthreads = []\n").unwrap();
     assert!(eval::load(&f).unwrap_err().to_string().contains("threads"));
 }
+
+/// Names the period of a question about what hangs in one (#61).
+struct PeriodPicker;
+impl Model for PeriodPicker {
+    fn complete(&self, messages: &[Value], _: Ask) -> anyhow::Result<String> {
+        let q = messages[1]["content"].as_str().unwrap_or("");
+        Ok(if q.contains("이번 달") {
+            r#"{"search": true, "period": "this_month"}"#
+        } else {
+            r#"{"search": false}"#
+        }
+        .into())
+    }
+}
+
+#[test]
+fn a_period_question_is_found_when_every_item_expected_is_in_its_section_on_its_fixed_day() {
+    let (_d, p, mut lib) = setup();
+    for (day, title) in [("2026-06-10", "견적 회의"), ("2026-06-20", "현장 점검"), ("2026-07-02", "다음 달 일")]
+    {
+        fs::write(
+            p.vault.join("Events").join(format!("{day} {title}.md")),
+            format!("---\ntype: event\ntitle: \"{title}\"\nstart: {day}T10:00\nend: {day}T11:00\n---\n"),
+        )
+        .unwrap();
+    }
+    lib.update(false).unwrap();
+    let cs = cases(
+        &p,
+        "[[case]]\nkind = \"period\"\nq = \"이번 달에 뭐 걸려 있지\"\nday = \"2026-06-05\"\nitems = [\"견적 회의\", \"현장 점검\"]\n\n\
+         [[case]]\nkind = \"period\"\nq = \"이번 달에 뭐 걸려 있지\"\nday = \"2026-06-05\"\nitems = [\"견적 회의\", \"다음 달 일\"]\n",
+    );
+    let out = eval::run(&mut lib, Some(&PeriodPicker), &p.vault, &cs, 8).unwrap();
+    let t = thread(&lib, &p.vault, "b2.md");
+    let wrong = cases(&p, &format!("[[case]]\nkind = \"status\"\nq = \"이번 달 견적 요청\"\nthread = \"{t}\"\n"));
+    let miss = eval::run(&mut lib, Some(&PeriodPicker), &p.vault, &wrong, 8).unwrap();
+    assert_eq!(miss[0].model_rank, None, "a period picked for a matter: the chat would not answer with the matter");
+    assert_eq!(out[0].model_rank, Some(3), "the line of the last item expected (after the period's own line)");
+    assert_eq!(out[1].model_rank, None, "an item outside the month: a miss");
+    assert_eq!(out[0].raw_rank, None, "the user's words name no period");
+    let s = eval::summary(&out);
+    assert_eq!(s[&Kind::Period].model, (1, 2));
+    assert_eq!(s[&Kind::Period].raw, (0, 0), "not measured with the user's words");
+    let f = p.data.join("bad.toml");
+    fs::write(&f, "[[case]]\nkind = \"period\"\nq = \"뭐지\"\nitems = [\"a\"]\n").unwrap();
+    assert!(eval::load(&f).unwrap_err().to_string().contains("day"));
+    fs::write(&f, "[[case]]\nkind = \"period\"\nq = \"뭐지\"\nday = \"2026-06-05\"\n").unwrap();
+    assert!(eval::load(&f).unwrap_err().to_string().contains("items"));
+}
