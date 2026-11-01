@@ -2,7 +2,7 @@
 //!
 //! Two jobs, both thin over `life_agent_core`:
 //!   1. **The screens** — the window loads the app's own bundled UI (`index.html` = the assistant: chat, to-dos,
-//!      drawer; `settings.html` = server address, token, watched folders). The assistant UI talks to the server's
+//!      drawer; `settings.html` = server address, token, watched folders; `welcome.html` = the first-run guide). The assistant UI talks to the server's
 //!      API over the network, using the address and token it reads back through `server_config`. The screens are
 //!      bundled in the app, not served to browsers.
 //!   2. **The PC collector** — a background thread runs the same loop as `life-agent run`: window segments plus the
@@ -16,6 +16,7 @@
 //! The shell owns no judgement about the diary: it exposes the config to the UI as commands and runs the collector.
 mod ahead;
 mod host;
+mod pair;
 mod update;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -191,6 +192,44 @@ fn models_get(slot: tauri::State<HostSlot>) -> Result<Models, String> {
 #[tauri::command]
 fn models_save(models: Models, slot: tauri::State<HostSlot>) -> Result<(), String> {
     hosting(&slot, |h| h.set_models(&models)).unwrap_or_else(|| Err("이 PC에 금고를 둔 경우에만 설정합니다".into()))
+}
+
+/// Does the chat model at this address answer a tiny request? (the first-run guide and the settings, #69)
+#[tauri::command]
+async fn model_check(url: String, model: String) -> Result<life_server::onboard::ModelCheck, String> {
+    blocking(move || life_server::onboard::check_model(&url, &model)).await
+}
+
+#[derive(Serialize)]
+struct PhoneCode {
+    /// `lorelog://connect?u=<address for devices>&t=<token>`: a secret, made only when the user asks to see it
+    code: String,
+    qr_svg: String,
+}
+
+/// The one-line connection code a phone pastes: this PC's tailnet address and the vault's token. Made only on the
+/// user's click, never logged, and only for an address the token may go to.
+#[tauri::command]
+fn phone_code(slot: tauri::State<HostSlot>) -> Result<PhoneCode, String> {
+    let url = hosting(&slot, |h| h.info().address_for_devices)
+        .ok_or("이 PC에 금고를 둔 경우에만 만듭니다")?
+        .ok_or("아직 tailnet 주소가 없습니다. 이 PC에 Tailscale을 켜고 로그인하세요")?;
+    let code = life_server::onboard::connect_code(&url, &config::load()?.token)?;
+    let qr_svg = pair::qr_svg(&code)?;
+    Ok(PhoneCode { code, qr_svg })
+}
+
+/// How far the first sync and the graph got (host mode).
+#[tauri::command]
+async fn first_progress(slot: tauri::State<'_, HostSlot>) -> Result<life_server::onboard::Progress, String> {
+    let paths = host_paths(&slot)?;
+    blocking(move || Ok(life_server::onboard::progress(&paths))).await
+}
+
+/// The Tailscale download page, in the user's browser.
+#[tauri::command]
+fn open_tailscale_download() -> Result<(), String> {
+    pair::open_in_browser(pair::TAILSCALE_DOWNLOAD)
 }
 
 /// Are the questions the assistant takes to the librarian kept (to measure it)?
@@ -497,6 +536,10 @@ pub fn run() {
             models_get,
             models_save,
             asks_get,
+            model_check,
+            phone_code,
+            first_progress,
+            open_tailscale_download,
             export_vault,
             vault_holdings,
             vault_plan,

@@ -115,15 +115,12 @@ object ContactsExport {
 
     /**
      * 내보내기 URL(…/ingest/lorelog) 옆의 …/ingest/contacts(앞에 붙은 경로는 그대로). 주소록은 남의 연락처라 평문으로 보내지
-     * 않는다: https, 또는 WireGuard로 암호화되는 tailnet(*.ts.net, 100.64.0.0/10)·이 기기(loopback)의 http만.
+     * 않는다: 토큰과 같은 규칙([com.lorelog.net.ConnectCode.safeForToken]) — https, 또는 tailnet·이 기기의 http만.
      */
     private fun url(context: Context): String? {
         val u = EndpointConfig.url(context) ?: return null
+        if (!com.lorelog.net.ConnectCode.safeForToken(u)) return null
         val parsed = runCatching { URL(u) }.getOrNull() ?: return null
-        val host = parsed.host.lowercase()
-        val tailnet = host.endsWith(".ts.net") || host == "localhost" || host == "127.0.0.1" || host == "::1" ||
-            host.split('.').let { p -> p.size == 4 && p[0] == "100" && (p[1].toIntOrNull() ?: 0) in 64..127 }
-        if (parsed.protocol != "https" && !(parsed.protocol == "http" && tailnet)) return null
         val path = parsed.path.trimEnd('/')
         val prefix = if (path.endsWith("/ingest/lorelog")) path.removeSuffix("/ingest/lorelog") else ""
         return "${parsed.protocol}://${parsed.authority}$prefix/ingest/contacts"

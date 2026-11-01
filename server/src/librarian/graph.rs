@@ -601,6 +601,19 @@ pub fn backlog(db: &Connection) -> rusqlite::Result<usize> {
     Ok(candidates(db)?.len())
 }
 
+impl Librarian {
+    /// How far the index and the graph got: records indexed, mails the graph reads, read so far, still waiting (#69).
+    pub fn progress(&self) -> anyhow::Result<crate::onboard::Progress> {
+        let count = |sql: &str| self.db.query_row(sql, [], |r| r.get::<_, i64>(0)).map(|n| n.max(0) as usize);
+        let records = count("select count(*) from docs")?;
+        let graph_read = count(
+            "select count(distinct file) from graph_seen where file in (select file from docs where source = 'mail')",
+        )?;
+        let graph_waiting = backlog(&self.db)?;
+        Ok(crate::onboard::Progress { records, mail: graph_read + graph_waiting, graph_read, graph_waiting })
+    }
+}
+
 // ---------- asking the graph (#46) ----------
 
 /// A name as organizations are compared: [`name_key`], without what says it is a company ((주), 주식회사, Inc …), and

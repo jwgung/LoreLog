@@ -72,6 +72,7 @@ import com.lorelog.audio.VoicePlayer
 import java.io.File
 import com.lorelog.collect.CollectorPrefs
 import com.lorelog.data.TimelineItem
+import com.lorelog.net.ConnectCode
 import com.lorelog.net.EndpointConfig
 import com.lorelog.net.UpdateChecker
 import com.lorelog.work.PushPrefs
@@ -79,7 +80,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-internal enum class AppScreen { CHAT, DRAWER, COLLECT, REMINDER, SENDERS, EXPORT, TODOS }
+internal enum class AppScreen { CHAT, DRAWER, COLLECT, REMINDER, SENDERS, EXPORT, TODOS, SERVER }
 
 /** 알림에서 대화 화면을 열라는 요청. 화면이 읽고 나면 false 로 되돌린다. */
 internal object DiaryNav {
@@ -126,7 +127,9 @@ class MainActivity : ComponentActivity() {
                         AppScreen.SENDERS -> DrawerPage("일기에 쓰는 메신저", onBack = { screen = AppScreen.DRAWER }) { DiarySenderSettings() }
                         AppScreen.COLLECT -> HomeScreen(onBack = { screen = AppScreen.DRAWER })
                         AppScreen.EXPORT -> HomeScreen(onBack = { screen = AppScreen.DRAWER }, initialPage = "export")
+                        AppScreen.SERVER -> HomeScreen(onBack = { screen = AppScreen.DRAWER }, initialPage = "server")
                     }
+                    ConnectPrompt(onConnect = { screen = AppScreen.SERVER })
                 }
             }
         }
@@ -134,6 +137,29 @@ class MainActivity : ComponentActivity() {
 }
 
 internal val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
+
+/** 처음 켰을 때 금고 주소가 없으면 한 번 묻는다(#69). '나중에'를 누르면 다시 묻지 않는다(서랍의 '금고 연결'은 그대로). */
+@Composable
+private fun ConnectPrompt(onConnect: () -> Unit) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences("first_run", android.content.Context.MODE_PRIVATE) }
+    var open by remember { mutableStateOf(!EndpointConfig.isConfigured(context) && !prefs.getBoolean("connect_asked", false)) }
+    if (!open) return
+    val close = { prefs.edit().putBoolean("connect_asked", true).apply(); open = false }
+    AlertDialog(
+        onDismissRequest = close,
+        title = { Text("금고에 연결할까요?") },
+        text = {
+            Text(
+                "기록은 이 폰에 쌓이고, 금고(데스크톱 앱이나 내 서버)에 연결하면 그리로 보냅니다. " +
+                    "데스크톱 앱의 '처음 설정' ④에서 연결 코드를 복사해 '금고 연결'에 붙여 넣으세요. " +
+                    "폰과 PC에 Tailscale을 설치해 같은 계정으로 로그인해 두어야 합니다.",
+            )
+        },
+        confirmButton = { TextButton(onClick = { close(); onConnect() }) { Text("연결하기") } },
+        dismissButton = { TextButton(onClick = close) { Text("나중에") } },
+    )
+}
 
 private fun isScreenCaptureEnabled(context: android.content.Context): Boolean {
     val enabled = Settings.Secure.getString(
@@ -190,6 +216,7 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
         mutableStateMapOf<String, Boolean>().apply { CollectorPrefs.ALL.forEach { put(it.first, CollectorPrefs.enabled(context, it.first)) } }
     }
     var showToken by remember { mutableStateOf(false) }
+    var connectCode by remember { mutableStateOf("") }
     var wifiOnly by remember { mutableStateOf(PushPrefs.wifiOnly(context)) }
     var update by remember { mutableStateOf<UpdateChecker.Result?>(null) }
     var checking by remember { mutableStateOf(false) }
@@ -536,6 +563,33 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
         }
         if (page == "server") {
         Text("기록을 금고로 보내는 주소입니다. 음성 전사와 일기도 같은 주소와 토큰을 씁니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            "데스크톱 앱의 '처음 설정' ④ 폰 연결에서 '연결 코드 보기' → 복사한 한 줄을 여기에 붙여 넣으면 주소와 토큰이 채워집니다. " +
+                "폰과 PC 모두 Tailscale에 같은 계정으로 로그인해 두세요. 코드에는 토큰이 들어 있으니 남에게 보내지 마세요.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedTextField(
+            value = connectCode,
+            onValueChange = { connectCode = it },
+            label = { Text("연결 코드 붙여 넣기") },
+            placeholder = { Text("lorelog://connect?…") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedButton(enabled = connectCode.isNotBlank(), onClick = {
+            when (val r = ConnectCode.parse(connectCode)) {
+                is ConnectCode.Parsed.Ok -> {
+                    endpointUrl = r.url
+                    endpointToken = r.token
+                    EndpointConfig.set(context, r.url, r.token)
+                    connectCode = ""
+                    LogRepository.setStatus("연결 코드로 금고 주소와 토큰을 넣고 저장했습니다")
+                }
+                is ConnectCode.Parsed.Bad -> LogRepository.setStatus(r.reason)
+            }
+        }) { Text("코드로 채우고 저장") }
+        Text("또는 직접 넣기", style = MaterialTheme.typography.labelMedium)
         OutlinedTextField(
             value = endpointUrl,
             onValueChange = { endpointUrl = it },
@@ -554,8 +608,13 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = {
-                EndpointConfig.set(context, endpointUrl, endpointToken)
-                LogRepository.setStatus("엔드포인트 저장됨")
+                val problem = ConnectCode.manualProblem(endpointUrl, endpointToken)
+                if (problem != null) {
+                    LogRepository.setStatus(problem)
+                } else {
+                    EndpointConfig.set(context, endpointUrl, endpointToken)
+                    LogRepository.setStatus("엔드포인트 저장됨")
+                }
             }) { Text("저장") }
             OutlinedButton(onClick = {
                 coroutineScope.launch {

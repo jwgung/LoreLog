@@ -15,5 +15,6 @@ pub mod librarian;
 pub mod llm;
 pub mod logging;
 pub mod note;
+pub mod onboard;
 pub mod store;
 pub mod vault;
