@@ -214,6 +214,36 @@ object DiaryClient {
         }
     }
 
+    /**
+     * 앞으로의 일정 앞에 비서가 먼저 말할 줄들(#60). [events]는 이 폰 캘린더의 일정(금고는 자기 캘린더 일정을
+     * 더한다), [stopped]는 사용자가 멈춘 조직. 금고에 닿지 않으면 null.
+     */
+    suspend fun ahead(context: Context, events: JSONArray, stopped: Set<String>): List<com.lorelog.work.AheadRules.Line>? =
+        withContext(Dispatchers.IO) {
+            var conn: HttpURLConnection? = null
+            try {
+                conn = open(context, "/assistant/ahead", "POST") ?: return@withContext null
+                conn.doOutput = true
+                conn.setRequestProperty("Content-Type", "application/json")
+                val body = JSONObject().put("events", events).put("stopped", JSONArray(stopped.toList()))
+                conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+                if (conn.responseCode != 200) return@withContext null
+                val items = JSONObject(conn.inputStream.bufferedReader().readText()).optJSONArray("items") ?: JSONArray()
+                (0 until items.length()).mapNotNull { i ->
+                    val o = items.optJSONObject(i) ?: return@mapNotNull null
+                    com.lorelog.work.AheadRules.Line(
+                        o.optString("event"), o.optLong("start"), o.optLong("at"), o.optString("title"),
+                        o.optString("text"), o.optString("question"), o.optString("stop"), o.optString("edge"),
+                        o.optString("wrong"), o.optString("matter"),
+                    ).takeIf { it.start > 0 && it.edge.isNotBlank() }
+                }
+            } catch (e: Exception) {
+                null
+            } finally {
+                conn?.disconnect()
+            }
+        }
+
     /** 정정(틀린 것 → 맞는 것 쌍)과 회고를 저장한다. */
     suspend fun save(context: Context, day: String, corrections: List<Pair<String, String>>, reflection: String, append: Boolean = true): Boolean =
         withContext(Dispatchers.IO) {

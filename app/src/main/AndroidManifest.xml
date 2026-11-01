@@ -106,6 +106,9 @@
         <receiver
             android:name=".NotifReviveReceiver"
             android:exported="false" />
+        <receiver
+            android:name=".AheadReceiver"
+            android:exported="false" />
 
     </application>
 </manifest>

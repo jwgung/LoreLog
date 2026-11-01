@@ -14,6 +14,7 @@
 //!      librarian. The screens and the collector then talk to it on loopback like to any server.
 //!
 //! The shell owns no judgement about the diary: it exposes the config to the UI as commands and runs the collector.
+mod ahead;
 mod host;
 mod update;
 
@@ -473,6 +474,7 @@ pub fn run() {
             Some(vec![AUTOSTART_ARG]),
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![
             get_autostart,
             set_autostart,
@@ -511,6 +513,7 @@ pub fn run() {
         .manage(update::Pending::default())
         .setup(move |app| {
             build_tray(app.handle())?;
+            ahead::keep_saying(app.handle().clone(), stop.clone()); // the assistant speaks first (#60), host mode
             if config::load().ok().and_then(|c| c.mode) == Some(Mode::Host)
                 && let Err(e) = start_hosting(&app.state::<HostSlot>(), &stop)
             {

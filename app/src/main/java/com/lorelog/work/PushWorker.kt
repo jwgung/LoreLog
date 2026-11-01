@@ -19,7 +19,10 @@ import java.util.concurrent.TimeUnit
  */
 class PushWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = try {
-        if (LogRepository.pushToHttp(applicationContext) == LogRepository.PUSH_FAILED) Result.retry() else Result.success()
+        val pushed = LogRepository.pushToHttp(applicationContext)
+        // 비서가 일정 직전에 말할 것을 묻는다(#60). 실패해도 전송 결과는 그대로.
+        runCatching { AheadWorker.ask(applicationContext) }
+        if (pushed == LogRepository.PUSH_FAILED) Result.retry() else Result.success()
     } catch (e: Exception) {
         Result.retry()
     }

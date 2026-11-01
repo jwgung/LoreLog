@@ -91,6 +91,23 @@ fn allowed(rel: &str) -> Option<(&'static [&'static str], Option<&'static [&'sta
 static DAY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d{4}-\d{2}-\d{2}").unwrap());
 static ADDR: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<([^<>\s]+@[^<>\s]+)>").unwrap());
 
+/// A request not answered (#60): who asked (a person or an organization), what, when, the words that say it and the
+/// record; the relation's key for a correction, and what stops it (the organization, else the person).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Open {
+    pub case: String,
+    pub who: String,
+    pub who_name: String,
+    pub label: String,
+    pub since: String,
+    pub evidence: String,
+    pub doc: String,
+    /// `edge:<key>`, the correction's ref
+    pub edge: String,
+    /// `org:<domain>`, or the person when they are of no organization
+    pub stop: String,
+}
+
 /// A node of the graph.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Node {
@@ -1190,22 +1207,15 @@ impl Librarian {
                 let asked: Option<String> = self
                     .db
                     .query_row(
-                        "select max(e.since) from edges e join docs d on d.n = e.n where e.rel = 'requested' and d.case_key = ?",
+                        "select max(e.since) from edges e join docs d on d.n = e.n where e.rel = 'requested' and d.case_key = ?
+                         and (e.until is null or e.until = '')",
                         [c],
                         |r| r.get(0),
                     )
                     .ok()
                     .flatten();
                 let Some(asked) = asked else { return false };
-                let answered: i64 = self
-                    .db
-                    .query_row(
-                        "select count(*) from docs where case_key = ? and kind = '보낸 메일' and day >= ?",
-                        params![c, asked],
-                        |r| r.get(0),
-                    )
-                    .unwrap_or(0);
-                answered == 0 && !me.is_empty()
+                !self.answered_since(c, &asked) && !me.is_empty()
             });
         }
         // the user's own and the latest first, up to the day asked
@@ -1261,6 +1271,114 @@ impl Librarian {
             out.push(h);
         }
         Ok(out)
+    }
+
+    /// Did the user send mail in this matter on or after this day?
+    fn answered_since(&self, case: &str, day: &str) -> bool {
+        self.db
+            .query_row(
+                "select count(*) from docs where case_key = ? and kind = '보낸 메일' and day >= ?",
+                params![case, day],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0
+    }
+
+    /// The requests not answered that the people at these addresses, or their organizations, made in the matters
+    /// with them (#60), the latest first. Only what is certain: an address that is exactly a person or an
+    /// organization of the graph, a request with the words that say it and its day, no mail of the user's in the
+    /// matter since, not said answered ([`crate::assistant::corrections::ANSWERED`]).
+    pub fn open_requests_at(&self, addrs: &[String]) -> anyhow::Result<Vec<Open>> {
+        self.ready_graph()?;
+        let me = mine(&self.db)?;
+        if me.is_empty() {
+            return Ok(Vec::new()); // no mail of the user's: nothing can be said unanswered
+        }
+        let own = own_domains(&self.db)?;
+        let (mut ids, mut people, mut orgs) = (Vec::new(), HashSet::new(), HashSet::new());
+        for a in addrs {
+            let a = a.trim().to_lowercase();
+            if !a.contains('@') || a.contains('~') || me.contains(&a) {
+                continue;
+            }
+            let p = format!("person:{a}");
+            if self.node(&p).is_some() {
+                people.insert(p.clone());
+                ids.push(p);
+            }
+            if let Some(d) = domain(&a).filter(|d| !own.contains(*d)) {
+                let o = format!("org:{d}");
+                if self.node(&o).is_some() && orgs.insert(d.to_string()) {
+                    ids.push(o);
+                }
+            }
+        }
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut cases: Vec<String> = self.cases_with(&ids)?.into_iter().collect();
+        cases.sort();
+        let org_of = |src: &str| -> Option<String> {
+            let d = src.strip_prefix("org:").or_else(|| src.strip_prefix("person:").and_then(domain))?;
+            orgs.contains(d).then(|| format!("org:{d}"))
+        };
+        let mut out = Vec::new();
+        for c in cases {
+            let mut st = self.db.prepare(
+                "select e.src, e.dst, e.label, coalesce(e.since, ''), coalesce(e.evidence, ''), coalesce(e.file, ''),
+                        coalesce(n.name, '')
+                 from edges e join docs d on d.n = e.n left join nodes n on n.id = e.src
+                 where e.rel = 'requested' and d.case_key = ? and (e.until is null or e.until = '')",
+            )?;
+            let rows: Vec<[String; 7]> = st
+                .query_map([&c], |r| Ok([r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?]))?
+                .collect::<rusqlite::Result<_>>()?;
+            for [src, dst, label, since, evidence, doc, name] in rows {
+                let org = org_of(&src);
+                let theirs = people.contains(&src) || org.is_some();
+                let dated = since.len() == 10 && DAY.is_match(&since);
+                if !theirs || !dated || evidence.trim().is_empty() || label.trim().is_empty() {
+                    continue;
+                }
+                if self.answered_since(&c, &since) {
+                    continue;
+                }
+                let e = Edge {
+                    src: src.clone(),
+                    rel: "requested".into(),
+                    dst,
+                    label: label.clone(),
+                    since: since.clone(),
+                    doc: doc.clone(),
+                    evidence: evidence.clone(),
+                    origin: String::new(),
+                };
+                let who_name =
+                    if name.is_empty() { src.split_once(':').map(|x| x.1).unwrap_or("").into() } else { name };
+                out.push(Open {
+                    case: c.clone(),
+                    edge: format!("edge:{}", edge_key(&e)),
+                    stop: org.unwrap_or_else(|| src.clone()),
+                    who: src,
+                    who_name,
+                    label,
+                    since,
+                    evidence,
+                    doc,
+                });
+            }
+        }
+        out.sort_by(|a, b| b.since.cmp(&a.since).then(a.edge.cmp(&b.edge)));
+        Ok(out)
+    }
+
+    /// The subjects of the mail in a matter.
+    pub fn case_subjects(&self, case: &str) -> Vec<String> {
+        self.db
+            .prepare("select distinct title from docs where case_key = ? and source = 'mail'")
+            .and_then(|mut st| st.query_map([case], |r| r.get::<_, String>(0))?.collect())
+            .unwrap_or_default()
     }
 
     pub(super) fn ready_graph(&self) -> anyhow::Result<()> {
@@ -1372,6 +1490,13 @@ pub fn apply_fixes(db: &Connection, paths: &Paths) -> anyhow::Result<usize> {
                 if let Some(rowid) = by_key.get(k) {
                     if f.right == "-" {
                         db.execute("delete from edges where rowid = ?", [rowid])?;
+                    } else if f.right == crate::assistant::corrections::ANSWERED {
+                        // the request is answered (#60): it was made, it is no longer open
+                        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+                        db.execute(
+                            "update edges set until = ?1 where rowid = ?2 and (until is null or until = '')",
+                            params![today, rowid],
+                        )?;
                     } else {
                         db.execute("update edges set label = ? where rowid = ?", params![f.right, rowid])?;
                     }
