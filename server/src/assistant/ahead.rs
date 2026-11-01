@@ -25,7 +25,7 @@ pub use super::corrections::ANSWERED;
 use crate::config::Paths;
 use crate::librarian::Librarian;
 use crate::librarian::graph::Open;
-use crate::librarian::records::{addresses, list_items};
+use crate::librarian::records::{addresses, event_key, list_items, phone_event_attendees, phone_event_times};
 
 /// how long before an event its line is said
 pub const LEAD: TimeDelta = TimeDelta::minutes(10);
@@ -200,19 +200,36 @@ fn open_todos(todos: &Value, subjects: &[String]) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The same event from any device: its start to the minute and its title's letters.
+/// The same event from any device: its start to the minute and its title's letters (as the index counts it once).
 fn identity(e: &Event) -> String {
-    let t: String = e.title.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect();
-    format!("{}|{t}", e.start.format("%Y-%m-%dT%H:%M"))
+    event_key(&e.start.format("%Y-%m-%dT%H:%M").to_string(), &e.title)
 }
 
 fn stop_key(s: &str) -> bool {
     s.len() <= 200 && (s.starts_with("org:") || s.starts_with("person:")) && !s.contains(char::is_whitespace)
 }
 
-/// The vault's events (CalDAV's `Events/` notes) starting in the window.
+/// The vault's events starting in the window: CalDAV's `Events/` notes, then the phone's calendar as the index has it
+/// (#77; an index not built yet has none).
 fn vault_events(paths: &Paths, now: NaiveDateTime, within: TimeDelta) -> Vec<Event> {
     let last = now + within;
+    let mut out = note_events(paths, now, last);
+    let phone = Librarian::open(paths, None, Duration::from_secs(5)).and_then(|lib| lib.phone_calendar(now, last));
+    for (key, rec) in phone.unwrap_or_default() {
+        let Some((start, _, all_day)) = phone_event_times(&rec) else { continue };
+        out.push(Event {
+            key,
+            start,
+            title: rec.get("title").and_then(Value::as_str).unwrap_or("").to_string(),
+            attendees: phone_event_attendees(&rec),
+            all_day,
+        });
+    }
+    out
+}
+
+/// CalDAV's `Events/` notes starting from `now` to `last`.
+fn note_events(paths: &Paths, now: NaiveDateTime, last: NaiveDateTime) -> Vec<Event> {
     let mut days = Vec::new();
     let mut d = now.date();
     while d <= last.date() {

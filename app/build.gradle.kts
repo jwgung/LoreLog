@@ -73,4 +73,6 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     testImplementation("junit:junit:4.13.2")
+    // Android 의 org.json 은 JVM 단위 테스트에서 빈 껍데기라, 테스트에는 진짜를 쓴다
+    testImplementation("org.json:json:20250517")
 }

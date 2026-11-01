@@ -1,7 +1,9 @@
 //! Turn the records the user keeps into documents for the librarian, under the same rules the diary uses.
 //!
 //! The raw records stay as they are; this only decides what the index may hold:
-//!   mail, events      every one, body included (the user's own mailbox and calendar)
+//!   mail, events      every one, body included (the user's own mailbox and calendar): CalDAV's `Events/` notes and
+//!                     the phone's calendar (`calendar_event` records, the latest state of each, #77); an event both
+//!                     have is indexed once, from the note
 //!   phone (lorelog)   messenger notifications only from senders the user allowed; voice only inside conversations the
 //!                     diary counts as the user's (the same rule the diary's context uses); calls/texts; app use.
 //!                     Screen text is not indexed (the diary does not read it), nor location (only coordinates).
@@ -58,6 +60,9 @@ pub struct Doc {
     pub people: Vec<Person>,
     /// the mail's own id (lower case): of a mail, and of a file that came with one, which joins its thread (#15)
     pub mid: Option<String>,
+    /// an event's calendar UID (CalDAV's `dav_uid`, the phone's `uid`), when it has one: the same event from two
+    /// places is counted once (#77)
+    pub uid: Option<String>,
 }
 
 /// Someone a record names: their role in it, the name it gives them (may be empty) and their address (lower case).
@@ -243,6 +248,7 @@ pub fn mail_docs(path: &Path) -> std::io::Result<Vec<Doc>> {
             .flat_map(|role| addresses(note::field(front, role).unwrap_or_default(), role))
             .collect(),
         mid: MSG_ID_RE.find(&front_value(front, "mail_id")).map(|m| m.as_str().to_lowercase()),
+        uid: None,
     }])
 }
 
@@ -266,7 +272,111 @@ pub fn event_docs(path: &Path) -> std::io::Result<Vec<Doc>> {
         text: parts.join("\n"),
         people: list_items(front, "attendees").iter().flat_map(|a| addresses(a, "attendee")).collect(),
         mid: None,
+        uid: Some(front_value(front, "dav_uid")).filter(|u| !u.is_empty()),
     }])
+}
+
+// ---------- the phone's calendar (#77) ----------
+
+/// The `file` of an event of the phone's calendar in the index: this and its key (it has no file of its own; its
+/// states are lines of many phone files).
+pub const PHONE_EVENT: &str = "lorelog-calendar:";
+/// the longest title, place or calendar name kept of a phone event
+const MAX_LINE: usize = 500;
+/// the longest description kept of a phone event
+const MAX_TEXT: usize = 4000;
+/// the most attendees kept of a phone event
+const MAX_ATTENDEES: usize = 200;
+
+/// Who an event is the same as, wherever it came from: its start to the minute (`YYYY-MM-DDTHH:MM`, a day's event its
+/// day) and its title's letters, without case, spaces and signs.
+pub fn event_key(start: &str, title: &str) -> String {
+    let t: String = title.to_lowercase().chars().filter(|c| c.is_alphanumeric()).collect();
+    format!("{start}|{t}")
+}
+
+/// The key a phone calendar record is kept by (its latest state wins), if it has one.
+pub fn phone_event_key(rec: &Record) -> Option<String> {
+    match rec.get("key") {
+        Some(Value::String(k)) if !k.trim().is_empty() && k.len() <= 200 => Some(k.trim().to_string()),
+        Some(Value::Number(n)) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
+/// When a phone event starts and ends, local time. A day's event the phone keeps at midnight UTC, so its days are
+/// read in UTC (its end is the next midnight: not part of it). None for a start that is not a time.
+pub fn phone_event_times(rec: &Record) -> Option<(chrono::NaiveDateTime, chrono::NaiveDateTime, bool)> {
+    let all_day = rec.get("all_day") == Some(&Value::Bool(true));
+    let at = |ms: i64| {
+        if all_day { chrono::DateTime::from_timestamp_millis(ms).map(|t| t.naive_utc()) } else { local(ms) }
+    };
+    let start = at(as_int(rec.get("start"))?)?;
+    let end = as_int(rec.get("end")).and_then(at).filter(|e| *e >= start).unwrap_or(start);
+    let end = if all_day && end > start { end - chrono::Duration::milliseconds(1) } else { end };
+    Some((start, end, all_day))
+}
+
+/// A string field of a phone record, at most `max` characters ("" for anything else).
+fn text_of(rec: &Record, key: &str, max: usize) -> String {
+    rec.get(key).and_then(Value::as_str).unwrap_or("").trim().chars().take(max).collect()
+}
+
+/// The attendees of a phone event: `name <addr>` or `addr`, as the phone sends them.
+pub fn phone_event_attendees(rec: &Record) -> Vec<String> {
+    rec.get("attendees")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|a| a.trim().chars().take(300).collect::<String>())
+        .filter(|a| !a.is_empty())
+        .take(MAX_ATTENDEES)
+        .collect()
+}
+
+/// The document of the latest state of one event of the phone's calendar; None when it was deleted on the phone or
+/// has no start.
+pub fn phone_event_doc(rec: &Record) -> Option<Doc> {
+    if rec.get("status").and_then(Value::as_str) == Some("deleted") {
+        return None;
+    }
+    let (start, end, all_day) = phone_event_times(rec)?;
+    let when = if all_day {
+        let (a, b) = (start.format("%Y-%m-%d").to_string(), end.format("%Y-%m-%d").to_string());
+        if a == b { a } else { format!("{a}~{b}") }
+    } else {
+        format!("{}~{}", start.format("%Y-%m-%d %H:%M"), end.format("%H:%M"))
+    };
+    let title = text_of(rec, "title", MAX_LINE);
+    let place = text_of(rec, "location", MAX_LINE);
+    let place_line = if place.is_empty() { String::new() } else { format!("장소 {place}") };
+    let parts: Vec<String> =
+        [when, place_line, text_of(rec, "description", MAX_TEXT)].into_iter().filter(|x| !x.is_empty()).collect();
+    let attendees = phone_event_attendees(rec);
+    let calendar = text_of(rec, "calendar", MAX_LINE);
+    let extra = format!("calendar: {calendar}\nattendees: {}", attendees.join(", "));
+    Some(Doc {
+        source: "event",
+        kind: "일정".into(),
+        day: start.format("%Y-%m-%d").to_string(),
+        title: if title.is_empty() { "(제목 없음)".into() } else { title },
+        text: parts.join("\n"),
+        extra,
+        thread: None,
+        people: attendees.iter().flat_map(|a| addresses(a, "attendee")).take(MAX_ATTENDEES).collect(),
+        mid: None,
+        uid: Some(text_of(rec, "uid", 300)).filter(|u| !u.is_empty()),
+    })
+}
+
+/// The [`event_key`] of an event document (its day, title and text), from the time its text starts with
+/// (`YYYY-MM-DD HH:MM`, else the day).
+pub fn doc_event_key(day: &str, title: &str, text: &str) -> String {
+    let head: String = text.chars().take(16).collect();
+    let timed = head.chars().nth(10) == Some(' ') && head.chars().nth(13) == Some(':');
+    let start = if timed { head.replacen(' ', "T", 1) } else { day.to_string() };
+    event_key(&start, title)
 }
 
 // ---------- traces ----------
@@ -285,6 +395,7 @@ fn trace_docs(day: &str, groups: Vec<(&str, Vec<String>)>) -> Vec<Doc> {
             thread: None,
             people: Vec::new(),
             mid: None,
+            uid: None,
         })
         .collect()
 }
@@ -389,6 +500,7 @@ pub fn mailfile_docs(path: &Path) -> anyhow::Result<Vec<Doc>> {
             thread: None,
             people: Vec::new(),
             mid: Some(pystr(d.get("mail_id")).trim().trim_matches(['<', '>']).to_lowercase()).filter(|m| !m.is_empty()),
+            uid: None,
         });
     }
     Ok(out)
@@ -441,6 +553,7 @@ fn word(kind: &str, day: &str, text: String) -> Doc {
         thread: None,
         people: Vec::new(),
         mid: None,
+        uid: None,
     }
 }
 

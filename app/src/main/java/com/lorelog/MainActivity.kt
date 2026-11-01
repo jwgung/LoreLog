@@ -559,7 +559,7 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
             }) { Text("저장") }
             OutlinedButton(onClick = {
                 coroutineScope.launch {
-                    val n = LogRepository.pushToHttp(context)
+                    val n = LogRepository.pushToHttp(context, userAsked = true)
                     LogRepository.setStatus(
                         when (n) {
                             -1 -> "엔드포인트 미설정"

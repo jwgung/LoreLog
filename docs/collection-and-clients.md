@@ -10,7 +10,7 @@
 
 | 기기 | 무엇을 | 서버 소스 | 어떻게 |
 |---|---|---|---|
-| **폰 (LoreLog 앱)** | 앱 사용·위치·메신저 알림·음성(전사)·통화 녹음·캘린더, 주소록(가진 것 다, 사진만 뺌) | `raw/lorelog/`, `raw/contacts/` | 앱이 서버 `/ingest/lorelog`로 NDJSON 전송. 민감 앱 제외, 일기 재료는 사용자가 허용한 메신저만 |
+| **폰 (LoreLog 앱)** | 앱 사용·위치·메신저 알림·음성(전사)·통화 녹음·캘린더, 주소록(가진 것 다, 사진만 뺌) | `raw/lorelog/`, `raw/contacts/` | 앱이 서버 `/ingest/lorelog`로 NDJSON 전송. 민감 앱 제외, 일기 재료는 사용자가 허용한 메신저만. 캘린더는 1년 전~1년 뒤 등록된 일정 전부를 `calendar_event`(바뀐 것·지운 것까지)로 보내고, 사서가 일정마다 마지막 상태를 일정으로 색인한다(CalDAV와 겹치면 한 번) |
 | **서버 자신 (gungbuntu)** | 메일(받은·보낸), 메일 첨부 원본, 캘린더 | `raw/mailfile/` + `raw/files/`, (메일 노트는 Obsidian 미러) | `life-sync.timer`가 1시간마다 `life sync` → 메일·`mail-files`·캘린더를 끌어옴 |
 | **PC (Windows, life-desktop / life-agent)** | 앞 창 활동(앱·창 제목), 감시 폴더의 산출물 파일 | `raw/pc/`, `raw/pcfile/` + `raw/files/` | 창 활동은 `/ingest/pc`, 감시 폴더 파일은 `/ingest/file`(해시로 중복 생략). 창 제목만 보고 키·화면·파일 내용은 안 봄. 비밀번호 관리자·시크릿 창 제목은 가림(기본 켜짐) |
 
