@@ -48,7 +48,7 @@ impl Librarian {
         let since = chrono::NaiveDate::parse_from_str(today, "%Y-%m-%d")
             .map(|t| fmt(t - chrono::Duration::days(RECENT_DAYS)))
             .unwrap_or_else(|_| today.to_string());
-        let mut g = Gathered { events: self.events_between(&from, &to)?, ..Gathered::default() };
+        let mut g = Gathered { events: self.period_events(&from, &to)?, ..Gathered::default() };
         let later: bool = self.db.query_row(
             "select exists(select 1 from docs where source = 'event' and day > ?)",
             [today],
@@ -64,27 +64,13 @@ impl Librarian {
         Ok(g)
     }
 
-    fn events_between(&self, from: &str, to: &str) -> anyhow::Result<Vec<Event>> {
-        let mut st = self.db.prepare(
-            "select day, title, text, file, case_key from docs where source = 'event' and day >= ? and day <= ?
-             order by day, text, n",
-        )?;
-        let rows: Vec<(String, String, String, String, Option<String>)> = st
-            .query_map(params![from, to], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
-            .collect::<rusqlite::Result<_>>()?;
+    fn period_events(&self, from: &str, to: &str) -> anyhow::Result<Vec<Event>> {
         let mut out: Vec<Event> = Vec::new();
-        for (day, title, text, refers, case) in rows {
-            // the text starts with when it is: `YYYY-MM-DD HH:MM~HH:MM` (a day's event: the day alone)
-            let time: String = text.chars().skip(11).take(5).collect();
-            let time = if text.chars().nth(10) == Some(' ') && time.len() == 5 && time.as_bytes()[2] == b':' {
-                time
-            } else {
-                String::new()
-            };
-            if out.iter().any(|e| e.day == day && e.title == title) {
+        for e in self.events_between(from, to)? {
+            if out.iter().any(|o| o.day == e.day && o.title == e.title) {
                 continue; // one event written twice (two calendars)
             }
-            out.push(Event { day, time, title, refers, case });
+            out.push(Event { day: e.day, time: e.start, title: e.title, refers: e.file, case: e.case });
         }
         Ok(out)
     }

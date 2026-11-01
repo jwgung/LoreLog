@@ -95,7 +95,7 @@ private sealed class Msg {
  * 틀린 문장을 눌러 고친다. 보내면 저장되고 저장 버튼은 없다. 가만히 두면 정리는 맞는 것으로 본다.
  */
 @Composable
-internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: () -> Unit) {
+internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: () -> Unit, onSchedule: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val running by LoggerService.isRunning.collectAsStateWithLifecycle()
@@ -229,6 +229,7 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
                 )
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                NavButton(NavIcon.SCHEDULE, "일정", onClick = onSchedule)
                 NavButton(NavIcon.TODO, "할 일", badge = todoCount, onClick = onTodos)
                 NavButton(NavIcon.SETTINGS, "수집·연동 설정", onClick = onCollect)
                 NavButton(NavIcon.DRAWER, "서랍", onClick = onDrawer)
@@ -404,7 +405,7 @@ private fun bubbleMax(ratio: Float = 0.86f): androidx.compose.ui.unit.Dp =
 @Composable
 internal fun PermRow(title: String, onClick: () -> Unit) = DrawerRow(title, "켜기", onClick)
 
-internal enum class NavIcon { DRAWER, CHAT, SETTINGS, BACK, TODO }
+internal enum class NavIcon { DRAWER, CHAT, SETTINGS, BACK, TODO, SCHEDULE }
 
 /** 화면 이동용 아이콘 버튼(44dp 원). 표준 Material 아이콘을 쓰고 접근성 설명을 붙인다. */
 @Composable
@@ -415,6 +416,7 @@ internal fun NavButton(icon: NavIcon, label: String, badge: Int = 0, onClick: ()
         NavIcon.SETTINGS -> Lucide.Settings
         NavIcon.BACK -> Lucide.Back
         NavIcon.TODO -> Lucide.Todo
+        NavIcon.SCHEDULE -> Lucide.Calendar
     }
     Box(modifier = Modifier.size(44.dp)) {
         Box(

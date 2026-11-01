@@ -108,6 +108,16 @@ pub struct Open {
     pub stop: String,
 }
 
+/// The latest record with someone (#62): its day, kind and title, and who of them it was with (a person's name, else
+/// their organization's).
+#[derive(Clone, Debug, PartialEq)]
+pub struct LastRecord {
+    pub day: String,
+    pub kind: String,
+    pub title: String,
+    pub who: String,
+}
+
 /// A node of the graph.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Node {
@@ -1087,7 +1097,7 @@ impl Librarian {
     /// How a matter stands up to `day`, for a hit (#64): its last state with the words that say it and where it came
     /// from (`{label, since, evidence, origin}`), and the other states it went through before, the latest first
     /// (`[{label, since, origin}]`, two at most). None when it has no state.
-    pub(super) fn states(&self, case: &str, day: &str) -> Option<(Value, Vec<Value>)> {
+    pub(crate) fn states(&self, case: &str, day: &str) -> Option<(Value, Vec<Value>)> {
         let mut st = self
             .db
             .prepare(
@@ -1363,25 +1373,7 @@ impl Librarian {
         if me.is_empty() {
             return Ok(Vec::new()); // no mail of the user's: nothing can be said unanswered
         }
-        let own = own_domains(&self.db)?;
-        let (mut ids, mut people, mut orgs) = (Vec::new(), HashSet::new(), HashSet::new());
-        for a in addrs {
-            let a = a.trim().to_lowercase();
-            if !a.contains('@') || a.contains('~') || me.contains(&a) {
-                continue;
-            }
-            let p = format!("person:{a}");
-            if self.node(&p).is_some() {
-                people.insert(p.clone());
-                ids.push(p);
-            }
-            if let Some(d) = domain(&a).filter(|d| !own.contains(*d)) {
-                let o = format!("org:{d}");
-                if self.node(&o).is_some() && orgs.insert(d.to_string()) {
-                    ids.push(o);
-                }
-            }
-        }
+        let (ids, people, orgs) = self.known_at(addrs, &me)?;
         if ids.is_empty() {
             return Ok(Vec::new());
         }
@@ -1439,6 +1431,82 @@ impl Librarian {
         }
         out.sort_by(|a, b| b.since.cmp(&a.since).then(a.edge.cmp(&b.edge)));
         Ok(out)
+    }
+
+    /// Who these addresses certainly are: the people of the graph at them (`person:<addr>`) and the organizations of
+    /// their mail domains (`org:<domain>`), the user's own left out. -> (their ids, the people, the domains)
+    fn known_at(
+        &self,
+        addrs: &[String],
+        me: &HashSet<String>,
+    ) -> anyhow::Result<(Vec<String>, HashSet<String>, HashSet<String>)> {
+        let own = own_domains(&self.db)?;
+        let (mut ids, mut people, mut orgs) = (Vec::new(), HashSet::new(), HashSet::new());
+        for a in addrs {
+            let a = a.trim().to_lowercase();
+            if !a.contains('@') || a.contains('~') || me.contains(&a) {
+                continue;
+            }
+            let p = format!("person:{a}");
+            if self.node(&p).is_some() && people.insert(p.clone()) {
+                ids.push(p);
+            }
+            if let Some(d) = domain(&a).filter(|d| !own.contains(*d)) {
+                let o = format!("org:{d}");
+                if self.node(&o).is_some() && orgs.insert(d.to_string()) {
+                    ids.push(o);
+                }
+            }
+        }
+        Ok((ids, people, orgs))
+    }
+
+    /// The latest record with the people at these addresses, or anyone of their organizations, as certain as
+    /// [`Self::open_requests_at`] takes them (#62): up to `until` (that day included) and no event on or after it
+    /// (a coming event is not what was); mass mail left out. None when there is none or no one is certain.
+    pub fn last_record_at(&self, addrs: &[String], until: &str) -> anyhow::Result<Option<LastRecord>> {
+        self.ready_graph()?;
+        let me = mine(&self.db)?;
+        let (_, people, orgs) = self.known_at(addrs, &me)?;
+        let addrs: Vec<String> = people.iter().filter_map(|p| p.strip_prefix("person:").map(str::to_string)).collect();
+        let domains: Vec<String> = orgs.iter().cloned().collect();
+        if addrs.is_empty() && domains.is_empty() {
+            return Ok(None);
+        }
+        let mut whom = Vec::new();
+        if !addrs.is_empty() {
+            whom.push(format!("p.addr in ({})", vec!["?"; addrs.len()].join(",")));
+        }
+        whom.extend(domains.iter().map(|_| "lower(substr(p.addr, instr(p.addr, '@') + 1)) = ?".to_string()));
+        let sql = format!(
+            "with mass as (select n from people where role in ('to', 'cc') group by n having count(*) > {MASS_MAIL})
+             select d.day, d.kind, d.title, group_concat(p.addr, char(10)) from people p join docs d on d.n = p.n
+             where ({}) and d.n not in (select n from mass) and d.day <= ?
+               and not (d.source = 'event' and d.day >= ?)
+             group by d.n order by d.day desc, d.n desc limit 1",
+            whom.join(" or ")
+        );
+        let mut args: Vec<String> = addrs.iter().chain(&domains).cloned().collect();
+        args.extend([until.to_string(), until.to_string()]);
+        let row: Option<(String, String, String, String)> = self
+            .db
+            .query_row(&sql, rusqlite::params_from_iter(args.iter()), |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })
+            .optional()?;
+        let Some((day, kind, title, found)) = row else { return Ok(None) };
+        let found: Vec<&str> = found.lines().collect();
+        // by the person at an address asked about, else by their organization
+        let id = match found.iter().find(|a| addrs.iter().any(|x| x == *a)) {
+            Some(a) => format!("person:{a}"),
+            None => found.iter().find_map(|a| domain(a)).map(|d| format!("org:{d}")).unwrap_or_default(),
+        };
+        let who = self
+            .node(&id)
+            .map(|n| n.name)
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| id.split_once(':').map(|x| x.1.to_string()).unwrap_or_default());
+        Ok(Some(LastRecord { day, kind, title, who }))
     }
 
     /// The subjects of the mail in a matter.

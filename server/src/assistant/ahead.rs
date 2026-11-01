@@ -153,12 +153,7 @@ pub fn take(paths: &Paths, ask: &Ask, now: NaiveDateTime, within: TimeDelta) -> 
 fn line(e: &Event, o: &Open, todos: &[String], now: NaiveDateTime) -> Ahead {
     let mins = ((e.start - now).num_seconds() + 59) / 60;
     let title = format!("{}분 뒤 「{}」", mins.clamp(1, LEAD.num_minutes()), shown(&e.title));
-    let who = if o.who.starts_with("org:") { format!("{}에서", o.who_name) } else { format!("{}님이", o.who_name) };
-    let label = shown(&o.label);
-    let day = NaiveDate::parse_from_str(&o.since, "%Y-%m-%d")
-        .map(|d| format!("{}월 {}일", d.month(), d.day()))
-        .unwrap_or_else(|_| o.since.clone());
-    let mut text = format!("{who} {day}에 요청한 「{label}」에 아직 답하지 않았어요.");
+    let Unanswered { mut text, question, wrong } = Unanswered::of(o);
     if !todos.is_empty() {
         text.push_str(&format!(" 할 일: {}", todos.join(", ")));
     }
@@ -168,23 +163,49 @@ fn line(e: &Event, o: &Open, todos: &[String], now: NaiveDateTime) -> Ahead {
         at: e.start - LEAD,
         title,
         text,
-        question: format!("{who} 요청한 「{label}」 건 어떻게 됐지?"),
+        question,
         stop: o.stop.clone(),
         edge: o.edge.clone(),
-        wrong: format!("{who} {}에 요청한 「{label}」에 아직 답하지 않았다", o.since),
+        wrong,
         matter: o.case.clone(),
     }
 }
 
+/// How a request not answered is said (#60; the schedule's notes say it so too, #62).
+pub(super) struct Unanswered {
+    /// `이담당님이 3월 25일에 요청한 「설치 사진」에 아직 답하지 않았어요.`
+    pub text: String,
+    /// what the chat opens with
+    pub question: String,
+    /// the wrong side of a correction of it
+    pub wrong: String,
+}
+
+impl Unanswered {
+    pub fn of(o: &Open) -> Unanswered {
+        let who =
+            if o.who.starts_with("org:") { format!("{}에서", o.who_name) } else { format!("{}님이", o.who_name) };
+        let label = shown(&o.label);
+        let day = NaiveDate::parse_from_str(&o.since, "%Y-%m-%d")
+            .map(|d| format!("{}월 {}일", d.month(), d.day()))
+            .unwrap_or_else(|_| o.since.clone());
+        Unanswered {
+            text: format!("{who} {day}에 요청한 「{label}」에 아직 답하지 않았어요."),
+            question: format!("{who} 요청한 「{label}」 건 어떻게 됐지?"),
+            wrong: format!("{who} {}에 요청한 「{label}」에 아직 답하지 않았다", o.since),
+        }
+    }
+}
+
 /// One line, at most [`SHOWN`] characters, without the quote marks the line puts around it.
-fn shown(s: &str) -> String {
+pub(super) fn shown(s: &str) -> String {
     let one = s.split_whitespace().collect::<Vec<_>>().join(" ").replace(['「', '」'], "");
     let one = if one.is_empty() { "(제목 없음)".to_string() } else { one };
     one.chars().take(SHOWN).collect()
 }
 
 /// The open to-dos of the matter: those of a mail thread with one of its subjects.
-fn open_todos(todos: &Value, subjects: &[String]) -> Vec<String> {
+pub(super) fn open_todos(todos: &Value, subjects: &[String]) -> Vec<String> {
     let keys: BTreeSet<String> = subjects.iter().map(|s| subj_key(s)).filter(|k| !k.is_empty()).collect();
     todos["items"]
         .as_array()
