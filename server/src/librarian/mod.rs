@@ -4,6 +4,7 @@ pub mod cases;
 pub mod eval;
 pub mod extract;
 pub mod graph;
+pub mod hanging;
 pub mod index;
 pub mod records;
 

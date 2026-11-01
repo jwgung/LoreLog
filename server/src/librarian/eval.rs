@@ -10,7 +10,10 @@
 //!                                          they sent or received (not copied, not mass mail) and events they attended
 //!                                          (read from the notes, not from the index), and how many hits are with them
 //!   graph      "A사랑 하는 건들 어디까지"  several matters (#44): found when every one of them is, at the rank of the last
-//!   pending    "이번 달에 뭐가 걸려 있지"   not scored: kept to see what is asked
+//!   period     "이번 달에 뭐가 걸려 있지"   what hangs in a period (#61), asked on a fixed `day`: found when every one of the
+//!                                          `items` (words of a line: a title) is in the section, at the line of the last
+//!                                          (the model only; the user's words name no period)
+//!   pending    (the same, before #61)       not scored: kept to see what is asked
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
@@ -30,6 +33,8 @@ pub enum Kind {
     Precedent,
     /// a question about several matters at once (#44)
     Graph,
+    /// what hangs in a period, asked on a fixed day (#61)
+    Period,
     Pending,
 }
 
@@ -40,7 +45,8 @@ impl Kind {
             Kind::Person => "이 사람이랑 뭐 있었지",
             Kind::Precedent => "전에 어떻게 했지",
             Kind::Graph => "여러 건을 따라가는 질문",
-            Kind::Pending => "이번 달에 뭐가 걸려 있지",
+            Kind::Period => "이번 달에 뭐가 걸려 있지",
+            Kind::Pending => "이번 달에 뭐가 걸려 있지 (채점 안 함)",
         }
     }
 }
@@ -56,6 +62,10 @@ pub struct Case {
     pub person: Option<String>,
     /// graph: the threads of every matter it is about
     pub threads: Option<Vec<String>>,
+    /// period: the day it is asked on (`YYYY-MM-DD`)
+    pub day: Option<String>,
+    /// period: what its section must hold, a title (or words of its line) each
+    pub items: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -78,6 +88,12 @@ pub fn load(path: &Path) -> anyhow::Result<Vec<Case>> {
             Kind::Status | Kind::Precedent if c.thread.is_none() => Some("thread"),
             Kind::Person if c.person.is_none() => Some("person"),
             Kind::Graph if c.threads.as_ref().is_none_or(|t| t.is_empty()) => Some("threads"),
+            Kind::Period
+                if c.day.as_deref().is_none_or(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").is_err()) =>
+            {
+                Some("day")
+            }
+            Kind::Period if c.items.as_ref().is_none_or(|t| t.is_empty()) => Some("items"),
             _ => None,
         };
         if let Some(what) = missing {
@@ -172,6 +188,28 @@ fn rank_all(lib: &Librarian, hits: &[serde_json::Value], targets: &HashSet<Strin
     Some(last)
 }
 
+/// The words the model picked as shown: `@person`, `#organization`, `^thing`, `~period`, then the words.
+fn shown(p: &recall::Picked) -> Vec<String> {
+    p.people
+        .iter()
+        .map(|n| format!("@{n}"))
+        .chain(p.orgs.iter().map(|o| format!("#{o}")))
+        .chain(p.things.iter().map(|t| format!("^{t}")))
+        .chain(p.period.map(|x| format!("~{}", x.label())))
+        .chain(p.words.iter().cloned())
+        .collect()
+}
+
+/// The line (1-based) of the last item expected in a period's section, or None when one is not in it.
+fn in_section(section: &str, items: &[String]) -> Option<usize> {
+    let lines: Vec<&str> = section.lines().collect();
+    let mut last = 0;
+    for item in items {
+        last = last.max(lines.iter().position(|l| l.contains(item.as_str()))? + 1);
+    }
+    Some(last)
+}
+
 /// Measure every case against the index, with the user's words and (if a model is given) the words it picks.
 pub fn run(
     lib: &mut Librarian,
@@ -191,7 +229,7 @@ pub fn run(
         };
         let hits = lib.search(&c.q, k, None)?;
         let score = |lib: &Librarian, hits: &[serde_json::Value]| match c.kind {
-            Kind::Pending => None,
+            Kind::Pending | Kind::Period => None,
             Kind::Graph => rank_all(lib, hits, &targets),
             _ => rank(lib, hits, &targets),
         };
@@ -204,6 +242,20 @@ pub fn run(
             None => (None, None),
             Some(m) => match recall::pick(m, &c.q, None) {
                 None => (Some(Vec::new()), None), // the model chose not to look anything up
+                Some(p) if c.kind == Kind::Period => {
+                    // what hangs on the day the case is asked on, as the chat gathers it
+                    let day = c.day.clone().unwrap_or_default();
+                    let r = match p.period {
+                        Some(_) => {
+                            let section = recall::period_section(lib, &p, &day)?.section;
+                            in_section(&section, c.items.as_deref().unwrap_or(&[]))
+                        }
+                        None => None, // no period named: not answered as one
+                    };
+                    (Some(shown(&p)), r)
+                }
+                // the chat would answer it with what hangs in a period, not with the records it is about
+                Some(p) if p.period.is_some() => (Some(shown(&p)), None),
                 Some(p) => {
                     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
                     // as the chat does today; asking back which one is not finding it
@@ -212,15 +264,7 @@ pub fn run(
                         recall::Named::Ask(_) => Vec::new(),
                     };
                     let r = score(lib, &hits);
-                    let shown = p
-                        .people
-                        .iter()
-                        .map(|n| format!("@{n}"))
-                        .chain(p.orgs.iter().map(|o| format!("#{o}")))
-                        .chain(p.things.iter().map(|t| format!("^{t}")))
-                        .chain(p.words.iter().cloned())
-                        .collect();
-                    (Some(shown), r)
+                    (Some(shown(&p)), r)
                 }
             },
         };
@@ -229,7 +273,7 @@ pub fn run(
     Ok(out)
 }
 
-/// Per kind (pending left out): (found, asked) with the user's words, and with the model's words.
+/// Per kind (pending left out; a period is measured with the model's pick only): (found, asked) with the user's words, and with the model's words.
 #[derive(Debug, Default, PartialEq)]
 pub struct Score {
     pub raw: (usize, usize),
@@ -240,7 +284,9 @@ pub fn summary(results: &[Result1]) -> BTreeMap<Kind, Score> {
     let mut out: BTreeMap<Kind, Score> = BTreeMap::new();
     for r in results.iter().filter(|r| r.kind != Kind::Pending) {
         let s = out.entry(r.kind).or_default();
-        s.raw = (s.raw.0 + r.raw_rank.is_some() as usize, s.raw.1 + 1);
+        if r.kind != Kind::Period {
+            s.raw = (s.raw.0 + r.raw_rank.is_some() as usize, s.raw.1 + 1);
+        }
         if r.model_words.is_some() {
             s.model = (s.model.0 + r.model_rank.is_some() as usize, s.model.1 + 1);
         }

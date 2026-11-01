@@ -145,7 +145,7 @@ fn own_domains(db: &Connection) -> rusqlite::Result<HashSet<String>> {
     Ok(mine(db)?.iter().filter_map(|a| domain(a).map(str::to_string)).collect())
 }
 
-fn mine(db: &Connection) -> rusqlite::Result<HashSet<String>> {
+pub(super) fn mine(db: &Connection) -> rusqlite::Result<HashSet<String>> {
     let mut st = db.prepare(
         "select distinct p.addr from people p join docs d on d.n = p.n where d.kind = '보낸 메일' and p.role = 'from'",
     )?;
@@ -849,7 +849,7 @@ fn label_fits(label: &str, words: &[String], groups: &std::collections::HashMap<
 }
 
 /// The groups of the labels the model gave (label -> group), kept by [`group_labels`].
-fn groups(paths: &Paths) -> std::collections::HashMap<String, String> {
+pub(super) fn groups(paths: &Paths) -> std::collections::HashMap<String, String> {
     std::fs::read_to_string(cache_dir(paths).join("labels.json"))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
@@ -1027,7 +1027,7 @@ impl Librarian {
     /// How a matter stands up to `day`, for a hit (#64): its last state with the words that say it and where it came
     /// from (`{label, since, evidence, origin}`), and the other states it went through before, the latest first
     /// (`[{label, since, origin}]`, two at most). None when it has no state.
-    fn states(&self, case: &str, day: &str) -> Option<(Value, Vec<Value>)> {
+    pub(super) fn states(&self, case: &str, day: &str) -> Option<(Value, Vec<Value>)> {
         let mut st = self
             .db
             .prepare(
@@ -1381,7 +1381,7 @@ impl Librarian {
             .unwrap_or_default()
     }
 
-    fn ready_graph(&self) -> anyhow::Result<()> {
+    pub(super) fn ready_graph(&self) -> anyhow::Result<()> {
         let v: Option<String> =
             self.db.query_row("select value from meta where key = 'schema'", [], |r| r.get(0)).optional()?;
         if v.as_deref() != Some(super::index::SCHEMA_VERSION) {
