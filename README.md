@@ -18,6 +18,22 @@ Your phone is a sensor that's always with you. LoreLog collects what happens on 
 
 > ⚠️ **This is a personal tool.** It is built to collect your own data on your own device. It is not for covertly surveilling other people, and must not be used that way.
 
+## Getting started
+
+From installing to the first conversation, in this order. The desktop app walks you through steps 2–6 itself on the first start (**처음 설정**; skip any step and reopen it later from Settings → "처음 설정 안내 다시 열기").
+
+1. **Install.** Get the desktop app for your OS and the Android APK from [Releases](https://github.com/jwgung/LoreLog/releases/latest): files and first-start warnings are under [Desktop app](#desktop-app-windows--macos--linux) and [Install & Setup](#install--setup).
+2. **The vault.** On the first start choose **이 PC에 두기** (keep it on this PC). The app then runs the vault: records, mail and calendar notes, and the search index all stay on this PC.
+3. **The model.** The assistant and the librarian ask a model you choose, at an OpenAI-compatible address. There is no built-in one, and your records go to that address, so use your own PC or a server you trust. Examples:
+   - [Ollama](https://ollama.com): `http://127.0.0.1:11434/v1`, model `qwen3:8b` (first `ollama pull qwen3:8b`). Give Ollama `OLLAMA_CONTEXT_LENGTH=8192` so long mails fit, and `OLLAMA_HOST=0.0.0.0` if the vault calls it from another machine; restart Ollama after setting them.
+   - [LM Studio](https://lmstudio.ai): start the server under Developer, `http://127.0.0.1:1234/v1`, with the model name as LM Studio shows it.
+
+   Press **연결 확인** (check): the app sends the model a tiny request and tells you what to fix if it does not answer.
+   > **A small model on a CPU** (8B or so) is fine for chatting and search, but the relation graph is too slow with it: about 4 minutes per mail, and few relations survive. For the graph, use a PC with a GPU or a model on a server.
+4. **Mail and calendar.** Your IMAP account (read only; services with two-step login need an app password) and CalDAV calendars, with the same forms as in Settings.
+5. **The phone.** Install [Tailscale](https://tailscale.com/download) on the PC and the phone and sign in with the same account. In the guide's phone step, click **연결 코드 보기** (show the connection code): one line `lorelog://connect?…` with a copy button and a QR code. On the phone, open drawer → 수집·연동 설정 → **금고 연결**, paste it into **연결 코드 붙여 넣기**, and tap **코드로 채우고 저장**. The phone asks for this on its first start too. **The code contains the vault's token**: whoever has it can read and write your vault, so put it only on your own phone. The phone accepts it only for an https or tailnet address, like an address typed by hand.
+6. **First sync.** The last step shows the sync: records indexed, and how many mails the graph has read and how many wait. It continues every hour; you can start chatting before it is done.
+
 ## Principles
 
 - **Your device, your data only.** Not third-party surveillance or covert collection.
@@ -78,7 +94,7 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 1. Download the APK (`LoreLog-<version>.apk`) from [Releases](https://github.com/jwgung/LoreLog/releases/latest) and install it.
 2. **Play Protect warning**: with this many permissions, sideloading triggers a warning. It can't be removed in code; to use the app, turn off Play Protect scanning in the Play Store (or "install without scanning"), and on Samsung turn off Auto Blocker.
 3. In the app, tap **Start** and grant the prompted permissions (it starts with just the mic granted).
-4. In the drawer → 수집·연동 설정 → **금고 연결** (vault connection), enter your vault address (e.g. `https://<vault>/ingest/lorelog`) and token, then save. Transcription, dictation and the diary all use the same address and token. Without an address, collection keeps going; records and audio wait on the phone and are sent once it's connected.
+4. In the drawer → 수집·연동 설정 → **금고 연결** (vault connection), paste the desktop app's connection code into **연결 코드 붙여 넣기** (see [Getting started](#getting-started)), or enter your vault address (e.g. `https://<vault>/ingest/lorelog`) and token, then save. A token is sent only over https or to a tailnet (`*.ts.net`, `100.x`) or local address. Transcription, dictation and the diary all use the same address and token. Without an address, collection keeps going; records and audio wait on the phone and are sent once it's connected.
 
 **Special permissions** (you enable these yourself): usage access, accessibility (on-screen content), notification access, background location.
 

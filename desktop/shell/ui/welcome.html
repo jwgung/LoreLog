@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>처음 설정 — LoreLog</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 20px;
+           background: Canvas; color: CanvasText; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    h2 { font-size: 17px; margin: 18px 0 4px; }
+    h3 { font-size: 15px; margin: 18px 0 4px; }
+    p { margin: 6px 0; }
+    p.sub, .note { opacity: 0.75; font-size: 13px; }
+    .note { word-break: break-all; }
+    label { display: block; margin: 12px 0 4px; font-weight: 600; font-size: 13px; }
+    input[type=text], input[type=password] { width: 100%; padding: 9px 10px; border: 1px solid GrayText;
+           border-radius: 8px; background: Field; color: FieldText; }
+    button { margin-top: 12px; padding: 9px 14px; border: 0; border-radius: 8px; background: AccentColor;
+             color: AccentColorText; font-weight: 600; cursor: pointer; }
+    button.secondary { background: transparent; color: AccentColor; border: 1px solid AccentColor; }
+    button.link { background: transparent; color: AccentColor; padding: 0; margin: 0; font-weight: 400; text-decoration: underline; }
+    .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .row input { flex: 1; min-width: 160px; }
+    .row button { margin-top: 0; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+    ol.steps { list-style: none; display: flex; gap: 6px; padding: 0; margin: 10px 0 4px; flex-wrap: wrap; font-size: 12px; }
+    ol.steps li { padding: 3px 8px; border-radius: 10px; border: 1px solid color-mix(in srgb, GrayText 40%, transparent); opacity: .7; }
+    ol.steps li.on { opacity: 1; border-color: AccentColor; color: AccentColor; font-weight: 600; }
+    ul { list-style: none; padding: 0; margin: 8px 0 0; }
+    ul.checks li { display: flex; gap: 8px; padding: 4px 0; font-size: 13px; }
+    ul.checks label { margin: 0; font-weight: 400; display: flex; gap: 8px; align-items: center; }
+    ul.plain { list-style: disc; padding-left: 20px; font-size: 13px; }
+    ul.plain li { margin: 3px 0; }
+    code { font-size: 12px; padding: 1px 4px; border-radius: 4px; background: color-mix(in srgb, GrayText 18%, transparent); }
+    .msg { margin-top: 8px; font-size: 13px; min-height: 18px; }
+    .ok { color: green; } .err { color: crimson; }
+    .warn { border-left: 3px solid #c2410c; padding: 6px 10px; font-size: 13px; background: color-mix(in srgb, #c2410c 8%, transparent); }
+    .nav { display: flex; justify-content: space-between; margin-top: 22px; border-top: 1px solid color-mix(in srgb, GrayText 30%, transparent); padding-top: 6px; }
+    #qr { display: block; width: 220px; height: 220px; margin-top: 10px; background: #fff; padding: 6px; border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    td { padding: 5px 4px; border-bottom: 1px solid color-mix(in srgb, GrayText 30%, transparent); vertical-align: top; }
+    td.state.ok { color: green; } td.state.err { color: crimson; }
+  </style>
+</head>
+<body>
+  <h1>처음 설정</h1>
+  <p class="sub">다섯 단계면 첫 대화까지 갑니다. 아무 단계나 건너뛰어도 되고, 나중에 설정 → '처음 설정 안내'에서 다시 엽니다.</p>
+  <ol class="steps" id="steps">
+    <li>① 금고</li><li>② 모델</li><li>③ 메일·일정</li><li>④ 폰</li><li>⑤ 첫 동기화</li>
+  </ol>
+  <p id="hostErr" class="msg err"></p>
+
+  <!-- ① the vault: chosen on the first screen (index.html) -->
+  <section data-step="0">
+    <h2>① 금고는 이 PC에 있습니다</h2>
+    <p>기록, 메일·일정 노트, 검색 색인이 모두 이 PC에 쌓입니다. 이 앱이 서버를 돌리고, 폰과 다른 PC는 이 PC로 보냅니다.</p>
+    <p id="vaultDir" class="note"></p>
+    <p class="sub">다른 곳(상시 서버)의 금고를 쓰려면 설정의 '다른 곳의 금고에 연결하기로 바꾸기'를 누릅니다. 데이터는 옮겨지지 않습니다.</p>
+  </section>
+
+  <!-- ② the model -->
+  <section data-step="1" hidden>
+    <h2>② 대화 모델</h2>
+    <p>비서와 사서는 내가 정한 모델(OpenAI 호환 주소)에게 묻습니다. 내 기록이 이 주소로 가므로 내 PC나 내가 믿는 서버만 넣으세요. 기본 주소는 없습니다.</p>
+    <div class="row">
+      <button id="exOllama" class="secondary">Ollama 예시</button>
+      <button id="exLmStudio" class="secondary">LM Studio 예시</button>
+    </div>
+    <div class="grid">
+      <div><label for="chatUrl">모델 주소</label><input id="chatUrl" type="text" placeholder="http://127.0.0.1:11434/v1" /></div>
+      <div><label for="chatModel">모델 이름</label><input id="chatModel" type="text" placeholder="qwen3:8b" /></div>
+    </div>
+    <div class="row">
+      <button id="modelCheck" class="secondary">연결 확인</button>
+      <button id="modelSave">저장</button>
+    </div>
+    <div id="modelMsg" class="msg"></div>
+    <ul class="plain">
+      <li>Ollama: <code>http://127.0.0.1:11434/v1</code>, 모델 예 <code>qwen3:8b</code>(먼저 <code>ollama pull qwen3:8b</code>). 이 PC가 아닌 곳에서 돌리면 Ollama에 <code>OLLAMA_HOST=0.0.0.0</code>, 긴 메일을 읽으려면 <code>OLLAMA_CONTEXT_LENGTH=8192</code>를 주고 다시 켭니다.</li>
+      <li>LM Studio: 'Developer'에서 서버를 켜면 <code>http://127.0.0.1:1234/v1</code>. 모델 이름은 LM Studio에 보이는 이름 그대로.</li>
+    </ul>
+    <p class="warn">작은 모델(8B 안팎)을 CPU로 돌리면 대화와 검색은 쓸 만하지만, 관계 그래프를 만들 때 메일 한 건에 4분쯤 걸리고 남는 관계도 적습니다. 그래프까지 쓰려면 GPU가 있는 PC나 서버의 모델을 권합니다. 음성 모델은 설정에서 따로 넣습니다.</p>
+  </section>
+
+  <!-- ③ mail and calendar: the same forms as the settings (sources.js) -->
+  <section data-step="2" hidden>
+    <h2>③ 메일과 일정</h2>
+    <p class="sub">받은·보낸 메일을 노트로 모읍니다(읽기만, 서버의 메일은 바꾸지 않습니다). 건너뛰고 나중에 설정에서 넣어도 됩니다.</p>
+    <h3>메일 (IMAP)</h3>
+    <div class="grid">
+      <div><label for="mHost">IMAP 서버</label><input id="mHost" type="text" placeholder="imap.example.com" /></div>
+      <div><label for="mPort">포트</label><input id="mPort" type="text" value="993" /></div>
+    </div>
+    <label for="mUser">계정</label><input id="mUser" type="text" autocomplete="off" />
+    <label for="mPass">비밀번호</label><input id="mPass" type="password" autocomplete="off" placeholder="" />
+    <p class="note">Gmail·네이버처럼 2단계 인증을 쓰는 곳은 '앱 비밀번호'를 만들어 넣습니다.</p>
+    <button id="mConnect" class="secondary">연결하고 폴더 보기</button>
+    <ul id="mFolders" class="checks"></ul>
+    <button id="mSave" hidden>메일 저장</button>
+    <div id="mMsg" class="msg"></div>
+    <h3>일정 (CalDAV)</h3>
+    <p class="sub">계정은 메일과 같습니다.</p>
+    <label for="cServer">CalDAV 서버</label><input id="cServer" type="text" placeholder="https://caldav.example.com/" />
+    <div class="row"><button id="cFind" class="secondary">달력 찾기</button><button id="cOff" class="secondary" hidden>일정 모으지 않기</button></div>
+    <ul id="cList" class="checks"></ul>
+    <button id="cSave" hidden>일정 저장</button>
+    <div id="cMsg" class="msg"></div>
+  </section>
+
+  <!-- ④ the phone -->
+  <section data-step="3" hidden>
+    <h2>④ 폰 연결</h2>
+    <p>폰은 Tailscale로 이 PC에 기록을 보냅니다. Tailscale은 내 기기끼리만 이어 주는 사설망입니다(무료 개인 요금제).</p>
+    <ul class="plain">
+      <li>이 PC와 폰에 Tailscale을 설치하고 같은 계정으로 로그인합니다: <button id="openTailscale" class="link">tailscale.com/download</button></li>
+      <li>폰에 LoreLog 앱(Releases의 APK)을 설치하고 열면 '금고 연결'에서 연결 코드를 붙여 넣습니다.</li>
+    </ul>
+    <label>폰에 넣을 주소</label>
+    <div class="row"><input id="devAddr" type="text" readonly /><button id="devRecheck" class="secondary">다시 보기</button></div>
+    <p id="devAddrNote" class="note"></p>
+    <label>연결 코드</label>
+    <p class="warn">연결 코드에는 토큰이 들어 있습니다. 코드를 아는 기기는 이 금고에 쓰고 읽을 수 있으니 내 폰에만 넣고, 메신저나 메일로 남에게 보내지 마세요.</p>
+    <div class="row">
+      <button id="codeShow" class="secondary">연결 코드 보기</button>
+      <button id="codeCopy" class="secondary" hidden>복사</button>
+      <button id="codeHide" class="secondary" hidden>숨기기</button>
+    </div>
+    <input id="code" type="text" readonly hidden />
+    <img id="qr" alt="연결 코드 QR" hidden />
+    <div id="codeMsg" class="msg"></div>
+  </section>
+
+  <!-- ⑤ the first sync and the graph -->
+  <section data-step="4" hidden>
+    <h2>⑤ 첫 동기화</h2>
+    <p class="sub">메일과 일정을 가져와 색인하고, 대화 모델이 메일을 읽어 관계 그래프를 만듭니다. 켤 때 한 번, 그 뒤 1시간마다 이어서 합니다. 끝나기 전에도 대화할 수 있습니다.</p>
+    <p id="progress"></p>
+    <p id="graphNote" class="note"></p>
+    <table id="syncTable"><tbody></tbody></table>
+    <div class="row"><button id="syncNow" class="secondary">지금 동기화</button></div>
+    <div id="syncMsg" class="msg"></div>
+  </section>
+
+  <div class="nav">
+    <button id="prev" class="secondary">이전</button>
+    <div class="row">
+      <button id="skip" class="secondary">안내 닫기</button>
+      <button id="next">다음</button>
+    </div>
+  </div>
+
+  <script type="module" src="welcome.js"></script>
+</body>
+</html>

@@ -19,7 +19,7 @@ Omni 데스크톱 클라이언트(`dev` 브랜치의 `pc_activity`)를 읽고 �
 ## 구조
 - `core/` 순수 로직과 전송: `segments`(표본 → 구간), `spool`, `sender`(전송·파일 업로더 `ServerUploader`), `intake`(감시 폴더 엔진), `agent`(루프 한 번), `config`. OS 호출이 없어 어디서나 테스트한다.
 - `agent/` OS 쪽: `platform/windows.rs`(앞 창·프로세스·마지막 입력, `windows-sys`), 명령줄 `life-agent`. 수집 루프 `run::run_until(stop)`은 CLI와 데스크톱 앱이 함께 쓴다.
-- `shell/` 데스크톱 앱(Tauri): 비서 화면(대화·할일·서랍·말하기)과 설정 화면을 **앱에 번들**해 띄우고, 백그라운드로 수집 루프를 돌리며, 트레이(열기·채팅 열기·설정·종료)를 둔다. 금고를 이 PC에 두면 서버도 돌린다(아래 "금고를 어디에 두나"). 화면은 Tauri webview로 그리지만 서버에서 당겨오지 않는다("웹 클라이언트"가 아니다) — 서버 주소·토큰은 앱 설정(`server_config` 커맨드)에서 받아 서버 API를 직접 호출한다. `ui/index.html`=비서, `ui/settings.html`=설정.
+- `shell/` 데스크톱 앱(Tauri): 비서 화면(대화·할일·서랍·말하기)과 설정 화면을 **앱에 번들**해 띄우고, 백그라운드로 수집 루프를 돌리며, 트레이(열기·채팅 열기·설정·종료)를 둔다. 금고를 이 PC에 두면 서버도 돌린다(아래 "금고를 어디에 두나"). 화면은 Tauri webview로 그리지만 서버에서 당겨오지 않는다("웹 클라이언트"가 아니다) — 서버 주소·토큰은 앱 설정(`server_config` 커맨드)에서 받아 서버 API를 직접 호출한다. `ui/index.html`=비서, `ui/settings.html`=설정, `ui/welcome.html`=처음 설정 안내(#69). 메일·일정·주소록 양식은 `ui/sources.js` 하나를 설정과 안내가 함께 쓴다.
 
 배포하는 것은 둘이다 — **`life-desktop`**(보통 사용자는 이것만: 대화 + 백그라운드 수집 + 트레이)와 **`life-agent`**(설정·진단·감시 폴더를 터미널에서 다루는 명령줄). 데스크톱 앱이 백그라운드 수집을 하므로 별도 데몬은 두지 않는다. 데스크톱 앱과 `life-agent run`을 동시에 돌리지 않는다(둘 다 수집한다).
 
@@ -68,7 +68,7 @@ Omni 데스크톱 클라이언트(`dev` 브랜치의 `pc_activity`)를 읽고 �
 결과(이 PC는 `CARGO_TARGET_DIR`가 `~/.cache/cargo-target`): `.../x86_64-pc-windows-msvc/release/life-desktop.exe`(데스크톱 앱)와 `life-agent.exe`(명령줄). Windows에서 직접 빌드하려면 Rust와 Visual Studio Build Tools(C++)를 설치하고 `cargo build --release -p life-desktop -p life-agent`. 데스크톱 앱은 실행할 때 **WebView2 런타임**이 필요하다(Windows 11 기본 포함, Windows 10은 Edge WebView2 Evergreen Runtime 설치).
 
 ## Windows에서 시작하기 (데스크톱 앱)
-1. `life-desktop.exe`를 실행한다. 처음에는 금고를 어디에 둘지 묻는다. "이 PC에 두기"면 바로 대화로 넘어간다. 설정에서 메일·일정·모델을 넣고, 폰에 넣을 주소·토큰을 본다. "다른 곳의 금고에 연결"이면 서버 주소(예: `https://gungbuntu.tail8d1ab7.ts.net:48765`, PC가 tailnet에 있어야 한다)와 토큰(서버의 `INGEST_TOKEN`)을 넣고 "저장하고 대화 열기".
+1. `life-desktop.exe`를 실행한다. 처음에는 금고를 어디에 둘지 묻는다. "이 PC에 두기"면 대화 모델이 아직 없을 때 **처음 설정 안내**(`welcome.html`)가 뜬다: ① 금고 ② 모델 주소(연결 확인 = 모델에게 짧게 한 번 묻기) ③ 메일·일정 ④ 폰 연결(Tailscale, 연결 코드 `lorelog://connect?u=<주소>&t=<토큰>`과 QR. 토큰이 들어 있어 누를 때만 만들고 로그에 남기지 않는다. QR은 앱 안에서 그린다) ⑤ 첫 동기화와 그래프 진행. 아무 단계나 건너뛸 수 있고, 한 번 닫으면 다시 뜨지 않으며 설정의 "처음 설정 안내 다시 열기"로 연다. 설정에서도 메일·일정·모델을 넣고, 폰에 넣을 주소·토큰을 본다. "다른 곳의 금고에 연결"이면 서버 주소(예: `https://gungbuntu.tail8d1ab7.ts.net:48765`, PC가 tailnet에 있어야 한다)와 토큰(서버의 `INGEST_TOKEN`)을 넣고 "저장하고 대화 열기".
 2. 그 자리에서 앱에 번들된 비서 화면(대화)으로 넘어간다. 창을 닫아도 트레이에 남아 수집을 계속한다. 트레이: 열기 / 채팅 열기 / 설정 / 종료.
 3. "설정"에서 감시 폴더를 더한다(예: 다운로드). 아무것도 더하지 않으면 파일은 보지 않고 창 활동만 수집한다.
 

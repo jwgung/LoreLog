@@ -45,6 +45,7 @@
   <a class="back" href="index.html">← 대화로</a>
   <h1 style="margin-top:10px;">설정</h1>
   <p class="sub">금고, 모을 곳, 감시 폴더, 시작.</p>
+  <p id="welcomeBox" class="note" hidden><a class="back" href="welcome.html">처음 설정 안내 다시 열기</a> — 모델, 메일·일정, 폰 연결 코드, 첫 동기화를 단계로 봅니다.</p>
 
   <h2>금고</h2>
   <div id="hostBox" hidden>
@@ -113,7 +114,7 @@
       <div><label for="asrUrl">음성 모델 주소</label><input id="asrUrl" type="text" placeholder="http://&lt;서버&gt;:8000/v1/audio/transcriptions" /></div>
       <div><label for="asrModel">음성 모델 이름</label><input id="asrModel" type="text" /></div>
     </div>
-    <button id="modelSave">모델 저장</button>
+    <div class="row"><button id="modelCheck" class="secondary">대화 모델 연결 확인</button><button id="modelSave">모델 저장</button></div>
     <div id="modelMsg" class="msg"></div>
 
     <hr />

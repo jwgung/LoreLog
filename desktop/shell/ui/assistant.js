@@ -451,6 +451,11 @@ async function boot() {
     const s = await invoke("server_config");   // { mode, base, token }
     if (!s.mode) { showChoose(); return; }
     if (s.host_error) { showChoose(`이 PC의 서버를 띄우지 못했습니다: ${s.host_error}`); return; }
+    // a new vault on this PC with no model yet: the first-run guide (#69), until the user closes it once
+    if (s.mode === "host" && !localStorage.getItem("lorelog.welcomeDone")) {
+      const m = await invoke("models_get").catch(() => null);
+      if (m && !m.chat_url) { location.href = "welcome.html"; return; }
+    }
     API_BASE = (s.base || "").replace(/\/+$/, "");
     token = s.token || "";
     if (API_BASE && token) start(); else showSetup();
