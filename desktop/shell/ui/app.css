@@ -95,6 +95,9 @@ details { margin-top: 8px; } summary { cursor: pointer; color: var(--muted); fon
 .sender input { width: 18px; height: 18px; accent-color: var(--accent); }
 .sender .n { margin-left: auto; color: var(--muted); font-size: 12px; }
 .row { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+.badge.dot { min-width: 10px; width: 10px; height: 10px; padding: 0; top: 2px; right: 2px; }
+.update { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding: 10px 12px; background: var(--card); border: 1px solid var(--accent); border-radius: 12px; font-size: 14px; }
+.update button { background: var(--accent); color: var(--accent-text); border: 0; border-radius: 10px; padding: 6px 14px; font-weight: 600; }
 .ghost { background: transparent; border: 1px solid var(--line); border-radius: 12px; padding: 8px 14px; }
 
 @media (min-width: 900px) {

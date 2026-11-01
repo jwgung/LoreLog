@@ -42,7 +42,9 @@ Omni 데스크톱 클라이언트(`dev` 브랜치의 `pc_activity`)를 읽고 �
 
 ## 데스크톱 앱 (Tauri)
     cd desktop && cargo tauri dev   # 개발 실행 (리눅스는 WebKitGTK, Windows는 WebView2)
-    cd desktop && cargo tauri build # 설치용 번들
+    cd desktop && cargo tauri build # 설치용 번들 (업데이트 서명 키 TAURI_SIGNING_PRIVATE_KEY 필요)
+
+배포는 `v*` 태그를 올리면 `.github/workflows/release.yml`이 한다: 초안 Release → APK와 세 OS 번들(Windows NSIS, macOS universal dmg, Linux AppImage·deb)과 `latest.json`을 올림 → 모두 성공하면 공개. 앱은 켤 때 `latest.json`을 보고 새 버전이 있으면 서랍에 알리고, 사용자가 누를 때만 설치한다(`shell/src-tauri/src/update.rs`). 업데이트 서명 키의 공개키는 `tauri.conf.json`, 개인키는 GitHub secret `TAURI_SIGNING_PRIVATE_KEY`(잃으면 이미 설치된 앱에 업데이트를 보낼 수 없다 — 백업 필수).
 
 처음 뜨면 금고를 어디에 둘지 묻는다(위). "다른 곳의 금고에 연결"을 고르면 서버 주소와 토큰을 넣는 화면이 나오고, 넣으면 앱에 번들된 비서 화면(대화·할일·서랍·말하기)으로 넘어간다. 화면은 앱 안에 있고(브라우저로 열리지 않는다) 서버 API만 호출한다. 창을 닫아도 트레이에 남아 수집을 계속하고, 트레이 "채팅 열기"·"설정"으로 화면을 오간다. 설정은 CLI와 같은 파일을 쓴다 — 비밀 아닌 설정은 `config.toml`, 토큰은 별도 파일 `token`(0600). 서버의 `sources.toml`+`env` 분리와 같은 방식.
 

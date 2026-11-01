@@ -6,7 +6,7 @@
 
 개인용 · 로컬 암호화 저장 · 클라우드 또는 온디바이스 전사 · 클라우드 요약(본인 키)
 
-[**APK 다운로드**](https://github.com/jwgung/LoreLog/releases/latest) · [릴리스](https://github.com/jwgung/LoreLog/releases)
+[**APK · 데스크톱 앱 다운로드**](https://github.com/jwgung/LoreLog/releases/latest) · [릴리스](https://github.com/jwgung/LoreLog/releases)
 
 [English](README.md) · 한국어
 
@@ -86,6 +86,27 @@ LoreLog의 핵심이자 가장 까다로운 부분. 구글 실시간 인식기�
 **특수 권한**(사용자가 직접 켜야 함): 사용 정보 접근, 접근성(화면 내용), 알림 접근, 백그라운드 위치.
 
 > 🔒 **신형 안드로이드/삼성 주의**: 접근성(화면 내용 수집)은 보안 강화로 사이드로드 앱에 하드 차단될 수 있다. 앱 정보 → ⋮ → "제한된 설정 허용"을 거쳐야 하고, 그래도 막히면 그 기기에선 화면 수집만 포기하고 나머지로 쓴다. 접근성에 의존하지 않는 소스가 뼈대다.
+
+### 데스크톱 앱 (Windows · macOS · Linux)
+
+데스크톱 앱이 **금고를 품는다**: 처음 켤 때 "이 PC에 두기"를 고르면 앱이 서버를 직접 돌린다(기록, 메일·일정 노트, 색인). 폰과 다른 PC는 Tailscale로 이 PC에 보낸다. 트레이에서 비서 화면과 PC 수집기도 돌린다. 자세한 내용은 [desktop/README.md](desktop/README.md).
+
+안드로이드 APK와 같은 [릴리스](https://github.com/jwgung/LoreLog/releases/latest) 페이지에서 받는다(릴리스마다 둘 다 있고, 폰 앱은 지금처럼 APK로 갱신된다):
+
+| OS | 파일 | 설치 |
+|---|---|---|
+| Windows 10/11 (x64) | `LoreLog_<버전>_x64-setup.exe` | 실행한다. 이 사용자에게만 설치된다(관리자 권한 불필요). Windows 10은 WebView2 런타임이 필요할 수 있다. |
+| macOS 11+ (Apple 실리콘·Intel) | `LoreLog_<버전>_universal.dmg` | 열어서 LoreLog를 응용 프로그램으로 끌어 놓는다. |
+| Linux (x64) | `LoreLog_<버전>_amd64.AppImage` 또는 `.deb` | AppImage: `chmod +x LoreLog_*.AppImage` 후 실행. deb: `sudo apt install ./LoreLog_*.deb`. |
+
+`life-agent-<버전>-windows-x64.zip`은 Windows용 명령줄 수집기(선택)다. 데스크톱 앱을 쓰면 필요 없다.
+
+**아직 OS 인증서로 서명하지 않았다.** 그래서 처음 켤 때 경고가 뜬다:
+- **Windows SmartScreen** "Windows의 PC 보호": **추가 정보 → 실행**.
+- **macOS** "LoreLog을(를) 열 수 없습니다" / "Apple에서 확인할 수 없습니다": 한 번 열어 본 뒤 **시스템 설정 → 개인정보 보호 및 보안**에서 아래로 내려 LoreLog 옆 **그래도 열기**를 누르고 확인한다. (macOS 15부터는 우클릭 → 열기로 넘어가지 않는다.)
+- **Linux**: 경고는 없다. AppImage에 실행 권한(`chmod +x`)만 준다.
+
+**업데이트**: 앱이 켜질 때 새 버전을 확인한다. 있으면 서랍에 "새 버전 X가 있어요 [설치]"가 뜨고, 누를 때만 설치한 뒤 다시 켜진다. 업데이트 파일은 서명돼 있고 앱이 확인한다. Linux는 AppImage에서 동작하고, deb는 새 deb를 설치한다.
 
 ## 빌드
 

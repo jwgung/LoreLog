@@ -35,7 +35,7 @@
     <div class="title"><span id="dayLabel"></span></div>
     <nav>
       <button class="icon" id="btnTodos" title="할 일" aria-label="할 일"><span class="badge" id="todoBadge" hidden></span><svg viewBox="0 0 24 24"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg></button>
-      <button class="icon" id="btnDrawer" title="서랍" aria-label="서랍"><svg viewBox="0 0 24 24"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg></button>
+      <button class="icon" id="btnDrawer" title="서랍" aria-label="서랍"><span class="badge dot" id="updateDot" hidden></span><svg viewBox="0 0 24 24"><rect width="20" height="5" x="2" y="3" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg></button>
     </nav>
   </header>
 
@@ -65,6 +65,7 @@
   <section id="drawer" class="overlay" hidden>
     <div class="sheet">
       <div class="sheetHead"><h2>서랍</h2><button class="icon" id="drawerClose" aria-label="닫기"><svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button></div>
+      <div id="updateBox" class="update" hidden><span id="updateText"></span><button type="button" id="updateInstall">설치</button></div>
       <h3>일기에 쓸 메신저</h3>
       <p class="muted">체크한 상대의 알림만 하루 정리에 쓰입니다. 기본은 전부 제외입니다.</p>
       <div id="senders"></div>
