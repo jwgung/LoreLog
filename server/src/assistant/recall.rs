@@ -306,8 +306,9 @@ pub const WORDS_SYSTEM: &str = r#"사용자의 말에서 지난 기록을 찾아
 - 그 일에서 누가 맡은 역할(담당, 고객, 지원자, 면접관 …)을 물으면 roles 에, 일의 단계·상태(견적, 계약, 면접, 배포 …)를 물으면 states 에, "~했는데 ~안 된" 처럼 뒤따르지 않은 단계는 absent 에 넣는다. 누가 달라고 했는데 아직 안 보낸 것을 물으면 open_requests 를 true 로 한다. 해당 없으면 비운다.
 - 처음 보는 낱말이라도 "~ 관련 건", "~랑 한 일", "~ 쪽 건", "~에서 온 거"처럼 지난 기록을 묻는 말에 붙어 있으면 회사나 제품의 이름으로 보고 search 를 true 로 한다(예: "누리온 관련 건 뭐 있었지?" → orgs 와 words 에 "누리온").
 - 기분이나 상태만 말하거나, 인사나 맞장구면 search 를 false 로 한다.
+- 정해진 기간에 걸려 있는 일(해야 할 일, 일정, 마감, 답할 것)을 모아 묻으면("이번 달에 뭐가 걸려 있지", "다음 주에 뭐 있어", "요즘 밀린 거 뭐야") search 를 true 로 하고 period 에 this_week, next_week, this_month, next_month, recent(요즘) 가운데 하나를 넣는다. 날짜는 계산하지 않는다. 그 기간 안에서 특정 사람·회사·일만 물으면 그 이름도 함께 넣는다. "요즘", "최근"이 붙어도 사람·회사와 있었던 일이나 지난 일이 어떻게 됐는지 묻는 말("요즘 OO 님이랑 뭐 있었지", "최근 OO 건 어떻게 됐어")에는 period 를 빈 문자열로 둔다. 걸려 있는 일·해야 할 일·일정을 묻지 않으면 period 는 빈 문자열이다.
 - [앞 대화]가 있으면 비서가 같은 이름의 사람 가운데 누구인지 되물은 것이다. 사용자의 답이 후보 하나를 가리키면(순서, 회사, 날짜, 제목으로) search 를 true 로 하고 그 후보의 <주소>를 꺾쇠까지 그대로 people 에 넣는다. words 에는 처음 물은 말의 주제 낱말을 다시 넣는다. 답이 후보를 가리키지 않으면 사용자의 답만 보고 고른다.
-JSON 으로만 답한다: {"search": true 또는 false, "people": ["이름", ...], "words": ["낱말", ...], "orgs": [], "things": [], "roles": [], "states": [], "absent": [], "open_requests": false}"#;
+JSON 으로만 답한다: {"search": true 또는 false, "people": ["이름", ...], "words": ["낱말", ...], "orgs": [], "things": [], "roles": [], "states": [], "absent": [], "open_requests": false, "period": ""}"#;
 
 pub const LIMIT: usize = 8;
 pub const MAX_WORDS: usize = 10;
@@ -332,6 +333,8 @@ pub struct Picked {
     pub states: Vec<String>,
     pub absent: Vec<String>,
     pub open_requests: bool,
+    /// what hangs in a period is asked (#61): only its name; the days are counted from the day asked
+    pub period: Option<super::period::Period>,
 }
 
 impl Picked {
@@ -403,8 +406,16 @@ pub fn pick(model: &dyn crate::llm::Model, message: &str, before: Option<&str>) 
         absent: list("absent"),
         open_requests: matches!(d.get("open_requests"), Some(Value::Bool(true)))
             || d.get("open_requests").and_then(Value::as_str) == Some("true"),
+        period: d.get("period").and_then(Value::as_str).and_then(super::period::Period::from_name),
     };
-    if p.words.is_empty() && p.people.is_empty() && p.graph().is_empty() {
+    // "요즘 OO 님이랑 뭐 있었지", "요즘 지원사업 공고 뭐 있었지" ask about records, not what hangs: a small model
+    // takes 요즘 for a period. "요즘 밀린 거" names nothing.
+    if p.period == Some(super::period::Period::Recent)
+        && !(p.people.is_empty() && p.orgs.is_empty() && p.things.is_empty() && p.words.is_empty())
+    {
+        p.period = None;
+    }
+    if p.words.is_empty() && p.people.is_empty() && p.graph().is_empty() && p.period.is_none() {
         p.words = vec![message.to_string()];
     }
     Some(p)
@@ -423,6 +434,21 @@ pub trait Index {
     fn with_graph(&mut self, _p: &Picked, _day: &str, _limit: usize) -> anyhow::Result<Vec<Value>> {
         Ok(Vec::new())
     }
+    /// What hangs in these days, asked on `today` (#61).
+    fn hanging(&mut self, _span: &super::period::Span, _today: &str) -> anyhow::Result<super::period::Gathered> {
+        anyhow::bail!("this index gathers no period")
+    }
+}
+
+/// The section for a question about what hangs in a period (#61): the period's days counted from `day`, what hangs
+/// in them gathered and ranked in code, narrowed to the people, organizations and things the question names.
+pub fn period_section(lib: &mut dyn Index, p: &Picked, day: &str) -> anyhow::Result<Recalled> {
+    let period = p.period.unwrap_or(super::period::Period::ThisMonth);
+    let today = chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")?;
+    let span = period.span(today);
+    let gathered = lib.hanging(&span, day)?;
+    let names: Vec<String> = p.people.iter().chain(&p.orgs).chain(&p.things).cloned().collect();
+    Ok(super::period::render(&gathered, period, span, today, &names))
 }
 
 /// The graph's hits and the words' hits, one hit per matter, up to `limit`: first the matters both found (in the
@@ -502,6 +528,10 @@ impl crate::librarian::Librarian {
 }
 
 impl Index for crate::librarian::Librarian {
+    fn hanging(&mut self, span: &super::period::Span, today: &str) -> anyhow::Result<super::period::Gathered> {
+        crate::librarian::Librarian::hanging(self, span, today)
+    }
+
     fn with_graph(&mut self, p: &Picked, day: &str, limit: usize) -> anyhow::Result<Vec<Value>> {
         self.graph_lookup(&p.graph(), day, limit)
     }
@@ -609,7 +639,12 @@ fn asked(
     let Some(picked) = pick(model, message, before) else { return (None, None, Found::NotSearched) };
     let words: Vec<String> = picked.people.iter().chain(&picked.words).cloned().collect();
     let mut notes = Vec::new();
-    let found = (|| -> anyhow::Result<Named> {
+    // a period's question is answered by what hangs in it, the others by what the words and the graph find
+    enum Got {
+        Named(Named),
+        Period(Recalled),
+    }
+    let found = (|| -> anyhow::Result<Got> {
         let mut lib = open()?;
         match lib.update() {
             Ok(r) if r.skipped > 0 => notes.push(PARTIAL), // what was found stands, but "not found" would claim more than we know
@@ -621,17 +656,24 @@ fn asked(
         }
         let mut all = said.to_vec();
         all.push(message.to_string());
-        lookup(lib.as_mut(), &picked, LIMIT, day, &all)
+        if picked.period.is_some() {
+            return period_section(lib.as_mut(), &picked, day).map(Got::Period);
+        }
+        lookup(lib.as_mut(), &picked, LIMIT, day, &all).map(Got::Named)
     })();
     match found {
-        Ok(named) => {
-            let (body, sources, found) = match &named {
-                Named::Hits(hits) => (
-                    render(hits),
-                    sources(hits),
+        Ok(got) => {
+            let (body, sources, found) = match got {
+                Got::Period(r) => {
+                    let refs = r.sources.iter().map(|s| s.refers.clone()).collect();
+                    (r.section, r.sources, Found::Hits(refs))
+                }
+                Got::Named(Named::Hits(hits)) => (
+                    render(&hits),
+                    sources(&hits),
                     Found::Hits(hits.iter().filter_map(|h| h["ref"].as_str().map(str::to_string)).collect()),
                 ),
-                Named::Ask(cands) => (render_candidates(cands), Vec::new(), Found::Asked),
+                Got::Named(Named::Ask(cands)) => (render_candidates(&cands), Vec::new(), Found::Asked),
             };
             let section =
                 std::iter::once(body).chain(notes.iter().map(|n| n.to_string())).collect::<Vec<_>>().join("\n");

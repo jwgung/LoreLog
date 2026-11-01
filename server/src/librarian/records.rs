@@ -91,7 +91,7 @@ pub fn addresses(value: &str, role: &'static str) -> Vec<Person> {
 }
 
 /// The lines of a YAML list under `key:` (`  - item`), up to the next key.
-fn list_items(front: &str, key: &str) -> Vec<String> {
+pub fn list_items(front: &str, key: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut inside = false;
     for line in front.lines() {

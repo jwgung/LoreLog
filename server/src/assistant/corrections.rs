@@ -19,6 +19,8 @@ use crate::fsutil::{append_private, ensure_private_dir};
 
 /// the longest wrong or right kept
 pub const MAX_TEXT: usize = 2000;
+/// The right side that says a request of the graph was answered (`edge:<key>`, #60): it stays, no longer open.
+pub const ANSWERED: &str = "답함";
 /// what is quoted of each side in the line said back
 const SAID: usize = 40;
 
@@ -128,6 +130,7 @@ impl Correction {
                 None => format!("조직 이름을 더했어요: {d} = {r}"),
             },
             Ref::Edge(_) if self.right == "-" => format!("관계를 지웠어요: {w}"),
+            Ref::Edge(_) if self.right == ANSWERED => format!("요청에 답한 것으로 했어요: {w}"),
             Ref::Edge(_) => format!("관계를 고쳤어요: {w} → {r}"),
             Ref::Label(word) if self.right == "-" => format!("묶음에서 뺐어요: {}", cut(word)),
             Ref::Label(word) => format!("묶음 이름을 정했어요: {} → {r}", cut(word)),

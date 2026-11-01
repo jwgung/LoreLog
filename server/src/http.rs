@@ -160,6 +160,7 @@ static ROUTES: LazyLock<Vec<(Method, Regex, Handler)>> = LazyLock::new(|| {
         }),
         (Method::POST, r(&format!("/diary/{DAY}/chat")), chat_post),
         (Method::POST, r("/corrections"), correction_post),
+        (Method::POST, r("/assistant/ahead"), ahead_post),
         (Method::GET, r("/graph/search\\?q=([^&]{0,300})"), graph_search),
         (Method::GET, r("/graph/node\\?id=([^&]{1,600})"), graph_node),
         (Method::GET, r(&format!("/diary/{DAY}(\\?refresh=1)?")), draft_get),
@@ -345,6 +346,18 @@ fn graph_node(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply,
         Some(v) => Ok(Reply::ok(v)),
         None => Ok(Reply::new(404, json!({"error": "not found"}))),
     }
+}
+
+/// The lines to say before the coming events (#60): the phone asks for the next two hours.
+fn ahead_post(app: &App, req: &Request, _: &regex::Captures) -> Result<Reply, Reply> {
+    let payload = req.json(BODY_LIMIT)?;
+    let Some(ask) = crate::assistant::ahead::ask_from(&payload) else {
+        return Ok(Reply::new(400, json!({"error": "bad body"})));
+    };
+    let now = Local::now().naive_local();
+    let lines = crate::assistant::ahead::take(&app.paths, &ask, now, crate::assistant::ahead::WINDOW)
+        .map_err(|e| internal(req, &e.to_string()))?;
+    Ok(Reply::ok(json!({"items": lines.iter().map(|l| l.json()).collect::<Vec<_>>()})))
 }
 
 fn draft_get(app: &App, _: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {
