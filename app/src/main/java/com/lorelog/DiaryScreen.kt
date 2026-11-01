@@ -203,7 +203,7 @@ internal fun DiarySenderSettings() {
         scope.launch {
             message = "불러오는 중…"
             val list = DiaryClient.fetchSenders(context)
-            if (list == null) { message = "금고에서 목록을 가져오지 못했습니다."; return@launch }
+            if (list == null) { message = "서랍에서 목록을 가져오지 못했습니다."; return@launch }
             senders = list; message = ""
             checked.clear(); wholeApp.clear()
             list.forEach { if (it.allowed) checked["${it.label}: ${it.title}"] = true }

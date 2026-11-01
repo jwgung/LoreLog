@@ -11,7 +11,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * 하루 한 번 증분 내보내기를 돌린다. 지난 이후 새 기록만 앱 전용 외부 폴더에 NDJSON 으로 append.
- * 금고로 보내는 것은 [PushWorker]가 15분마다 한다.
+ * 서랍으로 보내는 것은 [PushWorker]가 15분마다 한다.
  */
 class ExportWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result = try {

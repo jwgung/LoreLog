@@ -130,7 +130,7 @@ internal fun TodosScreen(onBack: () -> Unit) {
             }
             val t = todos
             when {
-                t == null && failed -> Text("금고에 연결하지 못했어요. 연결을 확인하고 다시 열어 주세요.", color = TSub, fontSize = 13.sp)
+                t == null && failed -> Text("서랍에 연결하지 못했어요. 연결을 확인하고 다시 열어 주세요.", color = TSub, fontSize = 13.sp)
                 t == null -> Text("불러오는 중…", color = TSub, fontSize = 13.sp)
                 else -> {
                     if (t.proposed.isNotEmpty()) {

@@ -44,7 +44,7 @@ class LogStore(context: Context, password: ByteArray) {
         runCatching { db.execSQL("ALTER TABLE $TABLE_CAL ADD COLUMN attendees TEXT NOT NULL DEFAULT ''") }
         // 음성 행에 보관 오디오 파일명(voice_kept/ 아래). 내보낸 뒤 또는 보존 기간 뒤 지우면 NULL.
         runCatching { db.execSQL("ALTER TABLE $TABLE_VOICE ADD COLUMN audio TEXT") }
-        // 폰 요약은 없앴다(#67, 요약은 금고에서). 예전 설치에 남은 요약 표를 지운다.
+        // 폰 요약은 없앴다(#67, 요약은 서랍에서). 예전 설치에 남은 요약 표를 지운다.
         db.execSQL("DROP TABLE IF EXISTS summary")
     }
 

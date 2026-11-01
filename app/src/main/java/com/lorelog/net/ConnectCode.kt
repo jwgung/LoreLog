@@ -5,9 +5,9 @@ import java.net.URI
 import java.net.URLDecoder
 
 /**
- * 데스크톱 앱이 보여 주는 한 줄 '연결 코드'(#69): `lorelog://connect?u=<금고 주소>&t=<토큰>`. 토큰이 들어 있으니 로그에 남기지 않는다.
+ * 데스크톱 앱이 보여 주는 한 줄 '연결 코드'(#69): `lorelog://connect?u=<서랍 주소>&t=<토큰>`. 토큰이 들어 있으니 로그에 남기지 않는다.
  * 토큰은 https, 또는 WireGuard로 암호화되는 tailnet(*.ts.net, 100.64.0.0/10, fd7a:115c:a1e0::/48)·이 기기(loopback)의
- * http로만 보낸다. 코드로 넣든 손으로 넣든 같은 규칙이다(금고 서버의 `life_server::onboard::safe_for_token`과 같다).
+ * http로만 보낸다. 코드로 넣든 손으로 넣든 같은 규칙이다(서랍 서버의 `life_server::onboard::safe_for_token`과 같다).
  */
 object ConnectCode {
     const val PREFIX = "lorelog://connect?"
@@ -52,7 +52,7 @@ object ConnectCode {
 
     private fun tokenOk(t: String) = t.length >= MIN_TOKEN && t.none { it.isWhitespace() || it.isISOControl() }
 
-    /** 금고 주소(서버 주소만 있으면 …/ingest/lorelog를 붙인다). */
+    /** 서랍 주소(서버 주소만 있으면 …/ingest/lorelog를 붙인다). */
     fun exportUrl(base: String): String {
         val b = base.trim().trimEnd('/')
         val path = runCatching { URI(b).path.orEmpty() }.getOrDefault("")
@@ -83,7 +83,7 @@ object ConnectCode {
 
     /**
      * 손으로 넣은 주소를 저장해도 되는지. null = 괜찮음, 아니면 이유. 기록 자체도 이 주소로 나가므로 토큰이 없어도
-     * 같은 규칙이다(https, 또는 tailnet·이 기기의 http만). 금고는 토큰 없는 기록을 받지 않으니 막아서 잃는 것은 없다.
+     * 같은 규칙이다(https, 또는 tailnet·이 기기의 http만). 서랍은 토큰 없는 기록을 받지 않으니 막아서 잃는 것은 없다.
      */
     fun manualProblem(url: String): String? =
         if (url.isNotBlank() && !safeForToken(url)) NOT_SAFE else null

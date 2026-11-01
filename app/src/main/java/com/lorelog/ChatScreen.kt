@@ -150,12 +150,12 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
     fun startListening() {
         notice = ""
         if (!Dictation.available(context)) {
-            notice = "말로 남기려면 받아 적을 금고가 필요해요. 서랍 → 수집·연동 설정 → 금고 연결에서 주소를 넣어 주세요. 말은 금고 밖으로 나가지 않아요."
+            notice = "말로 남기려면 받아 적을 서랍이 필요해요. 서랍 → 수집·연동 설정 → 서랍 연결에서 주소를 넣어 주세요. 말은 서랍 밖으로 나가지 않아요."
             return
         }
         scope.launch {
             val text = Dictation.listen(context)
-            if (text == null) notice = "받아 적지 못했어요. 금고에 닿지 않았거나 말소리가 너무 짧았을 수 있어요. 다시 한 번 말해 주세요."
+            if (text == null) notice = "받아 적지 못했어요. 서랍에 닿지 않았거나 말소리가 너무 짧았을 수 있어요. 다시 한 번 말해 주세요."
             else input = if (input.isBlank()) text else input.trimEnd() + " " + text
         }
     }
@@ -506,7 +506,7 @@ internal fun DrawerScreen(onBack: () -> Unit, onOpen: (AppScreen) -> Unit) {
             NavButton(NavIcon.CHAT, "대화", onClick = onBack)
         }
         Text(
-            "저에 대해 아는 것은 여기에만 있고, 이 폰과 금고 밖으로 나가지 않아요. 나만 열 수 있어요.",
+            "저에 대해 아는 것은 여기에만 있고, 이 폰과 서랍 밖으로 나가지 않아요. 나만 열 수 있어요.",
             color = Sub, fontSize = 13.sp, lineHeight = 21.sp, modifier = Modifier.padding(bottom = 6.dp),
         )
         DrawerRow("하루 정리 알림", reminder) { onOpen(AppScreen.REMINDER) }

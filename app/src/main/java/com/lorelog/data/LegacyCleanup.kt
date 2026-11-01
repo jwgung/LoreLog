@@ -9,7 +9,7 @@ import java.io.File
 /**
  * 폰이 수집만 하게 바꾼 뒤(#67) 예전 설치에 남은 것을 한 번 치운다. 예전에 고른 Gemini·whisper 설정은 따르지 않는다.
  * - 내려받은 온디바이스 whisper 모델 파일(filesDir/whisper)
- * - 암호화 저장소의 Gemini 키·주소·모델(금고 주소·토큰과 DB 키는 그대로)
+ * - 암호화 저장소의 Gemini 키·주소·모델(서랍 주소·토큰과 DB 키는 그대로)
  * - 전사 엔진 선택(transcribe)과 폰 요약 켜기(summary) 설정
  * - 하루 한 번 돌던 폰 요약 작업(daily-summary)
  * 요약 표는 [LogStore]가 DB 를 열 때 지운다. 도중에 실패하면 끝났다고 적지 않아 다음 실행에 다시 한다.

@@ -5,12 +5,12 @@ import org.json.JSONObject
 import java.security.MessageDigest
 
 /**
- * 폰 캘린더를 금고로 보낼 때의 규칙(#77). 안드로이드에 묶이지 않은 부분만 모았다(읽기와 전송은 [CalendarExport]).
+ * 폰 캘린더를 서랍으로 보낼 때의 규칙(#77). 안드로이드에 묶이지 않은 부분만 모았다(읽기와 전송은 [CalendarExport]).
  *
  * - 범위: 지금부터 1년 전 ~ 1년 뒤에 시작하는 일정(반복 일정은 한 번 한 번을 따로, 키 "이벤트id@시작ms").
- * - 새로 생겼거나 바뀐 일정만 `calendar_event` 줄로 보낸다(status "upsert"). 금고는 키마다 마지막 줄을 쓴다.
+ * - 새로 생겼거나 바뀐 일정만 `calendar_event` 줄로 보낸다(status "upsert"). 서랍은 키마다 마지막 줄을 쓴다.
  * - 보냈던 일정이 범위 안에서 사라지면(폰에서 지움, 시간을 옮김) status "deleted" 줄을 보낸다. 범위 밖으로 밀려난
- *   지난 일정은 지운 것이 아니므로 보내지 않고 기억에서만 뺀다(금고에는 그대로 남는다).
+ *   지난 일정은 지운 것이 아니므로 보내지 않고 기억에서만 뺀다(서랍에는 그대로 남는다).
  */
 object CalendarSync {
     const val WINDOW_DAYS = 365L
@@ -18,7 +18,7 @@ object CalendarSync {
 
     data class PhoneEvent(
         val key: String,
-        /** 캘린더의 iCalendar UID(UID_2445). CalDAV로도 들어오는 같은 일정을 금고가 한 번만 세는 데 쓴다. 없으면 "". */
+        /** 캘린더의 iCalendar UID(UID_2445). CalDAV로도 들어오는 같은 일정을 서랍이 한 번만 세는 데 쓴다. 없으면 "". */
         val uid: String,
         val calendar: String,
         val title: String,
@@ -73,7 +73,7 @@ object CalendarSync {
         "attendees" to JSONArray(e.attendees),
     )
 
-    /** 금고로 보낼 한 줄. ts 는 보낸 때(금고는 그날 파일에 둔다: 나중 파일·나중 줄이 이긴다). */
+    /** 서랍으로 보낼 한 줄. ts 는 보낸 때(서랍은 그날 파일에 둔다: 나중 파일·나중 줄이 이긴다). */
     fun record(e: PhoneEvent, nowMs: Long): String = JSONObject().apply {
         put("type", "calendar_event"); put("ts", nowMs)
         fields(e).forEach { (k, v) -> put(k, v) }

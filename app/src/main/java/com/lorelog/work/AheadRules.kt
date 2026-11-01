@@ -15,7 +15,7 @@ object AheadRules {
     private const val QUIET_FROM = 22
     private const val QUIET_UNTIL = 7
 
-    /** 금고가 준 한 줄. 시각은 epoch ms. */
+    /** 서랍이 준 한 줄. 시각은 epoch ms. */
     data class Line(
         val event: String,
         val start: Long,

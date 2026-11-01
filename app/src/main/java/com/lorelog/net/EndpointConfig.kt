@@ -4,13 +4,13 @@ import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
-/** 금고 연결 설정(기록을 보낼 URL·토큰). 토큰은 민감하므로 암호화 저장한다. */
+/** 서랍 연결 설정(기록을 보낼 URL·토큰). 토큰은 민감하므로 암호화 저장한다. */
 object EndpointConfig {
     private const val PREF = "lifelog_secret"
     private const val KEY_URL = "endpoint_url"
     private const val KEY_TOKEN = "endpoint_token"
 
-    /** 금고 주소·토큰과 DB 키가 함께 있는 암호화 저장소. 지난 설정을 치울 때([com.lorelog.data.LegacyCleanup])도 쓴다. */
+    /** 서랍 주소·토큰과 DB 키가 함께 있는 암호화 저장소. 지난 설정을 치울 때([com.lorelog.data.LegacyCleanup])도 쓴다. */
     internal fun secretPrefs(context: Context) = EncryptedSharedPreferences.create(
         context.applicationContext,
         PREF,

@@ -60,10 +60,10 @@ async function load() {
   const res = await fetch(`${API_BASE}/schedule?from=${ymd(from)}&to=${ymd(to)}`, { headers: { Authorization: `Bearer ${token}` } });
   let data = {};
   try { data = await res.json(); } catch { /* empty */ }
-  if (res.status === 503) { say("금고가 아직 기록을 정리하지 않았어요. 잠시 뒤 다시 열어 주세요."); return; }
+  if (res.status === 503) { say("서랍이 아직 기록을 정리하지 않았어요. 잠시 뒤 다시 열어 주세요."); return; }
   if (res.status !== 200) { say("불러오지 못했습니다: " + (data.error || res.status), true); return; }
   const items = Array.isArray(data.items) ? data.items : [];
-  say(items.length ? "" : "이 주에는 금고에 들어온 일정이 없어요.");
+  say(items.length ? "" : "이 주에는 서랍에 들어온 일정이 없어요.");
   for (let i = 0; i < DAYS; i++) {
     const day = ymd(addDays(from, i));
     days.append(el("div", dayLabel(day, today), "sday"));

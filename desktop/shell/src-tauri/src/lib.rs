@@ -114,7 +114,7 @@ fn choose_mode(mode: Mode, slot: tauri::State<HostSlot>, stop: tauri::State<Stop
 
 /// The vault's paths when this app runs the server, else an error for the settings screen.
 fn host_paths(s: &HostSlot) -> Result<life_server::config::Paths, String> {
-    hosting(s, |h| h.paths().clone()).ok_or_else(|| "이 PC에 금고를 둔 경우에만 설정합니다".to_string())
+    hosting(s, |h| h.paths().clone()).ok_or_else(|| "이 PC에 서랍을 둔 경우에만 설정합니다".to_string())
 }
 
 /// What is collected (the mail account without its password, the calendars).
@@ -191,7 +191,7 @@ fn models_get(slot: tauri::State<HostSlot>) -> Result<Models, String> {
 /// Save the model addresses; they apply from the next question on.
 #[tauri::command]
 fn models_save(models: Models, slot: tauri::State<HostSlot>) -> Result<(), String> {
-    hosting(&slot, |h| h.set_models(&models)).unwrap_or_else(|| Err("이 PC에 금고를 둔 경우에만 설정합니다".into()))
+    hosting(&slot, |h| h.set_models(&models)).unwrap_or_else(|| Err("이 PC에 서랍을 둔 경우에만 설정합니다".into()))
 }
 
 /// Does the chat model at this address answer a tiny request? (the first-run guide and the settings, #69)
@@ -212,7 +212,7 @@ struct PhoneCode {
 #[tauri::command]
 fn phone_code(slot: tauri::State<HostSlot>) -> Result<PhoneCode, String> {
     let url = hosting(&slot, |h| h.info().address_for_devices)
-        .ok_or("이 PC에 금고를 둔 경우에만 만듭니다")?
+        .ok_or("이 PC에 서랍을 둔 경우에만 만듭니다")?
         .ok_or("아직 tailnet 주소가 없습니다. 이 PC에 Tailscale을 켜고 로그인하세요")?;
     let code = life_server::onboard::connect_code(&url, &config::load()?.token)?;
     let qr_svg = pair::qr_svg(&code)?;
@@ -323,7 +323,7 @@ fn host_info(slot: tauri::State<HostSlot>) -> Option<host::Info> {
 /// Sync mail and calendars now (host mode).
 #[tauri::command]
 fn sync_now(slot: tauri::State<HostSlot>) -> Result<(), String> {
-    hosting(&slot, |h| h.sync_now()).ok_or_else(|| "이 PC에 금고를 둔 경우에만 동기화합니다".to_string())
+    hosting(&slot, |h| h.sync_now()).ok_or_else(|| "이 PC에 서랍을 둔 경우에만 동기화합니다".to_string())
 }
 
 /// The last result of every sync job (host mode).
@@ -365,7 +365,7 @@ fn server_config(slot: tauri::State<HostSlot>) -> Result<ServerConfig, String> {
 #[tauri::command]
 fn save_settings(url: String, token: Option<String>) -> Result<(), String> {
     if config::load()?.mode == Some(Mode::Host) {
-        return Err("이 PC에 금고를 둔 동안에는 이 앱의 서버를 씁니다. 다른 서버로 바꾸려면 금고 위치를 바꾸세요".into());
+        return Err("이 PC에 서랍을 둔 동안에는 이 앱의 서버를 씁니다. 다른 서버로 바꾸려면 서랍 위치를 바꾸세요".into());
     }
     let url = url.trim().trim_end_matches('/').to_string();
     if !config::is_acceptable_url(&url) {

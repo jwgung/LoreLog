@@ -36,7 +36,7 @@ object DiaryClient {
         var conn: HttpURLConnection? = null
         try {
             conn = open(context, "/diary/$day" + if (refresh) "?refresh=1" else "", "GET")
-                ?: return@withContext Draft.Error("금고 주소가 설정되지 않았습니다(설정 → 금고 연결).")
+                ?: return@withContext Draft.Error("서랍 주소가 설정되지 않았습니다(설정 → 서랍 연결).")
             when (val code = conn.responseCode) {
                 200 -> {
                     val o = JSONObject(conn.inputStream.bufferedReader().readText())
@@ -47,10 +47,10 @@ object DiaryClient {
                     )
                 }
                 202 -> Draft.Generating
-                else -> Draft.Error("금고 응답 $code: " + (conn.errorStream?.bufferedReader()?.readText() ?: ""))
+                else -> Draft.Error("서랍 응답 $code: " + (conn.errorStream?.bufferedReader()?.readText() ?: ""))
             }
         } catch (e: Exception) {
-            Draft.Error("금고에 연결하지 못했습니다(${e.javaClass.simpleName}). tailnet 연결을 확인하세요.")
+            Draft.Error("서랍에 연결하지 못했습니다(${e.javaClass.simpleName}). tailnet 연결을 확인하세요.")
         } finally {
             conn?.disconnect()
         }
@@ -215,8 +215,8 @@ object DiaryClient {
     }
 
     /**
-     * 앞으로의 일정 앞에 비서가 먼저 말할 줄들(#60). [events]는 이 폰 캘린더의 일정(금고는 자기 캘린더 일정을
-     * 더한다), [stopped]는 사용자가 멈춘 조직. 금고에 닿지 않으면 null.
+     * 앞으로의 일정 앞에 비서가 먼저 말할 줄들(#60). [events]는 이 폰 캘린더의 일정(서랍은 자기 캘린더 일정을
+     * 더한다), [stopped]는 사용자가 멈춘 조직. 서랍에 닿지 않으면 null.
      */
     suspend fun ahead(context: Context, events: JSONArray, stopped: Set<String>): List<com.lorelog.work.AheadRules.Line>? =
         withContext(Dispatchers.IO) {
@@ -244,10 +244,10 @@ object DiaryClient {
             }
         }
 
-    /** 일정 화면(#62)의 한 쪽: 금고가 아는 일정과 비서 메모. */
+    /** 일정 화면(#62)의 한 쪽: 서랍이 아는 일정과 비서 메모. */
     sealed class ScheduleResult {
         data class Ready(val events: List<com.lorelog.data.Schedule.Event>) : ScheduleResult()
-        /** 금고의 색인이 아직 만들어지지 않았다 */
+        /** 서랍의 색인이 아직 만들어지지 않았다 */
         object NotReady : ScheduleResult()
         object Failed : ScheduleResult()
     }

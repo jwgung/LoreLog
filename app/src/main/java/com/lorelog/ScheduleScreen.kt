@@ -46,7 +46,7 @@ private val SAccent = Color(0xFF9DB7FF)
 private val SWarn = Color(0xFFE8B86A)
 
 /**
- * 일정(#62). 캘린더를 만들지 않고 읽는다: 금고에 들어온 일정을 오늘부터 7일 보여 주고 한 주씩 앞뒤로 넘긴다.
+ * 일정(#62). 캘린더를 만들지 않고 읽는다: 서랍에 들어온 일정을 오늘부터 7일 보여 주고 한 주씩 앞뒤로 넘긴다.
  * 일정마다 비서 메모(답하지 않은 요청, 같은 건의 마지막 상태, 그 사람과의 마지막 기록, 열린 할 일)가 서버의
  * 템플릿 문장으로 붙고, 확실한 것이 없으면 비어 있다. 일정을 누르면 그 일정·건 질문으로 대화가 열린다.
  */
@@ -87,13 +87,13 @@ internal fun ScheduleScreen(onBack: () -> Unit, onAsk: (String) -> Unit) {
             when (val r = result) {
                 null -> Text("불러오는 중…", color = SSub, fontSize = 13.sp)
                 DiaryClient.ScheduleResult.Failed ->
-                    Text("금고에 연결하지 못했어요. 연결을 확인하고 다시 열어 주세요.", color = SSub, fontSize = 13.sp)
+                    Text("서랍에 연결하지 못했어요. 연결을 확인하고 다시 열어 주세요.", color = SSub, fontSize = 13.sp)
                 DiaryClient.ScheduleResult.NotReady ->
-                    Text("금고가 아직 기록을 정리하지 않았어요. 잠시 뒤 다시 열어 주세요.", color = SSub, fontSize = 13.sp)
+                    Text("서랍이 아직 기록을 정리하지 않았어요. 잠시 뒤 다시 열어 주세요.", color = SSub, fontSize = 13.sp)
                 is DiaryClient.ScheduleResult.Ready -> {
                     if (r.events.isEmpty()) {
                         Text(
-                            "이 주에는 금고에 들어온 일정이 없어요. 폰 캘린더나 CalDAV 일정이 금고로 들어오면 여기에 보여요.",
+                            "이 주에는 서랍에 들어온 일정이 없어요. 폰 캘린더나 CalDAV 일정이 서랍으로 들어오면 여기에 보여요.",
                             color = SSub, fontSize = 13.sp, lineHeight = 20.sp,
                         )
                     }

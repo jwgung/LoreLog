@@ -23,8 +23,8 @@ import java.util.TimeZone
 import java.util.concurrent.TimeUnit
 
 /**
- * 비서가 다음 행동의 그 자리에서 먼저 말한다(#60). 15분 전송([PushWorker]) 때 앞으로 2시간의 일정을 금고에 묻고,
- * 금고가 준 한 줄마다 일정 시작 10분 전에 도는 일회성 작업을 건다. 그 시각에는 금고가 꺼져 있어도 뜬다.
+ * 비서가 다음 행동의 그 자리에서 먼저 말한다(#60). 15분 전송([PushWorker]) 때 앞으로 2시간의 일정을 서랍에 묻고,
+ * 서랍이 준 한 줄마다 일정 시작 10분 전에 도는 일회성 작업을 건다. 그 시각에는 서랍이 꺼져 있어도 뜬다.
  * 규칙은 [AheadRules]. 알림은 "비서" 채널이라 OS 설정에서 따로 끈다.
  */
 class AheadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
@@ -44,7 +44,7 @@ class AheadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         const val EXTRA_ASK = "ask"
         private const val WINDOW_MS = 2 * 3_600_000L
 
-        /** 금고에 앞으로 2시간을 묻고 예약한다. 와이파이 전용이 켜져 있고 데이터 요금 망이면 묻지 않는다. */
+        /** 서랍에 앞으로 2시간을 묻고 예약한다. 와이파이 전용이 켜져 있고 데이터 요금 망이면 묻지 않는다. */
         suspend fun ask(context: Context) {
             if (!EndpointConfig.isConfigured(context) || !PushPrefs.mayAutoSend(context)) return
             for ((w, r, ref) in AheadPrefs.pending(context)) {

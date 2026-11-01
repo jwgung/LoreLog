@@ -15,7 +15,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 
 /**
- * 대화 화면의 "말하기". 마이크로 한마디를 녹음해 금고의 /transcribe(사용자가 고른 음성 모델)로 받아 적는다.
+ * 대화 화면의 "말하기". 마이크로 한마디를 녹음해 서랍의 /transcribe(사용자가 고른 음성 모델)로 받아 적는다.
  * 상시 기록이 마이크를 쥐고 있으면 잠깐 양보시키고, 끝나면 되돌린다. 녹음 파일은 전사 뒤 바로 지운다.
  */
 object Dictation {
@@ -28,7 +28,7 @@ object Dictation {
     private const val SAMPLE_RATE = 16_000
     private const val MAX_MS = 120_000L
 
-    /** 말하기에 쓸 수 있나(금고 주소가 있나). */
+    /** 말하기에 쓸 수 있나(서랍 주소가 있나). */
     fun available(context: Context): Boolean = ServerTranscriber.isReady(context)
 
     /** 듣는 중이면 끝내고 받아 적기로 넘어간다. */

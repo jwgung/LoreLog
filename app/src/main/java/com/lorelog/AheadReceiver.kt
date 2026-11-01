@@ -14,7 +14,7 @@ import kotlinx.coroutines.launch
  * 비서가 먼저 말한 알림(#60)의 버튼과 밀어서 지우기.
  * - 「이미 했어요」: 그 요청은 답한 것이라는 정정(#10, right "답함").
  * - 「이건 아니에요」: 그 요청은 요청이 아니라는 정정(right "-").
- *   금고에 닿지 않으면 남겨 두었다가 다음 15분 전송 때 보낸다.
+ *   서랍에 닿지 않으면 남겨 두었다가 다음 15분 전송 때 보낸다.
  * - 밀어서 지움: 그 조직의 횟수를 센다. 세 번이면 그 조직은 멈춘다.
  */
 class AheadReceiver : BroadcastReceiver() {
@@ -50,7 +50,7 @@ class AheadReceiver : BroadcastReceiver() {
         const val EXTRA_WRONG = "wrong"
         const val EXTRA_EDGE = "edge"
         const val EXTRA_STOP = "stop"
-        /** 금고의 corrections::ANSWERED 와 같은 말 */
+        /** 서랍의 corrections::ANSWERED 와 같은 말 */
         const val ANSWERED = "답함"
     }
 }

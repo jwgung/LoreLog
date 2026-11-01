@@ -7,7 +7,7 @@ import java.time.format.TextStyle
 import java.util.Locale
 
 /**
- * 일정 화면(#62)의 규칙. 서버의 GET /schedule 이 금고에 들어온 일정(CalDAV와 이 폰의 캘린더)에 비서 메모를 얹어
+ * 일정 화면(#62)의 규칙. 서버의 GET /schedule 이 서랍에 들어온 일정(CalDAV와 이 폰의 캘린더)에 비서 메모를 얹어
  * 돌려주고, 화면은 오늘부터 7일을 보여 주며 한 주씩 앞뒤로 넘긴다. 메모는 서버의 템플릿 문장이고, 추정은 서버가
  * "추정"이라고 쓴다. 화면은 그대로 보여 줄 뿐 새로 만들지 않는다.
  */
