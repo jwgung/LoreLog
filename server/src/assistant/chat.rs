@@ -156,7 +156,7 @@ pub fn chat_answer(
         .filter(|t| t.get("role").and_then(Value::as_str) == Some("user"))
         .map(|t| pystr(t.get("text")))
         .collect();
-    let past = if matches!(fix, Some(Fix::Summary(_) | Fix::Answer(_))) || ask.is_some() {
+    let past = if matches!(fix, Some(Fix::Summary(_) | Fix::Answer(_))) || answered.is_some() {
         None
     } else {
         recall(message, day, &said, asked_before(turns).as_deref())

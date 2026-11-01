@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::Librarian;
 use super::graph::Structure;
+use super::index::name_key;
 use crate::config::Paths;
 
 /// the fewest record words, and matters, a group is asked about with
@@ -26,6 +27,8 @@ const EVERY: i64 = 7;
 const SHOWN: usize = 3;
 /// stages an order is asked with at most
 const STAGES: usize = 4;
+/// the longest group name kept from an answer (as long as the model's own names: [`super::graph::group_labels`])
+const GROUP_NAME: usize = 40;
 
 /// A group to ask about.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -361,16 +364,25 @@ pub fn answer(
             .map(|a| a.iter().filter_map(|x| x.as_str().and_then(a_name)).collect())
             .unwrap_or_default()
     };
-    let group = v.get("group").and_then(serde_json::Value::as_str).and_then(a_name).filter(|g| g != "-");
-    let out: Vec<String> = list("out").into_iter().filter(|w| q.words.contains(w)).collect();
+    // a name is the one asked about or one the user said: the reader does not make names up (nor do the records it
+    // quotes, whose words could ask it to)
+    let said = name_key(message);
+    let named = |n: &String| *n == q.group || q.order.contains(n) || said.contains(&name_key(n));
+    let raw = v.get("group").and_then(serde_json::Value::as_str).unwrap_or("").trim();
+    let group = a_name(raw).filter(|g| g != "-" && g.chars().count() <= GROUP_NAME && named(g));
+    if !raw.is_empty() && group.is_none() {
+        return Ok(None); // a name no one said: not read as an answer, the question stays open
+    }
+    let words: Vec<&String> = q.words.iter().filter(|w| a_name(w).as_ref() == Some(*w)).collect();
+    let out: Vec<String> = list("out").into_iter().filter(|w| words.contains(&w)).collect();
     let mut fixes = Vec::new();
     let mut changed = "묶지 않고 지금처럼 둘게요".to_string();
     if let Some(g) = &group {
-        for w in &q.words {
+        for w in &words {
             let right = if out.contains(w) { "-" } else { g.as_str() };
-            fixes.extend(Correction::new(w, right, Ref::Label(w.clone())));
+            fixes.extend(Correction::new(w, right, Ref::Label((*w).clone())));
         }
-        let kept: Vec<&String> = q.words.iter().filter(|w| !out.contains(w)).collect();
+        let kept: Vec<&&String> = words.iter().filter(|w| !out.contains(w)).collect();
         let mut shown = kept.iter().take(SHOWN).map(|w| w.as_str()).collect::<Vec<_>>().join("·");
         if kept.len() > SHOWN {
             shown += &format!(" 외 {}개", kept.len() - SHOWN);
@@ -386,7 +398,7 @@ pub fn answer(
         // the order, by the user's name for the group; asked only of a group of states
         let order: Vec<String> = list("order").into_iter().map(|s| if s == q.group { g.clone() } else { s }).collect();
         if !q.order.is_empty()
-            && let Some(o) = stages(&order.join("→")).filter(|o| o.contains(g))
+            && let Some(o) = stages(&order.join("→")).filter(|o| o.contains(g) && o.iter().all(|s| s == g || named(s)))
         {
             let wrong = q.order.join("→");
             fixes.extend(Correction::new(&wrong, &o.join("→"), Ref::Order(g.clone())));

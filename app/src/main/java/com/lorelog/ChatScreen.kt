@@ -85,6 +85,8 @@ private sealed class Msg {
     data class Mine(val text: String) : Msg()
     data class Assistant(val text: String, val sources: List<DiaryClient.Source> = emptyList()) : Msg()
     data class Fixed(val wrong: String, val right: String) : Msg()
+    /** 사용자의 답이 바꾼 것 한 줄(구조 질문에 답했을 때, #63) */
+    data class Changed(val text: String) : Msg()
     data object Typing : Msg()
 }
 
@@ -206,6 +208,7 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
             }
             extra.add(Msg.Assistant(r.reply, r.sources))
             if (wrong != null) extra.add(Msg.Fixed(wrong, t))
+            else r.changed?.let { extra.add(Msg.Changed(it)) }
         }
     }
 
@@ -318,6 +321,10 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
                         Text(m.wrong, color = Sub, fontSize = 13.sp, textDecoration = TextDecoration.LineThrough)
                         Text(m.right, color = Color(0xFFC9CED8), fontSize = 13.sp)
                     }
+                    is Msg.Changed -> Text(
+                        m.text, color = Sub, fontSize = 12.sp, lineHeight = 18.sp,
+                        modifier = Modifier.widthIn(max = bubbleMax()).padding(start = 8.dp),
+                    )
                 }
             }
         }

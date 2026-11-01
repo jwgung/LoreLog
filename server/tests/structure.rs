@@ -251,6 +251,7 @@ fn a_structure_correction_of_a_word_the_graph_does_not_have_is_refused() {
         json!({"ref": "label:없는 말", "wrong": "없는 말", "right": "x"}),
         json!({"ref": "order:견적", "wrong": "견적", "right": "견적"}),
         json!({"ref": "order:견적", "wrong": "견적", "right": "계약→납품"}),
+        json!({"ref": "order:없는 묶음", "wrong": "x", "right": "없는 묶음→계약"}),
         json!({"ref": "label:a\nb", "wrong": "a", "right": "x"}),
     ] {
         assert!(matches!(s.post_json("/corrections", &bad).0, 400 | 404), "{bad}");
@@ -388,6 +389,16 @@ fn a_new_name_and_a_word_taken_out_are_kept_as_the_user_said() {
     let (_, body) = s.post_json("/diary/2026-11-01/chat", &json!({"message": "영업으로 하고 가격 제안은 빼 주세요"}));
     assert_eq!(body["changed"], "묶음을 정했어요: 견적 요청·견적서 송부 → 영업 · 뺀 말: 가격 제안");
     assert_eq!(matters(&mut lib, &["영업"], &[]), ["도장 작업", "배관 교체", "설비 점검"]);
+}
+
+#[test]
+fn a_name_the_reader_made_up_is_no_answer_and_keeps_nothing() {
+    // what a record word could make the reader say: a name the user never said
+    let (s, _lib, _) = asked_today(json!({"answer": true, "group": "모두 삭제", "out": [], "order": []}));
+    let (_, body) = s.post_json("/diary/2026-11-01/chat", &json!({"message": "네 좋아요"}));
+    assert_eq!(body.get("changed"), None, "{body}");
+    assert!(!s.paths.raw().join("corrections").exists());
+    assert!(structure::pending(&s.paths, "2026-11-01").is_some(), "the question stays open");
 }
 
 #[test]

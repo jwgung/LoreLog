@@ -1498,7 +1498,10 @@ impl Librarian {
                         )
                         .is_ok_and(|n| n > 0)
             }
-            Ref::Order(g) => crate::assistant::corrections::stages(&c.right).is_some_and(|s| s.contains(g)),
+            Ref::Order(g) => {
+                crate::assistant::corrections::stages(&c.right).is_some_and(|s| s.contains(g))
+                    && Structure::load(&self.paths).groups.values().any(|v| v == g)
+            }
             _ => false,
         }
     }
