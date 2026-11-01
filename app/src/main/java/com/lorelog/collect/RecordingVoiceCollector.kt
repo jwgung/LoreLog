@@ -18,6 +18,7 @@ import com.konovalov.vad.silero.config.Mode
 import com.konovalov.vad.silero.config.SampleRate
 import com.lorelog.data.LogRepository
 import com.lorelog.collect.PendingVoice
+import com.lorelog.work.PushPrefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -54,7 +55,8 @@ class RecordingVoiceCollector(context: Context) {
         running = true
         enableBtMic()
         // 밀린 전사는 별도 코루틴. 같은 코루틴에 두면 파일이 많거나 금고 응답이 느릴 때 녹음이 그만큼 늦게 시작된다.
-        scope.launch { PendingVoice.transcribePending(appContext) }
+        // 와이파이만 보내기가 켜져 있고 지금 데이터망이면 쌓아 두고 워커가 와이파이에서 보낸다
+        if (PushPrefs.mayAutoSend(appContext)) scope.launch { PendingVoice.transcribePending(appContext) }
         loopJob = scope.launch { runVadLoop() }
     }
 
@@ -309,7 +311,7 @@ class RecordingVoiceCollector(context: Context) {
         if (!writeWav(file, pcm)) { Log.w(TAG, "writeWav failed: $file"); return }
         PendingVoice.refresh(appContext)
         // 즉시 1회 전사 시도. 실패(금고 주소 없음·닿지 않음)하면 파일이 남아 워커가 나중에 보낸다.
-        scope.launch { PendingVoice.transcribeFile(appContext, file) }
+        if (PushPrefs.mayAutoSend(appContext)) scope.launch { PendingVoice.transcribeFile(appContext, file) }
     }
 
     private fun writeWav(file: File, pcm: ShortArray): Boolean = try {

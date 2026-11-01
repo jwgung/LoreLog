@@ -575,7 +575,7 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
             )
         }
         Text(
-            "15분마다 하는 자동 전송을 데이터 요금이 없는 망(와이파이)에서만 합니다. 그동안 기록은 폰에 쌓여 있다가 와이파이에 붙으면 보냅니다. '지금 전송'은 바로 보냅니다.",
+            "기록과 음성(녹음·통화 녹음)의 자동 전송을 데이터 요금이 없는 망(와이파이)에서만 합니다. 그동안은 폰에 쌓여 있다가 와이파이에 붙으면 보냅니다. '지금 전송', '밀린 음성 전사', 말하기는 바로 보냅니다.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 

@@ -61,7 +61,7 @@ LoreLog의 핵심이자 가장 까다로운 부분. 구글 실시간 인식기�
 
 - **JSON** — 전체 기록을 공유 시트로.
 - **폴더(증분 NDJSON)** — 새 기록만 앱 전용 외부 폴더에 append. `Android/data/com.lorelog/files/exports/`. USB·adb로 PC에서 접근.
-- **금고로 전송(HTTP)** — 금고 주소로 새 기록을 15분마다 POST(`Authorization: Bearer <토큰>`, NDJSON). 설정 → 금고 연결의 **"와이파이에 연결됐을 때만 보내기"**를 켜면 자동 전송은 와이파이(데이터 요금 없는 망)에서만 하고, 그동안 기록은 폰에 쌓인다(기본 꺼짐). "지금 전송"은 바로 보낸다.
+- **금고로 전송(HTTP)** — 금고 주소로 새 기록을 15분마다 POST(`Authorization: Bearer <토큰>`, NDJSON). 설정 → 금고 연결의 **"와이파이에 연결됐을 때만 보내기"**를 켜면 기록과 음성(녹음·통화 녹음)의 자동 전송을 와이파이(데이터 요금 없는 망)에서만 하고, 그동안은 폰에 쌓인다(기본 꺼짐). "지금 전송", "밀린 음성 전사", 말하기는 바로 보낸다.
 - 모든 줄에 `type`(voice/app/screen/location/notification/comm/calendar/conversation)이 붙는다.
 - **전체 삭제** — 확인 후 모든 기록 삭제(되돌릴 수 없음).
 

@@ -61,7 +61,7 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 
 - **JSON** — the whole log via the share sheet.
 - **Folder (incremental NDJSON)** — only new records appended to an app-private external folder. `Android/data/com.lorelog/files/exports/`. Reachable from a PC over USB/adb.
-- **Send to the vault (HTTP)** — POST new records to your vault address every 15 minutes (`Authorization: Bearer <token>`, NDJSON). Turn on **"와이파이에 연결됐을 때만 보내기"** (send only on Wi-Fi) under settings → 금고 연결 and the automatic send runs only on an unmetered network (Wi-Fi); records wait on the phone until then. It is off by default. "지금 전송" (send now) always sends right away.
+- **Send to the vault (HTTP)** — POST new records to your vault address every 15 minutes (`Authorization: Bearer <token>`, NDJSON). Turn on **"와이파이에 연결됐을 때만 보내기"** (send only on Wi-Fi) under settings → 금고 연결 and the automatic sends of records and voice (recordings, call recordings) run only on an unmetered network (Wi-Fi); they wait on the phone until then. It is off by default. "지금 전송" (send now), "밀린 음성 전사" (send pending voice) and dictation always send right away.
 - Every line carries a `type` (voice/app/screen/location/notification/comm/calendar/conversation).
 - **Delete all** — wipes every record after confirmation (irreversible).
 

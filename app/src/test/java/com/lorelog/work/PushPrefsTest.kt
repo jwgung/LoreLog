@@ -14,4 +14,11 @@ class PushPrefsTest {
     fun defaultSendsOnAnyConnectedNetwork() {
         assertEquals(NetworkType.CONNECTED, PushPrefs.networkType(wifiOnly = false))
     }
+
+    @Test
+    fun wifiOnlyHoldsAutomaticSendsOffWifiButNotWhatTheUserAsksFor() {
+        assertEquals(false, PushPrefs.mayAutoSend(wifiOnly = true, unmetered = false))
+        assertEquals(true, PushPrefs.mayAutoSend(wifiOnly = true, unmetered = true))
+        assertEquals(true, PushPrefs.mayAutoSend(wifiOnly = false, unmetered = false))
+    }
 }
