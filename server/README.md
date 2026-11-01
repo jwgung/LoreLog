@@ -2,7 +2,7 @@
 
 하루의 기록(메일·일정·메신저·폰·음성·PC)을 한 곳에 모아 하루를 정리하고, 사용자의 정정과 회고로 "이 사람이 어떤 사람인지"를 쌓는 개인 시스템의 서버 쪽.
 
-- 청사진: 사서(수집·색인)와 비서(능동)와 금고(그 사람 것). 문서는 `docs/`에 둔다.
+- 청사진: 사서(수집·색인)와 비서(능동)와 서랍(그 사람 것). 문서는 `docs/`에 둔다.
 - 앱(폰)은 이 저장소 루트의 `app/`, 데스크톱 앱과 PC 수집기는 `desktop/`, 서버는 `server/`.
 - 개인 데이터와 비밀값은 이 저장소에 두지 않는다(`.gitignore` 참고). 설정은 OS 설정 위치의 `vault-sync/`(리눅스 `~/.config/vault-sync/`, `LIFE_CONF_DIR`로 옮길 수 있다).
 
@@ -15,7 +15,7 @@ Rust 라이브러리 crate 하나(`life-server`)와 그 위의 실행 파일들�
 | `life-ingest` | 폰·PC가 보내는 기록 수신, 일기·대화·할 일·받아쓰기 HTTP API | `src/http.rs`, `src/store.rs`, `src/filestore.rs`, `src/jobs.rs` |
 | `life-diary` | 하루 정리, 대화, 할 일, 메신저 허용을 명령줄로 | `src/assistant/` |
 | `life-librarian` | 사서. 모든 날의 기록에 색인을 얹고 찾아 준다(`update`, `rebuild`, `search`, `stats`). 사람 색인(메일 머리말·일정 참석자)으로 사람으로도 찾는다(#22). `eval FILE`은 질문과 나와야 할 기록의 짝으로 재현율@8을 잰다(말 그대로, 비서가 고른 검색어). 평가셋은 실제 이름·제목이 들어 있어 저장소 밖(`<data>/eval/`)에 둔다 | `src/librarian/`, `src/librarian/eval.rs`, `src/assistant/recall.rs` |
-| `mail-sync`, `calendar-sync` | 메일·일정을 금고의 `Mail/`, `Events/` 노트로(서버에는 읽기만) | `src/collect/sync.rs`, `src/collect/` |
+| `mail-sync`, `calendar-sync` | 메일·일정을 서랍의 `Mail/`, `Events/` 노트로(서버에는 읽기만) | `src/collect/sync.rs`, `src/collect/` |
 | `mail-files` | 보낸·받은 메일의 첨부 원본을 그대로 보관(`raw/files/<앞 2자>/<sha256>` + `raw/mailfile/<날짜>.ndjson`, 줄마다 `direction: sent|received`). 변환·요약 없이, 상대 주소는 복사하지 않는다 | `src/collect/sync.rs`, `src/collect/mailfiles.rs` |
 
 - `web/` 비어 있다. 나중에 설정·관리자 웹(로그인, 사용자 관리)이 들어갈 자리. 비서 화면은 폰 앱과 데스크톱 앱(`desktop/shell/ui/`)이 가지고, `life-ingest`는 API만 낸다.
@@ -37,7 +37,7 @@ Rust 툴체인(저장소 루트의 `rust-toolchain.toml`)이 필요하다. `depl
 
 ## 어느 OS에서든
 
-라이브러리는 어느 OS에서든 그대로 돌아야 한다. 기본 위치는 `config::OsDirs`로 OS에서 고르고(리눅스는 예전 그대로 `~/.config/vault-sync`, `~/.local/share/life`, `~/.local/share/vault-sync`. `XDG_CONFIG_HOME`·`XDG_DATA_HOME`을 두면 그쪽을 따른다), 한 OS의 경로를 코드에 적지 않는다. 1시간마다의 동기화 같은 예약 실행은 라이브러리가 아니라 그것을 띄우는 쪽의 일이다(상시 서버는 `deploy/systemd/life-sync.timer`, 금고를 PC에 둔 데스크톱 앱은 앱이 1시간마다). 라이브러리 안의 스레드는 요청 하나에 딸린 일회성 작업(하루 정리 만들기, 할 일 뽑기)뿐이다. 받기 서버를 다른 프로그램 안에서 띄울 때는 `host`(설정 읽기 `IngestSettings`·`Models`, 모델 저장·실행 중 바꾸기 `save_models`·`LiveModels`, 토큰 만들기, 주소별로 띄우고 멈추기)를 쓴다. 모을 곳 설정(메일 계정·폴더, 달력)은 `collect::sources`가 하고, `life add`와 데스크톱 설정 화면이 같이 쓴다. 라이브러리가 남기는 기록은 `log` 매크로로 나가고 띄우는 쪽이 받을 곳을 한 번 정한다(`logging`): 명령줄 도구는 예전처럼 stderr, 데스크톱 앱은 파일. 동기화 작업(메일, 첨부, 일정, 사서 갱신)은 `collect::sync`의 함수이고, 출력하지 않고 줄 단위로 알린다. 명령줄 도구는 그 줄을 stdout·stderr로 옮기고, 데스크톱 앱은 같은 함수를 직접 부른다.
+라이브러리는 어느 OS에서든 그대로 돌아야 한다. 기본 위치는 `config::OsDirs`로 OS에서 고르고(리눅스는 예전 그대로 `~/.config/vault-sync`, `~/.local/share/life`, `~/.local/share/vault-sync`. `XDG_CONFIG_HOME`·`XDG_DATA_HOME`을 두면 그쪽을 따른다), 한 OS의 경로를 코드에 적지 않는다. 1시간마다의 동기화 같은 예약 실행은 라이브러리가 아니라 그것을 띄우는 쪽의 일이다(상시 서버는 `deploy/systemd/life-sync.timer`, 서랍을 PC에 둔 데스크톱 앱은 앱이 1시간마다). 라이브러리 안의 스레드는 요청 하나에 딸린 일회성 작업(하루 정리 만들기, 할 일 뽑기)뿐이다. 받기 서버를 다른 프로그램 안에서 띄울 때는 `host`(설정 읽기 `IngestSettings`·`Models`, 모델 저장·실행 중 바꾸기 `save_models`·`LiveModels`, 토큰 만들기, 주소별로 띄우고 멈추기)를 쓴다. 모을 곳 설정(메일 계정·폴더, 달력)은 `collect::sources`가 하고, `life add`와 데스크톱 설정 화면이 같이 쓴다. 라이브러리가 남기는 기록은 `log` 매크로로 나가고 띄우는 쪽이 받을 곳을 한 번 정한다(`logging`): 명령줄 도구는 예전처럼 stderr, 데스크톱 앱은 파일. 동기화 작업(메일, 첨부, 일정, 사서 갱신)은 `collect::sync`의 함수이고, 출력하지 않고 줄 단위로 알린다. 명령줄 도구는 그 줄을 stdout·stderr로 옮기고, 데스크톱 앱은 같은 함수를 직접 부른다.
 
 ## 테스트
 

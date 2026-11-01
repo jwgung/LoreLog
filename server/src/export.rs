@@ -37,7 +37,7 @@ This zip is everything LoreLog keeps of your records, in open formats.
 
 Not included: the search index and caches (made again from the above), and your passwords and token.
 
-# LoreLog 금고 내보내기
+# LoreLog 서랍 내보내기
 
 LoreLog가 가진 기록 전부를 열린 형식으로 담았습니다. 위 목록과 같습니다: 원본 기록(NDJSON, 고치지 않음),
 해시로 보관한 파일, 할 일, 노트(Markdown), 설정, 그리고 확인용 해시 목록(`sha256sum -c MANIFEST.sha256`).

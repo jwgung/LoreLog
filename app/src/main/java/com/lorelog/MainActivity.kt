@@ -143,7 +143,7 @@ class MainActivity : ComponentActivity() {
 
 internal val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
-/** 처음 켰을 때 금고 주소가 없으면 한 번 묻는다(#69). '나중에'를 누르면 다시 묻지 않는다(서랍의 '금고 연결'은 그대로). */
+/** 처음 켰을 때 서랍 주소가 없으면 한 번 묻는다(#69). '나중에'를 누르면 다시 묻지 않는다(서랍의 '서랍 연결'은 그대로). */
 @Composable
 private fun ConnectPrompt(onConnect: () -> Unit) {
     val context = LocalContext.current
@@ -153,11 +153,11 @@ private fun ConnectPrompt(onConnect: () -> Unit) {
     val close = { prefs.edit().putBoolean("connect_asked", true).apply(); open = false }
     AlertDialog(
         onDismissRequest = close,
-        title = { Text("금고에 연결할까요?") },
+        title = { Text("서랍에 연결할까요?") },
         text = {
             Text(
-                "기록은 이 폰에 쌓이고, 금고(데스크톱 앱이나 내 서버)에 연결하면 그리로 보냅니다. " +
-                    "데스크톱 앱의 '처음 설정' ④에서 연결 코드를 복사해 '금고 연결'에 붙여 넣으세요. " +
+                "기록은 이 폰에 쌓이고, 서랍(데스크톱 앱이나 내 서버)에 연결하면 그리로 보냅니다. " +
+                    "데스크톱 앱의 '처음 설정' ④에서 연결 코드를 복사해 '서랍 연결'에 붙여 넣으세요. " +
                     "폰과 PC에 Tailscale을 설치해 같은 계정으로 로그인해 두어야 합니다.",
             )
         },
@@ -266,7 +266,7 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
     var page by remember { mutableStateOf(initialPage) }
     androidx.activity.compose.BackHandler(enabled = page != null) { page = null }
     val pageTitle = when (page) {
-        "collect" -> "수집 항목"; "stt" -> "음성"; "server" -> "금고 연결"; "call" -> "통화 녹음 가져오기"
+        "collect" -> "수집 항목"; "stt" -> "음성"; "server" -> "서랍 연결"; "call" -> "통화 녹음 가져오기"
         "notif" -> "알림·표시"; "export" -> "내보내기·삭제"; "version" -> "버전·업데이트"
         "log" -> "최근 기록"; else -> "수집·연동 설정"
     }
@@ -390,8 +390,8 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
 
         androidx.compose.foundation.layout.Spacer(Modifier.padding(top = 4.dp))
         DrawerRow("수집 항목", "${collectorOn.values.count { it }}개 켜짐") { page = "collect" }
-        DrawerRow("음성", "금고에서 전사") { page = "stt" }
-        DrawerRow("금고 연결", if (EndpointConfig.isConfigured(context)) "주소 있음" else "주소 없음") { page = "server" }
+        DrawerRow("음성", "서랍에서 전사") { page = "stt" }
+        DrawerRow("서랍 연결", if (EndpointConfig.isConfigured(context)) "주소 있음" else "주소 없음") { page = "server" }
         DrawerRow("통화 녹음 가져오기", if (callFolder != null) "폴더 지정됨" else "미지정") { page = "call" }
         DrawerRow("알림·표시", "") { page = "notif" }
         DrawerRow("내보내기·삭제", "") { page = "export" }
@@ -404,7 +404,7 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
         Text(
             "라이브 통화는 OS가 막습니다. 전화앱 설정에서 '통화 자동 녹음'을 켜 두고, " +
                 "그 저장 폴더(예: 내장메모리 Recordings/Call)를 지정하면 새 녹음을 전사합니다. " +
-                "전사는 금고가 합니다. 금고에 닿지 않으면 다음 확인 때 다시 보냅니다. 15분마다 새 녹음을 확인합니다.",
+                "전사는 서랍이 합니다. 서랍에 닿지 않으면 다음 확인 때 다시 보냅니다. 15분마다 새 녹음을 확인합니다.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
@@ -567,7 +567,7 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
 
         }
         if (page == "server") {
-        Text("기록을 금고로 보내는 주소입니다. 음성 전사와 일기도 같은 주소와 토큰을 씁니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("기록을 서랍으로 보내는 주소입니다. 음성 전사와 일기도 같은 주소와 토큰을 씁니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(
             "데스크톱 앱의 '처음 설정' ④ 폰 연결에서 '연결 코드 보기' → 복사한 한 줄을 여기에 붙여 넣으면 주소와 토큰이 채워집니다. " +
                 "폰과 PC 모두 Tailscale에 같은 계정으로 로그인해 두세요. 코드에는 토큰이 들어 있으니 남에게 보내지 마세요.",
@@ -589,7 +589,7 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
                     endpointToken = r.token
                     EndpointConfig.set(context, r.url, r.token)
                     connectCode = ""
-                    LogRepository.setStatus("연결 코드로 금고 주소와 토큰을 넣고 저장했습니다")
+                    LogRepository.setStatus("연결 코드로 서랍 주소와 토큰을 넣고 저장했습니다")
                 }
                 is ConnectCode.Parsed.Bad -> LogRepository.setStatus(r.reason)
             }
@@ -598,7 +598,7 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
         OutlinedTextField(
             value = endpointUrl,
             onValueChange = { endpointUrl = it },
-            label = { Text("금고 주소 (엔드포인트 URL)") },
+            label = { Text("서랍 주소 (엔드포인트 URL)") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -691,8 +691,8 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
         }
         if (page == "stt") {
         Text(
-            "녹음은 VAD로 말할 때만, 화면 꺼져도 유지됩니다. 폰은 전사하지 않습니다. 말소리는 금고로 보내 금고에서 고른 음성 모델로 전사합니다. " +
-                "금고에 닿지 않으면 음성파일(voice_pending)로 쌓였다가 닿으면 보냅니다.",
+            "녹음은 VAD로 말할 때만, 화면 꺼져도 유지됩니다. 폰은 전사하지 않습니다. 말소리는 서랍으로 보내 서랍에서 고른 음성 모델로 전사합니다. " +
+                "서랍에 닿지 않으면 음성파일(voice_pending)로 쌓였다가 닿으면 보냅니다.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Row(
@@ -731,8 +731,8 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
-            if (EndpointConfig.isConfigured(context)) "✓ 금고 주소 있음 — '금고 연결'의 주소와 토큰을 그대로 씁니다."
-            else "⚠ '금고 연결'에 주소가 없어 전사가 안 됩니다(음성은 쌓아 둡니다). 주소와 토큰을 넣으세요.",
+            if (EndpointConfig.isConfigured(context)) "✓ 서랍 주소 있음 — '서랍 연결'의 주소와 토큰을 그대로 씁니다."
+            else "⚠ '서랍 연결'에 주소가 없어 전사가 안 됩니다(음성은 쌓아 둡니다). 주소와 토큰을 넣으세요.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
@@ -741,7 +741,7 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
             coroutineScope.launch {
                 val done = PendingVoice.transcribePending(context)
                 LogRepository.setStatus(
-                    if (done > 0) "밀린 음성 ${done}건 전사됨" else "전사할 밀린 음성이 없거나 금고에 닿지 않습니다",
+                    if (done > 0) "밀린 음성 ${done}건 전사됨" else "전사할 밀린 음성이 없거나 서랍에 닿지 않습니다",
                 )
             }
         }) { Text("밀린 음성 전사 (${PendingVoice.pendingCount(context)}건 대기)") }

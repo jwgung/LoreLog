@@ -68,7 +68,7 @@ $("toConnect").onclick = async () => {
   try { await invoke("choose_mode", { mode: "connect" }); location.reload(); } catch (e) { msg(String(e), false); }
 };
 $("toHost").onclick = async () => {
-  if (!confirm("이 PC에 금고를 두고 이 앱이 서버를 돌립니다. 다른 서버의 기록은 옮겨지지 않습니다. 바꿀까요?")) return;
+  if (!confirm("이 PC에 서랍을 두고 이 앱이 서버를 돌립니다. 다른 서버의 기록은 옮겨지지 않습니다. 바꿀까요?")) return;
   msg("서버를 띄우는 중…", true);
   try { await invoke("choose_mode", { mode: "host" }); location.reload(); } catch (e) { msg(String(e), false); }
 };

@@ -44,10 +44,10 @@
 <body>
   <a class="back" href="index.html">← 대화로</a>
   <h1 style="margin-top:10px;">설정</h1>
-  <p class="sub">금고, 모을 곳, 감시 폴더, 시작.</p>
+  <p class="sub">서랍, 모을 곳, 감시 폴더, 시작.</p>
   <p id="welcomeBox" class="note" hidden><a class="back" href="welcome.html">처음 설정 안내 다시 열기</a> — 모델, 메일·일정, 폰 연결 코드, 첫 동기화를 단계로 봅니다.</p>
 
-  <h2>금고</h2>
+  <h2>서랍</h2>
   <div id="hostBox" hidden>
     <p class="sub">이 PC에 있습니다. 이 앱이 서버를 돌립니다.</p>
     <label>다른 기기(폰·다른 PC)에 넣을 주소</label>
@@ -55,9 +55,9 @@
     <p id="devAddrNote" class="note"></p>
     <label>토큰</label>
     <div class="row"><input id="devToken" type="password" readonly /><button id="showToken" class="secondary" style="margin-top:0;">보기</button><button id="copyToken" class="secondary" style="margin-top:0;">복사</button></div>
-    <p class="note">토큰을 아는 기기는 이 금고에 쓰고 읽을 수 있습니다. 내 기기에만 넣으세요.</p>
+    <p class="note">토큰을 아는 기기는 이 서랍에 쓰고 읽을 수 있습니다. 내 기기에만 넣으세요.</p>
     <p id="hostNote" class="note"></p>
-    <button id="toConnect" class="secondary">다른 곳의 금고에 연결하기로 바꾸기</button>
+    <button id="toConnect" class="secondary">다른 곳의 서랍에 연결하기로 바꾸기</button>
   </div>
   <div id="connectBox" hidden>
     <p class="sub">다른 곳의 서버에 연결합니다.</p>
@@ -67,7 +67,7 @@
     <input id="token" type="password" placeholder="저장되어 있으면 비워 두면 유지됩니다" />
     <div class="row">
       <button id="save">저장하고 대화 열기</button>
-      <button id="toHost" class="secondary">이 PC에 금고 두기로 바꾸기</button>
+      <button id="toHost" class="secondary">이 PC에 서랍 두기로 바꾸기</button>
     </div>
   </div>
   <div id="msg" class="msg"></div>
@@ -98,7 +98,7 @@
 
     <hr />
     <h2>주소록</h2>
-    <p class="sub">CardDAV 주소록을 가져와 사람을 알아보는 데 씁니다. 주소록이 가진 것은 다 금고에 남기고(사진만 뺌), 사서는 이름과 메일·전화를 씁니다. 계정은 메일과 같습니다.</p>
+    <p class="sub">CardDAV 주소록을 가져와 사람을 알아보는 데 씁니다. 주소록이 가진 것은 다 서랍에 남기고(사진만 뺌), 사서는 이름과 메일·전화를 씁니다. 계정은 메일과 같습니다.</p>
     <label for="bServer">CardDAV 서버</label><input id="bServer" type="text" placeholder="https://carddav.example.com/" />
     <div class="row"><button id="bFind" class="secondary">주소록 찾기</button><button id="bOff" class="secondary" hidden>주소록 모으지 않기</button></div>
     <ul id="bList" class="checks"></ul>
@@ -125,8 +125,8 @@
     <div id="syncMsg" class="msg"></div>
     <label class="check plain"><input id="asks" type="checkbox" /> 비서가 사서에게 물은 질문 남기기 (질문·검색어·찾은 기록의 위치만, 90일)</label>
     <p id="asksMsg" class="note">사서가 무엇을 놓치는지 재려고 남깁니다. 기록의 내용과 비서의 답은 남기지 않습니다.</p>
-    <h2>금고가 가진 것</h2>
-    <p class="sub">이 금고가 나에 대해 가진 기록입니다. 출처와 날짜를 골라 지울 수 있습니다. 지우면 원본, 노트, 다른 기록이 쓰지 않는 첨부, 아직 받지 않은 할 일 제안이 함께 지워지고 검색에서도 빠집니다.</p>
+    <h2>서랍이 가진 것</h2>
+    <p class="sub">이 서랍이 나에 대해 가진 기록입니다. 출처와 날짜를 골라 지울 수 있습니다. 지우면 원본, 노트, 다른 기록이 쓰지 않는 첨부, 아직 받지 않은 할 일 제안이 함께 지워지고 검색에서도 빠집니다.</p>
     <table><thead><tr><th>출처</th><th>파일</th><th>크기</th><th>기간</th></tr></thead><tbody id="heldRows"></tbody></table>
     <div class="row">
       <select id="forgetSource"></select>
@@ -138,8 +138,8 @@
     </div>
     <p id="forgetMsg" class="note"></p>
     <h2>백업</h2>
-    <p class="sub">하루 한 번, 동기화할 때 금고 전체를 비밀번호로 봉인해 고른 폴더(외장 디스크, NAS 등)에 둡니다. 만든 뒤 다시 열어 해시로 확인하고, 최근 7일과 4주를 남깁니다. 비밀번호는 이 PC에만 저장되니 다른 곳에도 적어 두세요. 잃으면 백업을 열 수 없습니다.</p>
-    <label for="backupDir">백업 폴더 (금고 밖)</label>
+    <p class="sub">하루 한 번, 동기화할 때 서랍 전체를 비밀번호로 봉인해 고른 폴더(외장 디스크, NAS 등)에 둡니다. 만든 뒤 다시 열어 해시로 확인하고, 최근 7일과 4주를 남깁니다. 비밀번호는 이 PC에만 저장되니 다른 곳에도 적어 두세요. 잃으면 백업을 열 수 없습니다.</p>
+    <label for="backupDir">백업 폴더 (서랍 밖)</label>
     <input id="backupDir" type="text" placeholder="예: E:\LoreLog 백업" />
     <label for="backupPw">비밀번호 (8자 이상)</label>
     <input id="backupPw" type="password" placeholder="저장되어 있으면 바꿀 때만 입력" />
@@ -149,8 +149,8 @@
     </div>
     <p id="backupMsg" class="note"></p>
     <h2>내보내기</h2>
-    <p class="sub">이 금고가 가진 기록 전부를 zip 하나로 내려받기 폴더에 담습니다: 원본 기록(NDJSON), 보관한 파일, 노트(Markdown), 할 일, 확인용 해시 목록. 검색 색인과 비밀번호·토큰은 넣지 않습니다.</p>
-    <button id="exportVault" class="secondary">금고 내보내기</button>
+    <p class="sub">이 서랍이 가진 기록 전부를 zip 하나로 내려받기 폴더에 담습니다: 원본 기록(NDJSON), 보관한 파일, 노트(Markdown), 할 일, 확인용 해시 목록. 검색 색인과 비밀번호·토큰은 넣지 않습니다.</p>
+    <button id="exportVault" class="secondary">서랍 내보내기</button>
     <p id="exportMsg" class="note"></p>
   </div>
 

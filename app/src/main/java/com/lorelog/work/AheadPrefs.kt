@@ -3,7 +3,7 @@ package com.lorelog.work
 import android.content.Context
 
 /**
- * 비서가 먼저 말한 것의 기록(#60): 이미 말한 일정, 조직별로 밀어서 지운 횟수, 멈춘 조직, 금고가 꺼져 있어
+ * 비서가 먼저 말한 것의 기록(#60): 이미 말한 일정, 조직별로 밀어서 지운 횟수, 멈춘 조직, 서랍이 꺼져 있어
  * 아직 못 보낸 버튼 정정.
  */
 object AheadPrefs {

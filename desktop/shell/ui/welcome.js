@@ -94,7 +94,7 @@ $("codeShow").onclick = async () => {
     $("qr").src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(c.qr_svg);
     for (const id of ["code", "qr", "codeCopy", "codeHide"]) $(id).hidden = false;
     $("codeShow").hidden = true;
-    say("codeMsg", "폰의 '금고 연결'에서 '연결 코드 붙여 넣기'에 넣습니다. QR은 폰의 카메라나 QR 앱으로 읽어 나온 글을 복사해 붙여 넣으면 됩니다.", true);
+    say("codeMsg", "폰의 '서랍 연결'에서 '연결 코드 붙여 넣기'에 넣습니다. QR은 폰의 카메라나 QR 앱으로 읽어 나온 글을 복사해 붙여 넣으면 됩니다.", true);
   } catch (e) { say("codeMsg", String(e), false); }
 };
 $("codeHide").onclick = () => { hideCode(); say("codeMsg", "", true); };

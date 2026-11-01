@@ -76,7 +76,7 @@ pub fn set(paths: &Paths, dir: &Path, password: &str) -> Result<(), String> {
         return Err(format!("{}: 없는 폴더입니다", dir.display()));
     }
     if inside(dir, &paths.data) || inside(dir, &paths.vault) || inside(dir, &paths.conf) {
-        return Err("백업은 금고 밖의 폴더(외장 디스크, NAS 등)에 둡니다".into());
+        return Err("백업은 서랍 밖의 폴더(외장 디스크, NAS 등)에 둡니다".into());
     }
     if password.chars().count() < MIN_PASSWORD {
         return Err(format!("비밀번호는 {MIN_PASSWORD}자 이상입니다"));

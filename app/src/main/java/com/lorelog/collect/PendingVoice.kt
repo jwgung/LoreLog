@@ -12,7 +12,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
- * 전사 대기 음성 보관소. 전사는 금고가 한다(사용자가 고른 음성 모델, [ServerTranscriber]). 금고에 닿지 않으면
+ * 전사 대기 음성 보관소. 전사는 서랍이 한다(사용자가 고른 음성 모델, [ServerTranscriber]). 서랍에 닿지 않으면
  * 말 구간 WAV 를 앱 전용 외부 폴더에 쌓아 두고(= 음성파일로 보관/반출 가능), 닿으면 그 파일을 보낸다.
  * 파일명에 화자 라벨을 담아(seg_<ts>__<라벨>.wav) 나중에 전사해도 라벨을 보존한다.
  * 대기 파일은 타임라인에 "전사 대기"로 보이고 바로 들어볼 수 있다([refresh]).
@@ -84,8 +84,8 @@ object PendingVoice {
     }
 
     /**
-     * 밀린 음성파일을 오래된 것부터 금고로 보내 전사. 전사한 개수 반환. 금고 주소가 없으면 0(파일은 그대로 보관).
-     * 한 번 실패하면(금고에 닿지 않음) 멈춘다. 남은 파일은 워커가 나중에 이어서 보낸다.
+     * 밀린 음성파일을 오래된 것부터 서랍으로 보내 전사. 전사한 개수 반환. 서랍 주소가 없으면 0(파일은 그대로 보관).
+     * 한 번 실패하면(서랍에 닿지 않음) 멈춘다. 남은 파일은 워커가 나중에 이어서 보낸다.
      */
     suspend fun transcribePending(context: Context): Int = withContext(Dispatchers.IO) {
         refresh(context)

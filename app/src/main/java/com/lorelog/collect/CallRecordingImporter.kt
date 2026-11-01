@@ -50,7 +50,7 @@ object CallRecordingImporter {
             return@withContext 0
         }
         if (!ServerTranscriber.isReady(context)) {
-            LogRepository.setStatus("통화 녹음을 전사하려면 금고 주소가 필요합니다")
+            LogRepository.setStatus("통화 녹음을 전사하려면 서랍 주소가 필요합니다")
             return@withContext 0
         }
         val dir = DocumentFile.fromTreeUri(context, tree) ?: return@withContext 0
@@ -74,7 +74,7 @@ object CallRecordingImporter {
             if (ok && tmp.length() > 0) {
                 val text = ServerTranscriber.transcribe(context, tmp)
                 if (text == null) {
-                    // 금고에 닿지 않음: 처리됨으로 적지 않아 다음 확인 때 다시 보낸다
+                    // 서랍에 닿지 않음: 처리됨으로 적지 않아 다음 확인 때 다시 보낸다
                     tmp.delete()
                     break
                 }
