@@ -4,57 +4,24 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>설정 — LoreLog</title>
-  <style>
-    :root { color-scheme: light dark; }
-    * { box-sizing: border-box; }
-    body { font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 20px;
-           background: Canvas; color: CanvasText; }
-    h1 { font-size: 20px; margin: 0 0 4px; }
-    p.sub { margin: 0 0 20px; opacity: 0.7; font-size: 13px; }
-    label { display: block; margin: 14px 0 4px; font-weight: 600; font-size: 13px; }
-    .autostart label.check { display: flex; gap: 8px; align-items: center; font-weight: 400; }
-    .autostart h3 { margin: 22px 0 4px; font-size: 15px; }
-    input[type=text], input[type=password] { width: 100%; padding: 9px 10px; border: 1px solid GrayText;
-           border-radius: 8px; background: Field; color: FieldText; }
-    button { margin-top: 16px; padding: 9px 14px; border: 0; border-radius: 8px; background: AccentColor;
-             color: AccentColorText; font-weight: 600; cursor: pointer; }
-    button.secondary { background: transparent; color: AccentColor; border: 1px solid AccentColor; }
-    .row { display: flex; gap: 8px; align-items: center; }
-    .row input { flex: 1; }
-    ul { list-style: none; padding: 0; margin: 8px 0 0; }
-    li { display: flex; justify-content: space-between; align-items: center; padding: 6px 0;
-         border-bottom: 1px solid color-mix(in srgb, GrayText 30%, transparent); font-size: 13px; }
-    li button { margin: 0; padding: 3px 8px; font-size: 12px; background: transparent; color: GrayText;
-                border: 1px solid GrayText; }
-    hr { border: 0; border-top: 1px solid color-mix(in srgb, GrayText 30%, transparent); margin: 22px 0; }
-    .msg { margin-top: 10px; font-size: 13px; min-height: 18px; }
-    .ok { color: green; } .err { color: crimson; }
-    .note { font-size: 12px; opacity: 0.7; margin-top: 4px; word-break: break-all; }
-    a.back { font-size: 13px; color: AccentColor; text-decoration: none; }
-    h2 { font-size: 16px; margin: 0 0 4px; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
-    ul.checks li { justify-content: flex-start; gap: 8px; }
-    label.check.plain { display: flex; gap: 8px; align-items: center; font-weight: 400; margin-top: 18px; }
-    ul.checks label { margin: 0; font-weight: 400; display: flex; gap: 8px; align-items: center; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    td { padding: 6px 4px; border-bottom: 1px solid color-mix(in srgb, GrayText 30%, transparent); vertical-align: top; }
-    td.state.ok { color: green; } td.state.err { color: crimson; }
-  </style>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="app.css" />
 </head>
-<body>
+<body class="form">
   <a class="back" href="index.html">← 대화로</a>
   <h1 style="margin-top:10px;">설정</h1>
   <p class="sub">서랍, 모을 곳, 감시 폴더, 시작.</p>
   <p id="welcomeBox" class="note" hidden><a class="back" href="welcome.html">처음 설정 안내 다시 열기</a> — 모델, 메일·일정, 폰 연결 코드, 첫 동기화를 단계로 봅니다.</p>
 
+  <section class="card">
   <h2>서랍</h2>
   <div id="hostBox" hidden>
     <p class="sub">이 PC에 있습니다. 이 앱이 서버를 돌립니다.</p>
     <label>다른 기기(폰·다른 PC)에 넣을 주소</label>
-    <div class="row"><input id="devAddr" type="text" readonly /><button id="copyAddr" class="secondary" style="margin-top:0;">복사</button></div>
+    <div class="row"><input id="devAddr" type="text" readonly /><button id="copyAddr" class="secondary">복사</button></div>
     <p id="devAddrNote" class="note"></p>
     <label>토큰</label>
-    <div class="row"><input id="devToken" type="password" readonly /><button id="showToken" class="secondary" style="margin-top:0;">보기</button><button id="copyToken" class="secondary" style="margin-top:0;">복사</button></div>
+    <div class="row"><input id="devToken" type="password" readonly /><button id="showToken" class="secondary">보기</button><button id="copyToken" class="secondary">복사</button></div>
     <p class="note">토큰을 아는 기기는 이 서랍에 쓰고 읽을 수 있습니다. 내 기기에만 넣으세요.</p>
     <p id="hostNote" class="note"></p>
     <button id="toConnect" class="secondary">다른 곳의 서랍에 연결하기로 바꾸기</button>
@@ -71,9 +38,10 @@
     </div>
   </div>
   <div id="msg" class="msg"></div>
+  </section>
 
   <div id="hostOnly" hidden>
-    <hr />
+    <section class="card">
     <h2>메일</h2>
     <p class="sub">받은·보낸 메일을 노트로, 첨부는 원본 그대로 보관합니다. 서버의 메일은 바꾸지 않습니다(읽기만).</p>
     <div class="grid">
@@ -87,7 +55,9 @@
     <button id="mSave" hidden>메일 저장</button>
     <div id="mMsg" class="msg"></div>
 
-    <hr />
+    </section>
+
+    <section class="card">
     <h2>일정</h2>
     <p class="sub">CalDAV 달력의 일정을 노트로 가져옵니다. 계정은 메일과 같습니다.</p>
     <label for="cServer">CalDAV 서버</label><input id="cServer" type="text" placeholder="https://caldav.example.com/" />
@@ -96,7 +66,9 @@
     <button id="cSave" hidden>일정 저장</button>
     <div id="cMsg" class="msg"></div>
 
-    <hr />
+    </section>
+
+    <section class="card">
     <h2>주소록</h2>
     <p class="sub">CardDAV 주소록을 가져와 사람을 알아보는 데 씁니다. 주소록이 가진 것은 다 서랍에 남기고(사진만 뺌), 사서는 이름과 메일·전화를 씁니다. 계정은 메일과 같습니다.</p>
     <label for="bServer">CardDAV 서버</label><input id="bServer" type="text" placeholder="https://carddav.example.com/" />
@@ -105,7 +77,9 @@
     <button id="bSave" hidden>주소록 저장</button>
     <div id="bMsg" class="msg"></div>
 
-    <hr />
+    </section>
+
+    <section class="card">
     <h2>모델</h2>
     <p class="sub">대화와 음성 인식에 쓸 모델(OpenAI 호환 주소). 내 기록이 이 주소로 가므로, 내가 정한 곳만 넣으세요.</p>
     <div class="grid">
@@ -117,7 +91,9 @@
     <div class="row"><button id="modelCheck" class="secondary">대화 모델 연결 확인</button><button id="modelSave">모델 저장</button></div>
     <div id="modelMsg" class="msg"></div>
 
-    <hr />
+    </section>
+
+    <section class="card">
     <h2>동기화</h2>
     <p class="sub">켤 때 한 번, 그 뒤 1시간마다 메일·일정을 가져오고 색인을 갱신합니다.</p>
     <table id="syncTable"><tbody></tbody></table>
@@ -125,6 +101,9 @@
     <div id="syncMsg" class="msg"></div>
     <label class="check plain"><input id="asks" type="checkbox" /> 비서가 사서에게 물은 질문 남기기 (질문·검색어·찾은 기록의 위치만, 90일)</label>
     <p id="asksMsg" class="note">사서가 무엇을 놓치는지 재려고 남깁니다. 기록의 내용과 비서의 답은 남기지 않습니다.</p>
+    </section>
+
+    <section class="card">
     <h2>서랍이 가진 것</h2>
     <p class="sub">이 서랍이 나에 대해 가진 기록입니다. 출처와 날짜를 골라 지울 수 있습니다. 지우면 원본, 노트, 다른 기록이 쓰지 않는 첨부, 아직 받지 않은 할 일 제안이 함께 지워지고 검색에서도 빠집니다.</p>
     <table><thead><tr><th>출처</th><th>파일</th><th>크기</th><th>기간</th></tr></thead><tbody id="heldRows"></tbody></table>
@@ -137,6 +116,9 @@
       <button id="forgetGo" class="secondary" disabled>지우기</button>
     </div>
     <p id="forgetMsg" class="note"></p>
+    </section>
+
+    <section class="card">
     <h2>백업</h2>
     <p class="sub">하루 한 번, 동기화할 때 서랍 전체를 비밀번호로 봉인해 고른 폴더(외장 디스크, NAS 등)에 둡니다. 만든 뒤 다시 열어 해시로 확인하고, 최근 7일과 4주를 남깁니다. 비밀번호는 이 PC에만 저장되니 다른 곳에도 적어 두세요. 잃으면 백업을 열 수 없습니다.</p>
     <label for="backupDir">백업 폴더 (서랍 밖)</label>
@@ -148,24 +130,28 @@
       <button id="backupNow" class="secondary">지금 백업</button>
     </div>
     <p id="backupMsg" class="note"></p>
+    </section>
+
+    <section class="card">
     <h2>내보내기</h2>
     <p class="sub">이 서랍이 가진 기록 전부를 zip 하나로 내려받기 폴더에 담습니다: 원본 기록(NDJSON), 보관한 파일, 노트(Markdown), 할 일, 확인용 해시 목록. 검색 색인과 비밀번호·토큰은 넣지 않습니다.</p>
     <button id="exportVault" class="secondary">서랍 내보내기</button>
     <p id="exportMsg" class="note"></p>
+    </section>
   </div>
 
-  <hr />
-
-  <h1 style="font-size:16px;">감시 폴더</h1>
+  <section class="card">
+  <h2>감시 폴더</h2>
   <p class="sub">여기 더한 폴더의 맨 위 파일이 서버에 원본 그대로 보관됩니다. 폴더는 직접 고릅니다 — 아무것도 더하지 않으면 보관하지 않습니다.</p>
   <div class="row">
     <input id="watchdir" type="text" placeholder="예: C:\Users\나\Downloads" />
-    <button id="addwatch" style="margin-top:0;">더하기</button>
+    <button id="addwatch">더하기</button>
   </div>
   <ul id="watchlist"></ul>
+  </section>
 
-  <section class="autostart">
-    <h3>시작</h3>
+  <section class="card autostart">
+    <h2>시작</h2>
     <label class="check"><input id="autostart" type="checkbox" /> 로그인할 때 자동으로 시작 (트레이에서 수집만 하고 창은 열지 않습니다)</label>
     <p id="autostartMsg" class="note"></p>
   </section>

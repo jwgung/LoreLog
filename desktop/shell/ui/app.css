@@ -1,9 +1,9 @@
 :root {
   --bg: #f6f7f9; --card: #fff; --text: #1b1f27; --muted: #6b7280; --line: #e3e6eb;
-  --accent: #3b6ef5; --accent-text: #fff; --user: #3b6ef5; --user-text: #fff; --warn: #c2410c; --sel: #fff3e0;
+  --accent: #3b6ef5; --accent-text: #fff; --user: #3b6ef5; --user-text: #fff; --warn: #c2410c; --sel: #fff3e0; --ok: #15803d; --err: #dc2626;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #111317; --card: #1a1d23; --text: #e8eaee; --muted: #9aa1ad; --line: #2a2e36; --accent: #6b93ff; --accent-text: #0b0d12; --user: #335ee0; --user-text: #fff; --warn: #fb923c; --sel: #3a2c18; }
+  :root { --bg: #111317; --card: #1a1d23; --text: #e8eaee; --muted: #9aa1ad; --line: #2a2e36; --accent: #6b93ff; --accent-text: #0b0d12; --user: #335ee0; --user-text: #fff; --warn: #fb923c; --sel: #3a2c18; --ok: #4ade80; --err: #f87171; }
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -109,3 +109,53 @@ details { margin-top: 8px; } summary { cursor: pointer; color: var(--muted); fon
   main.showTodos #chat { display: none; }
   main.showTodos #todos { display: block; }
 }
+
+/* Form pages (settings, first-run guide): the same colors, type and corners as the chat */
+html:has(body.form), body.form { height: auto; }
+body.form { max-width: 760px; margin: 0 auto; padding: 20px 20px 48px; font-size: 15px; }
+body.form h1 { font-size: 22px; margin: 0 0 4px; }
+body.form h2 { font-size: 17px; margin: 18px 0 4px; }
+body.form h3 { font-size: 15px; margin: 18px 0 4px; }
+body.form p { margin: 6px 0; }
+body.form p.sub, body.form .note { color: var(--muted); font-size: 13px; }
+body.form p.sub { margin: 0 0 16px; }
+body.form .note { word-break: break-all; margin-top: 4px; }
+body.form label { display: block; margin: 12px 0 4px; font-weight: 600; font-size: 13px; }
+body.form input[type=text], body.form input[type=password] { width: 100%; }
+body.form button { margin-top: 12px; padding: 9px 16px; border: 0; border-radius: 12px; background: var(--accent); color: var(--accent-text); font-weight: 600; }
+body.form button.secondary { background: var(--card); color: var(--text); border: 1px solid var(--line); }
+body.form button.link { background: transparent; color: var(--accent); padding: 0; margin: 0; font-weight: 400; text-decoration: underline; }
+body.form button:disabled { opacity: .5; cursor: default; }
+body.form a.back { font-size: 14px; color: var(--muted); text-decoration: none; }
+body.form a { color: var(--accent); }
+body.form hr { border: 0; border-top: 1px solid var(--line); margin: 22px 0; }
+body.form .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+body.form .row input { flex: 1; min-width: 160px; }
+body.form .row button { margin-top: 0; }
+body.form .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+body.form ul { list-style: none; padding: 0; margin: 8px 0 0; }
+body.form ul.plain { list-style: disc; padding-left: 20px; font-size: 13px; }
+body.form ul.plain li { margin: 3px 0; }
+body.form li { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+body.form ul.plain li { display: list-item; border: 0; padding: 0; }
+body.form li button { margin: 0; padding: 3px 10px; font-size: 12px; background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; font-weight: 400; }
+body.form ul.checks li { justify-content: flex-start; gap: 8px; padding: 4px 0; }
+body.form ul.checks label, body.form label.check { margin: 0; font-weight: 400; display: flex; gap: 8px; align-items: center; }
+body.form label.check.plain { margin-top: 18px; }
+body.form .autostart h3 { margin: 22px 0 4px; }
+body.form code { font-size: 12px; padding: 1px 4px; border-radius: 4px; background: var(--line); }
+body.form .msg { max-width: none; padding: 0; border: 0; border-radius: 0; background: none; margin-top: 8px; font-size: 13px; min-height: 18px; white-space: normal; }
+body.form .ok, body.form td.state.ok { color: var(--ok); }
+body.form .err, body.form td.state.err { color: var(--err); }
+body.form .warn { border-left: 3px solid var(--warn); padding: 8px 12px; font-size: 13px; border-radius: 0 10px 10px 0; background: color-mix(in srgb, var(--warn) 8%, transparent); }
+body.form table { width: 100%; border-collapse: collapse; font-size: 13px; }
+body.form td { padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+body.form section, body.form .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 4px 18px 18px; margin-top: 14px; }
+body.form ol.steps { list-style: none; display: flex; gap: 6px; padding: 0; margin: 10px 0 4px; flex-wrap: wrap; font-size: 12px; }
+body.form ol.steps li { display: block; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); background: var(--card); }
+body.form ol.steps li.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+body.form .nav { display: flex; justify-content: space-between; margin-top: 18px; }
+body.form #qr { display: block; width: 220px; height: 220px; margin-top: 10px; background: #fff; padding: 8px; border-radius: 12px; }
+body.form select { font: inherit; color: inherit; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px; }
+body.form th { text-align: left; font-weight: 600; font-size: 12px; color: var(--muted); padding: 6px 4px; border-bottom: 1px solid var(--line); }
+body.form .autostart h2 { margin-top: 18px; }
