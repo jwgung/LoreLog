@@ -44,6 +44,8 @@ pub enum Fix<'a> {
     Summary(&'a str),
     /// an answer of the assistant
     Answer(&'a str),
+    /// not a correction: the answer to the structure question shown right before it (#63)
+    Ask,
 }
 
 /// An answer, what changed when the message corrected something (one line, #10), and the records the librarian
@@ -78,22 +80,44 @@ pub fn chat_answer(
     fix: Option<Fix>,
 ) -> anyhow::Result<Answer> {
     let draft = read_day(paths, day);
+    let exists = draft["exists"].as_bool().unwrap_or(false);
+    let question = draft["question"].as_str().filter(|q| exists && !q.is_empty());
+    let log = chat_log(paths, day);
+    // the structure question (#63): this message answers it when it was shown right before (the desktop says so),
+    // or when it is the day's question and the user said nothing since it was asked
+    let ask = match fix {
+        None | Some(Fix::Ask) => crate::librarian::structure::pending(paths, day).filter(|a| {
+            fix == Some(Fix::Ask)
+                || (question == Some(a.what.question.as_str())
+                    && !log.iter().any(|t| {
+                        t.get("role").and_then(Value::as_str) == Some("user")
+                            && t.get("ts").and_then(Value::as_i64).unwrap_or(0) >= a.ts
+                    }))
+        }),
+        _ => None,
+    };
     let correction = match fix {
         Some(Fix::Summary(w)) => Correction::new(w, message, Ref::Summary(day.into())),
         Some(Fix::Answer(w)) => Correction::new(w, message, Ref::Chat(day.into())),
-        None => None,
+        None | Some(Fix::Ask) => None,
     };
     match fix {
         Some(Fix::Summary(w)) => {
             save_user(paths, day, &json!({"append": true, "corrections": [{"wrong": w, "right": message}]}))?
         }
         Some(Fix::Answer(_)) => {} // about the chat, not the day's note: kept below with the others
-        None => save_user(paths, day, &json!({"append": true, "reflection": message}))?,
+        None | Some(Fix::Ask) => save_user(paths, day, &json!({"append": true, "reflection": message}))?,
     }
     if let Some(c) = &correction {
         super::corrections::keep(paths, c)?;
     }
-    let exists = draft["exists"].as_bool().unwrap_or(false);
+    // what the answer changed; a model that cannot read it leaves the question open
+    let answered = ask.as_ref().and_then(|a| {
+        crate::librarian::structure::answer(paths, model, a, message)
+            .inspect_err(|e| log::warn!("structure answer not read: {}", crate::errors::kind(&e.to_string())))
+            .ok()
+            .flatten()
+    });
     let mut head = format!("{CHAT_SYSTEM}\n\n[오늘 기록]\n{}", build_context(paths, day, false));
     if exists {
         let lines: Vec<String> =
@@ -108,18 +132,22 @@ pub fn chat_answer(
         head += &format!("\n\n{fixed}");
     }
     let mut msgs = vec![json!({"role": "system", "content": head})];
-    if let Some(q) = draft["question"].as_str().filter(|q| exists && !q.is_empty()) {
+    if let Some(q) = question {
         msgs.push(json!({"role": "assistant", "content": q}));
     }
-    let log = chat_log(paths, day);
     let turns = &log[log.len().saturating_sub(12)..];
     for t in turns {
         msgs.push(json!({"role": pystr(t.get("role")), "content": pystr(t.get("text"))}));
     }
+    // the structure question shown on its own (not the day's question): a turn of the chat from now on
+    let shown = ask.as_ref().map(|a| a.what.question.clone()).filter(|q| question != Some(q.as_str()));
+    if let Some(q) = &shown {
+        msgs.push(json!({"role": "assistant", "content": q}));
+    }
     let user = match fix {
         Some(Fix::Summary(w)) => wrap_correction(w, message),
         Some(Fix::Answer(w)) => wrap_answer_correction(w, message),
-        None => message.to_string(),
+        None | Some(Fix::Ask) => message.to_string(),
     };
     // what the librarian found is quoted material (other people's mail, messengers): it goes into the user's turn, not
     // among the rules, and is not kept as the user's words. A correction is about today, not a question.
@@ -128,14 +156,22 @@ pub fn chat_answer(
         .filter(|t| t.get("role").and_then(Value::as_str) == Some("user"))
         .map(|t| pystr(t.get("text")))
         .collect();
-    let past = if fix.is_some() { None } else { recall(message, day, &said, asked_before(turns).as_deref()) };
+    let past = if matches!(fix, Some(Fix::Summary(_) | Fix::Answer(_))) || ask.is_some() {
+        None
+    } else {
+        recall(message, day, &said, asked_before(turns).as_deref())
+    };
     let asked = past.as_ref().and_then(|p| super::recall::asked_candidates(&p.section));
     let quoted = past.as_ref().map(|p| format!("{}\n\n", super::recall::quote(&p.section))).unwrap_or_default();
     msgs.push(json!({"role": "user", "content": format!("{quoted}{user}")}));
     let reply = model.complete(&msgs, Ask::new(0.5, 300, false, 120))?.trim().to_string();
+    if let Some(q) = &shown {
+        append_chat(paths, day, "assistant", q)?;
+    }
     append_chat(paths, day, "user", &user)?;
     append_turn(paths, day, "assistant", &reply, asked.as_deref())?;
-    Ok(Answer { reply, changed: correction.map(|c| c.changed()), sources: past.map(|p| p.sources).unwrap_or_default() })
+    let changed = answered.map(|a| a.changed).or_else(|| correction.map(|c| c.changed()));
+    Ok(Answer { reply, changed, sources: past.map(|p| p.sources).unwrap_or_default() })
 }
 
 /// When the last turn asked back which person was meant: the question, the reply and its candidates, for the words of

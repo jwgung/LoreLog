@@ -87,7 +87,12 @@ fn reader() -> Arc<FakeModel> {
 }
 
 fn world() -> (Server, Librarian) {
-    let s = Server::start();
+    world_with(FakeModel::plain())
+}
+
+/// The world, with a server whose model answers the chat with this.
+fn world_with(chat: Arc<FakeModel>) -> (Server, Librarian) {
+    let s = Server::start_full(1024 * 1024, chat);
     fs::create_dir_all(s.paths.vault.join("Events")).unwrap();
     mail(
         &s,
@@ -307,4 +312,104 @@ fn a_group_that_changed_since_the_last_update_waits() {
     assert!(
         structure::note(&lib).unwrap().unwrap().starts_with("'견적 요청·견적서 송부·가격 제안 외 1개'를 '견적'으로")
     );
+}
+
+// ---------- the user's answer (#63) ----------
+
+/// A chat model that reads an answer to the structure question as `read` says, and is otherwise plain.
+fn talk(read: Value) -> Arc<FakeModel> {
+    let plain = FakeModel::plain();
+    FakeModel::new(move |msgs| {
+        let system = msgs[0]["content"].as_str().unwrap_or("");
+        if system.starts_with("사용자가 비서의 묶음 질문에 한 답을 읽는다") {
+            return Ok(read.to_string());
+        }
+        (plain.answer)(msgs)
+    })
+}
+
+/// The world, the structure question asked in the evening of 2026-11-01, and the server's model.
+fn asked_today(read: Value) -> (Server, Librarian, Arc<FakeModel>) {
+    let model = talk(read);
+    let (s, lib) = world_with(model.clone());
+    structure::note(&lib).unwrap();
+    structure::note(&lib).unwrap();
+    assert_eq!(evening(&s, "2026-11-01"), QUOTE);
+    (s, lib, model)
+}
+
+/// How many times the model was asked to read an answer.
+fn reads(m: &FakeModel) -> usize {
+    m.asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|msgs| msgs[0]["content"].as_str().unwrap_or("").starts_with("사용자가 비서의 묶음"))
+        .count()
+}
+
+#[test]
+fn a_yes_to_the_evening_question_makes_the_group_and_its_order_the_users() {
+    let (s, mut lib, _) =
+        asked_today(json!({"answer": true, "group": "견적", "out": [], "order": ["견적", "계약", "납품"]}));
+    let (status, body) = s.post_json("/diary/2026-11-01/chat", &json!({"message": "네 그렇게 봐 주세요"}));
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["changed"], "묶음을 정했어요: 견적 요청·견적서 송부·가격 제안 → 견적 · 순서: 견적→계약→납품");
+    // the user's from now on: said as the user's stage, and the order judges what did not follow
+    let a = Ask1 { states: vec!["견적".into()], ..Ask1::default() };
+    let hits = lib.graph_lookup(&a, DAY, 10).unwrap();
+    assert!(hits.iter().any(|h| h["state"]["group"] == "견적"), "{hits:?}");
+    assert_eq!(matters(&mut lib, &["견적"], &["계약"]), ["도장 작업"]);
+    // answered: not asked again, and the next message is a message
+    assert_eq!(s.get("/diary/2026-11-01").1.get("ask"), None);
+    let (_, again) = s.post_json("/diary/2026-11-01/chat", &json!({"message": "고마워요"}));
+    assert_eq!(again.get("changed"), None, "{again}");
+}
+
+#[test]
+fn a_new_name_and_a_word_taken_out_are_kept_as_the_user_said() {
+    let (s, mut lib, _) = asked_today(json!({"answer": true, "group": "영업", "out": ["가격 제안"], "order": []}));
+    let (_, body) = s.post_json("/diary/2026-11-01/chat", &json!({"message": "영업으로 하고 가격 제안은 빼 주세요"}));
+    assert_eq!(body["changed"], "묶음을 정했어요: 견적 요청·견적서 송부 → 영업 · 뺀 말: 가격 제안");
+    assert_eq!(matters(&mut lib, &["영업"], &[]), ["도장 작업", "배관 교체", "설비 점검"]);
+}
+
+#[test]
+fn a_no_keeps_nothing_and_the_group_stays_the_models_and_is_not_asked_again() {
+    let (s, mut lib, _) = asked_today(json!({"answer": true, "group": "", "out": [], "order": []}));
+    let (_, body) = s.post_json("/diary/2026-11-01/chat", &json!({"message": "아니요, 묶지 마세요"}));
+    assert_eq!(body["changed"], "묶지 않고 지금처럼 둘게요");
+    assert!(!s.paths.raw().join("corrections").exists(), "nothing of the user's structure kept");
+    assert!(matters(&mut lib, &["견적"], &[]).contains(&"센서 설치".to_string()), "still used inside");
+    assert_eq!(structure::note(&lib).unwrap().as_deref(), Some(ROLES));
+}
+
+#[test]
+fn something_else_said_is_no_answer_and_only_what_follows_the_question_is_read() {
+    let (s, _lib, m) = asked_today(json!({"answer": false}));
+    let (_, body) = s.post_json("/diary/2026-11-01/chat", &json!({"message": "오늘 점심 맛있었어요"}));
+    assert_eq!(body.get("changed"), None, "{body}");
+    assert!(structure::pending(&s.paths, "2026-11-01").is_some(), "the question stays open");
+    assert_eq!(reads(&m), 1);
+    s.post_json("/diary/2026-11-01/chat", &json!({"message": "네 좋아요"}));
+    assert_eq!(reads(&m), 1, "said after something else: not read as the answer");
+}
+
+#[test]
+fn on_another_day_the_desktop_shows_the_open_question_once_and_says_what_its_answer_answers() {
+    let (s, _lib, _) = asked_today(json!({"answer": true, "group": "견적", "out": [], "order": []}));
+    let day = "2026-11-02";
+    evening(&s, day);
+    let (_, draft) = s.get(&format!("/diary/{day}"));
+    assert_eq!(draft["question"], "어떠셨어요?");
+    assert_eq!(draft["ask"], QUOTE, "{draft}");
+    // without saying so, a message of another day is no answer to it
+    s.post_json(&format!("/diary/{day}/chat"), &json!({"message": "네"}));
+    assert!(structure::pending(&s.paths, day).is_some());
+    let (_, body) = s.post_json(&format!("/diary/{day}/chat"), &json!({"message": "네 좋아요", "about": "ask"}));
+    assert_eq!(body["changed"], "묶음을 정했어요: 견적 요청·견적서 송부·가격 제안 → 견적", "{body}");
+    let (_, chat) = s.get(&format!("/diary/{day}/chat"));
+    let texts: Vec<&str> = chat["messages"].as_array().unwrap().iter().map(|m| m["text"].as_str().unwrap()).collect();
+    assert_eq!(texts[2..4], [QUOTE, "네 좋아요"], "the question is a turn of the chat now: {texts:?}");
+    assert_eq!(s.get(&format!("/diary/{day}")).1.get("ask"), None);
 }

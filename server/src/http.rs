@@ -261,6 +261,7 @@ fn chat_post(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, 
     };
     let wrong = payload.get("wrong").and_then(Value::as_str).filter(|w| !w.is_empty());
     let fix = match (wrong, payload.get("about").and_then(Value::as_str)) {
+        (None, Some("ask")) => Some(chat::Fix::Ask),
         (None, _) => None,
         (Some(w), None | Some("summary")) => Some(chat::Fix::Summary(w)),
         (Some(w), Some("answer")) => Some(chat::Fix::Answer(w)),
@@ -347,7 +348,15 @@ fn graph_node(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply,
 }
 
 fn draft_get(app: &App, _: &Request, caps: &regex::Captures) -> Result<Reply, Reply> {
-    let (status, body) = app.jobs.draft(&app.paths, &app.model, &caps[1], caps.get(2).is_some());
+    let (status, mut body) = app.jobs.draft(&app.paths, &app.model, &caps[1], caps.get(2).is_some());
+    // the structure question not answered yet, for a screen to show once as the chat's first line (#63); not when it
+    // is the day's question already
+    if status == 200
+        && let Some(a) = crate::librarian::structure::pending(&app.paths, &caps[1])
+        && body["question"].as_str() != Some(a.what.question.as_str())
+    {
+        body["ask"] = json!(a.what.question);
+    }
     Ok(Reply::new(status, body))
 }
 
