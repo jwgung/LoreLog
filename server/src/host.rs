@@ -101,15 +101,9 @@ impl Models {
         }
     }
 
-    /// The same with the given defaults where nothing is set (the home server keeps its old ones).
-    pub fn or(self, d: &Models) -> Models {
-        let pick = |a: String, b: &str| if a.is_empty() { b.to_string() } else { a };
-        Models {
-            chat_url: pick(self.chat_url, &d.chat_url),
-            chat_model: pick(self.chat_model, &d.chat_model),
-            asr_url: pick(self.asr_url, &d.asr_url),
-            asr_model: pick(self.asr_model, &d.asr_model),
-        }
+    /// The chat model at these addresses.
+    pub fn chat(&self) -> Http {
+        Http { url: self.chat_url.clone(), model: self.chat_model.clone() }
     }
 
     pub fn app(&self, paths: Paths, s: &IngestSettings) -> App {
@@ -118,7 +112,7 @@ impl Models {
             &s.token,
             &s.cls,
             s.max_bytes,
-            Arc::new(Http { url: self.chat_url.clone(), model: self.chat_model.clone() }),
+            Arc::new(self.chat()),
             Arc::new(HttpSpeech { url: self.asr_url.clone(), model: self.asr_model.clone() }),
         )
     }
@@ -266,20 +260,13 @@ impl LiveModels {
 
 impl crate::llm::Model for LiveModels {
     fn complete(&self, messages: &[serde_json::Value], ask: crate::llm::Ask) -> anyhow::Result<String> {
-        let m = self.get();
-        if m.chat_url.is_empty() {
-            anyhow::bail!("대화 모델 주소가 설정되지 않았습니다");
-        }
-        Http { url: m.chat_url, model: m.chat_model }.complete(messages, ask)
+        self.get().chat().complete(messages, ask)
     }
 }
 
 impl crate::llm::Speech for LiveModels {
     fn transcribe(&self, audio: &[u8]) -> anyhow::Result<String> {
         let m = self.get();
-        if m.asr_url.is_empty() {
-            anyhow::bail!("음성 모델 주소가 설정되지 않았습니다");
-        }
         HttpSpeech { url: m.asr_url, model: m.asr_model }.transcribe(audio)
     }
 }

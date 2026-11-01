@@ -4,7 +4,6 @@ use std::process::ExitCode;
 
 use life_server::assistant::{chat, context, diary, senders, todos};
 use life_server::config::Paths;
-use life_server::llm::Http;
 use serde_json::{Value, json};
 
 const HELP: &str = "\
@@ -38,7 +37,7 @@ fn text_of(v: &Value, key: &str) -> Result<String, String> {
 
 fn run(args: &[String], paths: &Paths, day: &str) -> Result<(), String> {
     let flag = |f: &str| args.iter().any(|a| a == f);
-    let model = Http::from_env();
+    let model = life_server::host::Models::load(paths).chat();
     if flag("--todos") {
         println!("{}", todos::view(paths));
     } else if flag("--todos-extract") {

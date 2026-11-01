@@ -28,33 +28,38 @@ pub trait Model: Send + Sync {
     fn complete(&self, messages: &[Value], ask: Ask) -> anyhow::Result<String>;
 }
 
-/// The local model server.
+/// The user's model server (`LIFE_LLM_URL`, `LIFE_LLM_MODEL`: see [`crate::host::Models`]). There is no built-in one:
+/// with no address it answers that none is set.
 pub struct Http {
     pub url: String,
     pub model: String,
 }
 
 impl Http {
-    /// From `LIFE_LLM_URL` and `LIFE_LLM_MODEL`, with the home server's defaults.
-    pub fn from_env() -> Http {
-        let get = |k: &str, d: &str| std::env::var(k).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| d.to_string());
-        Http { url: get("LIFE_LLM_URL", "http://10.100.3.232:8000/v1"), model: get("LIFE_LLM_MODEL", "ultivis-vl") }
-    }
-}
-
-impl Model for Http {
-    /// thinking is off: the answers are short and the wait matters.
-    fn complete(&self, messages: &[Value], ask: Ask) -> anyhow::Result<String> {
+    /// thinking is off: the answers are short and the wait matters. vLLM and llama.cpp read the chat template's
+    /// switch, Ollama reads `reasoning_effort`.
+    fn body(&self, messages: &[Value], ask: Ask) -> Value {
         let mut body = json!({
             "model": self.model,
             "messages": messages,
             "temperature": ask.temperature,
             "max_tokens": ask.max_tokens,
             "chat_template_kwargs": {"enable_thinking": false},
+            "reasoning_effort": "none",
         });
         if ask.json_mode {
             body["response_format"] = json!({"type": "json_object"});
         }
+        body
+    }
+}
+
+impl Model for Http {
+    fn complete(&self, messages: &[Value], ask: Ask) -> anyhow::Result<String> {
+        if self.url.is_empty() {
+            anyhow::bail!("대화 모델 주소가 설정되지 않았습니다");
+        }
+        let body = self.body(messages, ask);
         let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(ask.timeout)).build().into();
         let url = format!("{}/chat/completions", self.url.trim_end_matches('/'));
         let v: Value = agent.post(&url).send_json(&body)?.body_mut().read_json()?;
@@ -81,21 +86,10 @@ pub trait Speech: Send + Sync {
     fn transcribe(&self, audio: &[u8]) -> anyhow::Result<String>;
 }
 
-/// The local speech model. The audio is forwarded and never written to disk.
+/// The user's speech model (`LIFE_ASR_URL`, `LIFE_ASR_MODEL`). The audio is forwarded and never written to disk.
 pub struct HttpSpeech {
     pub url: String,
     pub model: String,
-}
-
-impl HttpSpeech {
-    /// From `LIFE_ASR_URL` and `LIFE_ASR_MODEL`.
-    pub fn from_env() -> HttpSpeech {
-        let get = |k: &str, d: &str| std::env::var(k).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| d.to_string());
-        HttpSpeech {
-            url: get("LIFE_ASR_URL", "http://10.100.3.232:8000/v1/audio/transcriptions"),
-            model: get("LIFE_ASR_MODEL", "vibevoice-asr"),
-        }
-    }
 }
 
 static TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[[A-Za-z][A-Za-z ]{1,30}\]").unwrap());
@@ -109,6 +103,9 @@ pub fn clean_transcript(text: &str) -> String {
 impl Speech for HttpSpeech {
     fn transcribe(&self, audio: &[u8]) -> anyhow::Result<String> {
         use sha1::Digest;
+        if self.url.is_empty() {
+            anyhow::bail!("음성 모델 주소가 설정되지 않았습니다");
+        }
         let boundary = format!("----lifeasr{}", &hex::encode(sha1::Sha1::digest(&audio[..audio.len().min(64)]))[..16]);
         let mut body = Vec::new();
         for (name, value) in [("model", self.model.as_str()), ("language", "ko")] {
@@ -143,6 +140,27 @@ mod tests {
             json!({"summary": "a", "question": "b"})
         );
         assert!(parse_json("없음").is_err());
+    }
+
+    #[test]
+    fn an_address_not_set_is_said_and_no_server_is_asked() {
+        // a fresh install has no built-in model server (#66)
+        let ask = Ask::new(0.0, 10, false, 1);
+        let chat = Http { url: String::new(), model: String::new() }.complete(&[], ask).unwrap_err();
+        assert_eq!(chat.to_string(), "대화 모델 주소가 설정되지 않았습니다");
+        let speech = HttpSpeech { url: String::new(), model: String::new() }.transcribe(b"x").unwrap_err();
+        assert_eq!(speech.to_string(), "음성 모델 주소가 설정되지 않았습니다");
+    }
+
+    #[test]
+    fn thinking_is_turned_off_the_ways_the_usual_servers_read() {
+        // vLLM and llama.cpp read the chat template's switch; Ollama reads reasoning_effort (#66)
+        let m = Http { url: "http://127.0.0.1:9/v1".into(), model: "qwen3:8b".into() };
+        let b = m.body(&[json!({"role": "user", "content": "안녕"})], Ask::new(0.0, 10, true, 1));
+        assert_eq!(b["chat_template_kwargs"], json!({"enable_thinking": false}));
+        assert_eq!(b["reasoning_effort"], "none");
+        assert_eq!(b["response_format"], json!({"type": "json_object"}));
+        assert_eq!((b["model"].as_str(), b["max_tokens"].as_u64()), (Some("qwen3:8b"), Some(10)));
     }
 
     #[test]
