@@ -117,7 +117,8 @@ fn a_wrong_relation_is_taken_away_or_renamed_and_stays_so() {
         s.post_json("/corrections", &json!({"ref": format!("edge:{key}"), "wrong": "고객", "right": "공급사"}));
     assert_eq!(body["changed"], "관계를 고쳤어요: 고객 → 공급사");
     lib.update(false).unwrap();
-    assert_eq!(lib.edges_from("person:a@dekist.com", Some("role"))[0].label, "공급사");
+    let fixed = &lib.edges_from("person:a@dekist.com", Some("role"))[0];
+    assert_eq!((fixed.label.as_str(), fixed.origin.as_str()), ("공급사", "user"), "what the user said is no guess");
     s.post_json("/corrections", &json!({"ref": format!("edge:{key}"), "wrong": "공급사", "right": "-"}));
     lib.update(true).unwrap();
     assert!(lib.edges_from("person:a@dekist.com", Some("role")).is_empty(), "gone, after a rebuild too");

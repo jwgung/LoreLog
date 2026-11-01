@@ -7,7 +7,8 @@
 //!   - a request with the record it came from, the words that say it and its day ([`Librarian::open_requests_at`]);
 //!   - the sentence is a template, not the model's.
 //!
-//! How little: one line per event, never the same (event, matter) again, nothing for all-day events or for what
+//! How little: one line per event, never the same (event, matter) again, nothing for all-day events, for events of many
+//! people ([`CROWD`]) or for what
 //! would be said between 22:00 and 07:00, nothing from an organization the user stopped (the phone stops one after
 //! three of its lines were swiped away). There is no daily cap. What was said is kept in `<data>/ahead.json`, so the
 //! phone (which asks two hours ahead and says it itself, the server on or not) and the desktop (which asks for what
@@ -25,6 +26,7 @@ pub use super::corrections::ANSWERED;
 use crate::config::Paths;
 use crate::librarian::Librarian;
 use crate::librarian::graph::Open;
+use crate::librarian::index::MASS_MAIL;
 use crate::librarian::records::{addresses, event_key, list_items, phone_event_attendees, phone_event_times};
 
 /// how long before an event its line is said
@@ -39,6 +41,14 @@ const TODOS: usize = 2;
 const MAX_STOPPED: usize = 500;
 /// the longest event title or label put in a line
 const SHOWN: usize = 60;
+/// an event with more addresses than this (the user's among them) is a team's or a company's: the requests of some of
+/// its people are not what it is about, so nothing is said of it (as a mail to more than [`MASS_MAIL`] is a mass mail)
+pub const CROWD: usize = MASS_MAIL as usize + 1;
+
+/// Is an event with these attendee addresses one of many people ([`CROWD`])?
+pub fn crowded(addrs: &[String]) -> bool {
+    addrs.len() > CROWD
+}
 
 static LOCK: Mutex<()> = Mutex::new(());
 
@@ -126,7 +136,7 @@ pub fn take(paths: &Paths, ask: &Ask, now: NaiveDateTime, within: TimeDelta) -> 
         for e in &events {
             let addrs: Vec<String> =
                 e.attendees.iter().flat_map(|a| addresses(a, "attendee")).map(|p| p.addr).collect();
-            if addrs.is_empty() {
+            if addrs.is_empty() || crowded(&addrs) {
                 continue;
             }
             let id = identity(e);

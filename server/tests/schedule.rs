@@ -283,3 +283,23 @@ fn an_index_not_made_yet_is_said_so() {
     assert_eq!(code, 503, "{got}");
     assert_eq!(got["error"], "index not ready");
 }
+
+#[test]
+fn an_all_day_event_or_one_of_many_people_gets_no_notes() {
+    // a day off on a team calendar, a company event: their people's requests are not about them
+    let s = world();
+    let lee = "이담당 <lee@client.co.kr>";
+    event_note(&s, "2026-03-31", "2026-03-31", "이담당 연차", "", &[lee]);
+    let mut many: Vec<String> = (0..11).map(|i| format!("동료{i} <c{i}@mine.co.kr>")).collect();
+    many.push(lee.into());
+    let refs: Vec<&str> = many.iter().map(String::as_str).collect();
+    event_note(&s, "2026-04-01T17:00:00", "2026-04-01T19:00:00", "전사 행사", "", &refs);
+    let mut lib = Librarian::open(&s.paths, None, Duration::from_secs(5)).unwrap();
+    lib.update(false).unwrap();
+    let got = week(&s);
+    for title in ["이담당 연차", "전사 행사"] {
+        let it = got.iter().find(|i| i.title == title).unwrap_or_else(|| panic!("{title}: {got:?}"));
+        assert!(it.notes.is_empty(), "{it:?}");
+    }
+    assert!(!got[0].notes.is_empty(), "a meeting with the person still gets them");
+}

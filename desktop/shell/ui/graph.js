@@ -100,7 +100,7 @@ async function show(id) {
     ev.append(el("div", e.evidence ? `«${e.evidence}»` : ""), el("div", `${e.day} ${e.title}`, "gev"));
     tr.append(ev);
     const act = el("td");
-    if (e.origin === "model") {
+    if (e.origin !== "rule") { // the model's, or one the user already corrected
       const fix = el("button", "고치기", "gbtn small");
       fix.onclick = () => {
         const v = prompt("맞는 이름이나 상태를 적어 주세요", e.label);
