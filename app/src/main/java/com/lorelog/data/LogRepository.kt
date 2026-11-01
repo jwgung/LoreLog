@@ -4,11 +4,6 @@ import android.content.Context
 import com.lorelog.audio.VoiceAudio
 import com.lorelog.net.EndpointConfig
 import com.lorelog.net.HttpSink
-import com.lorelog.net.LlmConfig
-import com.lorelog.summary.CloudSummarizer
-import com.lorelog.summary.GeminiNanoSummarizer
-import com.lorelog.summary.SummaryPrefs
-import com.lorelog.summary.Summarizer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -33,7 +28,6 @@ import java.util.Locale
  */
 object LogRepository {
     private const val KEEP = 500
-    private const val DIGEST_MAX_CHARS = 8000
     private const val CONV_GAP_MS = 5 * 60 * 1000L
 
     private lateinit var store: LogStore
@@ -53,9 +47,6 @@ object LogRepository {
 
     private val _notifications = MutableStateFlow<List<NotificationEvent>>(emptyList())
     val notifications: StateFlow<List<NotificationEvent>> = _notifications.asStateFlow()
-
-    private val _summaries = MutableStateFlow<List<Summary>>(emptyList())
-    val summaries: StateFlow<List<Summary>> = _summaries.asStateFlow()
 
     private val _commEvents = MutableStateFlow<List<CommEvent>>(emptyList())
     val commEvents: StateFlow<List<CommEvent>> = _commEvents.asStateFlow()
@@ -111,7 +102,6 @@ object LogRepository {
             _screenEvents.value = store.recentScreen(KEEP)
             _locations.value = store.recentLocation(KEEP)
             _notifications.value = store.recentNotification(KEEP)
-            _summaries.value = store.recentSummary(KEEP)
             _commEvents.value = store.recentComm(KEEP)
             _calendarEvents.value = store.recentCalendar(KEEP)
             _conversations.value = store.recentConversation(KEEP)
@@ -189,7 +179,7 @@ object LogRepository {
 
     /** 모든 기록을 JSON 파일로 내보내 반환한다(공유용, 캐시 폴더). */
     suspend fun exportToFile(context: Context): File = withContext(Dispatchers.IO) {
-        val json = store.exportJson(System.currentTimeMillis(), includeSummary = SummaryPrefs.enabled(context))
+        val json = store.exportJson(System.currentTimeMillis())
         val dir = File(context.cacheDir, "exports").apply { mkdirs() }
         val file = File(dir, "lifelog_${System.currentTimeMillis()}.json")
         file.writeText(json)
@@ -203,7 +193,7 @@ object LogRepository {
     suspend fun exportIncremental(context: Context): Int = withContext(Dispatchers.IO) {
         val prefs = context.getSharedPreferences("export_state", Context.MODE_PRIVATE)
         val lastIds = store.tables().associateWith { prefs.getLong("last_$it", 0L) }
-        val result = store.newRows(lastIds, includeSummary = SummaryPrefs.enabled(context))
+        val result = store.newRows(lastIds)
         if (result.lines.isEmpty()) return@withContext 0
         val dir = File(context.getExternalFilesDir(null), "exports").apply { mkdirs() }
         val date = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
@@ -216,29 +206,7 @@ object LogRepository {
     }
 
     /**
-     * 최근 구간([periodMs]) 기록을 묶어 요약 엔진으로 요약하고, 성공하면 저장한다.
-     * 미지원 기기면 Unavailable 을 돌려주고 아무것도 저장하지 않는다(흐름은 그대로).
-     */
-    suspend fun summarizeRecent(
-        context: Context,
-        periodMs: Long,
-    ): Summarizer.SummaryResult = withContext(Dispatchers.IO) {
-        if (!SummaryPrefs.enabled(context)) return@withContext Summarizer.SummaryResult.Unavailable("요약이 꺼져 있습니다(설정에서 켜기)")
-        val until = System.currentTimeMillis()
-        val since = until - periodMs
-        val digest = store.digest(since, until, DIGEST_MAX_CHARS)
-        if (digest.isBlank()) return@withContext Summarizer.SummaryResult.Unavailable("요약할 기록이 없습니다")
-        val summarizer = if (LlmConfig.isConfigured(context)) CloudSummarizer(context) else GeminiNanoSummarizer(context)
-        val result = summarizer.summarize(digest)
-        if (result is Summarizer.SummaryResult.Ok) {
-            val id = store.insertSummary(until, since, until, result.summary)
-            _summaries.update { (listOf(Summary(id, until, since, until, result.summary)) + it).take(KEEP) }
-        }
-        result
-    }
-
-    /**
-     * 보존 정리. 이미 내보냈고 [retentionMs] 보다 오래된 원본을 지운다(요약은 유지).
+     * 보존 정리. 이미 내보냈고 [retentionMs] 보다 오래된 원본을 지운다(대화는 유지).
      * 지운 행 수를 반환하고, 화면용 목록을 다시 읽는다.
      */
     suspend fun pruneExportedOlderThan(context: Context, retentionMs: Long): Int = withContext(Dispatchers.IO) {
@@ -276,7 +244,7 @@ object LogRepository {
         var sent = 0
         repeat(PUSH_MAX_CHUNKS) {
             val lastIds = store.tables().associateWith { prefs.getLong("last_$it", 0L) }
-            val result = store.newRows(lastIds, includeSummary = SummaryPrefs.enabled(context), maxBytes = PUSH_CHUNK_BYTES)
+            val result = store.newRows(lastIds, maxBytes = PUSH_CHUNK_BYTES)
             if (result.lines.isEmpty()) return@repeat
             val body = result.lines.joinToString("\n", postfix = "\n")
             if (!HttpSink.post(url, EndpointConfig.token(context), body)) return PUSH_FAILED
@@ -325,7 +293,6 @@ object LogRepository {
             _screenEvents.value = emptyList()
             _locations.value = emptyList()
             _notifications.value = emptyList()
-            _summaries.value = emptyList()
             _commEvents.value = emptyList()
             _calendarEvents.value = emptyList()
             _conversations.value = emptyList()

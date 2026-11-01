@@ -36,7 +36,7 @@ object DiaryClient {
         var conn: HttpURLConnection? = null
         try {
             conn = open(context, "/diary/$day" + if (refresh) "?refresh=1" else "", "GET")
-                ?: return@withContext Draft.Error("서버 주소가 설정되지 않았습니다(설정 → 내보내기).")
+                ?: return@withContext Draft.Error("금고 주소가 설정되지 않았습니다(설정 → 금고 연결).")
             when (val code = conn.responseCode) {
                 200 -> {
                     val o = JSONObject(conn.inputStream.bufferedReader().readText())
@@ -47,10 +47,10 @@ object DiaryClient {
                     )
                 }
                 202 -> Draft.Generating
-                else -> Draft.Error("서버 응답 $code: " + (conn.errorStream?.bufferedReader()?.readText() ?: ""))
+                else -> Draft.Error("금고 응답 $code: " + (conn.errorStream?.bufferedReader()?.readText() ?: ""))
             }
         } catch (e: Exception) {
-            Draft.Error("서버에 연결하지 못했습니다(${e.javaClass.simpleName}). tailnet 연결을 확인하세요.")
+            Draft.Error("금고에 연결하지 못했습니다(${e.javaClass.simpleName}). tailnet 연결을 확인하세요.")
         } finally {
             conn?.disconnect()
         }
