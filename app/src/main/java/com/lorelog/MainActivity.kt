@@ -31,7 +31,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -74,15 +73,8 @@ import java.io.File
 import com.lorelog.collect.CollectorPrefs
 import com.lorelog.data.TimelineItem
 import com.lorelog.net.EndpointConfig
-import com.lorelog.net.LlmConfig
-import com.lorelog.net.TranscribeConfig
 import com.lorelog.net.UpdateChecker
-import com.lorelog.net.WhisperModels
-import com.lorelog.stt.ModelDownloader
-import com.lorelog.stt.WhisperEngine
-import com.lorelog.net.ModelCatalog
-import com.lorelog.summary.Summarizer
-import com.lorelog.summary.SummaryPrefs
+import com.lorelog.work.PushPrefs
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -151,7 +143,6 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
     val timeline by LogRepository.timeline.collectAsStateWithLifecycle()
     val partial by LogRepository.partial.collectAsStateWithLifecycle()
     val status by LogRepository.status.collectAsStateWithLifecycle()
-    val summaries by LogRepository.summaries.collectAsStateWithLifecycle()
     val conversations by LogRepository.conversations.collectAsStateWithLifecycle()
     val voiceSegments by LogRepository.voiceSegments.collectAsStateWithLifecycle()
 
@@ -188,19 +179,12 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
     val collectorOn = remember {
         mutableStateMapOf<String, Boolean>().apply { CollectorPrefs.ALL.forEach { put(it.first, CollectorPrefs.enabled(context, it.first)) } }
     }
-    val llmUrl = LlmConfig.baseUrl(context)
-    var llmKey by remember { mutableStateOf(LlmConfig.apiKey(context) ?: "") }
-    var showKey by remember { mutableStateOf(false) }
     var showToken by remember { mutableStateOf(false) }
-    var keyChecking by remember { mutableStateOf(false) }
-    var txEngine by remember { mutableStateOf(TranscribeConfig.engine(context)) }
-    var whisperId by remember { mutableStateOf(TranscribeConfig.modelId(context)) }
-    val dlState by ModelDownloader.state.collectAsStateWithLifecycle()
+    var wifiOnly by remember { mutableStateOf(PushPrefs.wifiOnly(context)) }
     var update by remember { mutableStateOf<UpdateChecker.Result?>(null) }
     var checking by remember { mutableStateOf(false) }
     var btMic by remember { mutableStateOf(AudioPrefs.btMic(context)) }
     var micClean by remember { mutableStateOf(AudioPrefs.micClean(context)) }
-    var summaryOn by remember { mutableStateOf(SummaryPrefs.enabled(context)) }
     var callFolder by remember { mutableStateOf(CallRecordingImporter.folder(context)?.toString()) }
     val callFolderPicker = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocumentTree(),
@@ -240,8 +224,8 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
     var page by remember { mutableStateOf(initialPage) }
     androidx.activity.compose.BackHandler(enabled = page != null) { page = null }
     val pageTitle = when (page) {
-        "collect" -> "수집 항목"; "stt" -> "음성 전사 방식"; "server" -> "서버 연결"; "call" -> "통화 녹음 가져오기"
-        "notif" -> "알림·표시"; "gemini" -> "Gemini 키·요약"; "export" -> "내보내기·삭제"; "version" -> "버전·업데이트"
+        "collect" -> "수집 항목"; "stt" -> "음성"; "server" -> "금고 연결"; "call" -> "통화 녹음 가져오기"
+        "notif" -> "알림·표시"; "export" -> "내보내기·삭제"; "version" -> "버전·업데이트"
         "log" -> "최근 기록"; else -> "수집·연동 설정"
     }
     var hideNotif by remember { mutableStateOf(NotifPrefs.hide(context)) }
@@ -360,21 +344,14 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
         if (running && partial.isNotBlank()) {
             Text(partial, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        if (summaries.isNotEmpty()) {
-            Text("최근 요약", style = MaterialTheme.typography.labelLarge)
-            Text(summaries.first().text, style = MaterialTheme.typography.bodyMedium)
-        }
 
 
         androidx.compose.foundation.layout.Spacer(Modifier.padding(top = 4.dp))
         DrawerRow("수집 항목", "${collectorOn.values.count { it }}개 켜짐") { page = "collect" }
-        DrawerRow("음성 전사 방식", when (txEngine) {
-            TranscribeConfig.Engine.SERVER -> "내 서버"; TranscribeConfig.Engine.GEMINI -> "Gemini"; TranscribeConfig.Engine.WHISPER -> "온디바이스"
-        }) { page = "stt" }
-        DrawerRow("서버 연결", if (EndpointConfig.isConfigured(context)) "주소 있음" else "주소 없음") { page = "server" }
+        DrawerRow("음성", "금고에서 전사") { page = "stt" }
+        DrawerRow("금고 연결", if (EndpointConfig.isConfigured(context)) "주소 있음" else "주소 없음") { page = "server" }
         DrawerRow("통화 녹음 가져오기", if (callFolder != null) "폴더 지정됨" else "미지정") { page = "call" }
         DrawerRow("알림·표시", "") { page = "notif" }
-        DrawerRow("Gemini 키·요약", if (LlmConfig.isConfigured(context)) "키 있음" else "없음") { page = "gemini" }
         DrawerRow("내보내기·삭제", "") { page = "export" }
         DrawerRow("버전·업데이트", UpdateChecker.currentVersion(context)) { page = "version" }
         DrawerRow("최근 기록", "") { page = "log" }
@@ -385,7 +362,7 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
         Text(
             "라이브 통화는 OS가 막습니다. 전화앱 설정에서 '통화 자동 녹음'을 켜 두고, " +
                 "그 저장 폴더(예: 내장메모리 Recordings/Call)를 지정하면 새 녹음을 전사합니다. " +
-                "전사는 '음성 전사 방식'에서 고른 방식(내 서버·Gemini·온디바이스)을 씁니다. 15분마다 새 녹음을 확인합니다.",
+                "전사는 금고가 합니다. 금고에 닿지 않으면 다음 확인 때 다시 보냅니다. 15분마다 새 녹음을 확인합니다.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
@@ -548,11 +525,11 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
 
         }
         if (page == "server") {
-        Text("기록을 내 서버로 보내는 주소입니다. 음성 전사와 일기도 같은 주소와 토큰을 씁니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("기록을 금고로 보내는 주소입니다. 음성 전사와 일기도 같은 주소와 토큰을 씁니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         OutlinedTextField(
             value = endpointUrl,
             onValueChange = { endpointUrl = it },
-            label = { Text("엔드포인트 URL") },
+            label = { Text("금고 주소 (엔드포인트 URL)") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -583,80 +560,24 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
                 }
             }) { Text("지금 전송") }
         }
-
-        }
-        if (page == "gemini") {
-        Text("Gemini API 키", style = MaterialTheme.typography.labelLarge)
-        Text(
-            "클라우드 전사와 요약이 함께 쓰는 키입니다. 입력하면 바로 저장됩니다. " +
-                "AI Studio 무료 키면 됩니다(Flash 계열 무료, 한도는 모델별).",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        OutlinedTextField(
-            value = llmKey,
-            onValueChange = { llmKey = it; LlmConfig.setKey(context, it) },
-            label = { Text("API 키") },
-            singleLine = true,
-            visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
-            trailingIcon = { TextButton(onClick = { showKey = !showKey }) { Text(if (showKey) "숨김" else "표시") } },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            OutlinedButton(
-                enabled = !keyChecking && llmKey.isNotBlank(),
-                onClick = {
-                    keyChecking = true
-                    LogRepository.setStatus("키 확인 중…")
-                    coroutineScope.launch {
-                        val n = ModelCatalog.fetch(llmUrl, llmKey).size
-                        keyChecking = false
-                        LogRepository.setStatus(if (n > 0) "✓ 키 유효 — 모델 ${n}개 사용 가능" else "✗ 키 또는 URL 이 틀렸습니다")
-                    }
-                },
-            ) { Text(if (keyChecking) "확인 중…" else "키 확인") }
-            TextButton(onClick = {
-                context.startActivity(
-                    Intent(Intent.ACTION_VIEW, Uri.parse("https://aistudio.google.com/apikey"))
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                )
-            }) { Text("키 발급 (무료)") }
-        }
-
-        Text("요약", style = MaterialTheme.typography.labelLarge)
-        Text(
-            "선택 기능입니다. 끄면 원본만 모으고 내보냅니다(권장 — 요약은 지식그래프 쪽에서). " +
-                "켜면 하루 한 번 최근 24시간을 요약해 앱에서 보여 주고 내보내기에도 포함합니다.",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("요약 사용", style = MaterialTheme.typography.bodyMedium)
+            Text("와이파이에 연결됐을 때만 보내기", style = MaterialTheme.typography.bodyMedium)
             Switch(
-                checked = summaryOn,
+                checked = wifiOnly,
                 onCheckedChange = {
-                    summaryOn = it
-                    SummaryPrefs.setEnabled(context, it)
+                    wifiOnly = it
+                    PushPrefs.setWifiOnly(context, it)
                 },
             )
         }
-        if (summaryOn) {
-            Text(
-                "모델은 자동입니다. 기본 ${LlmConfig.DEFAULT_MODEL}, 한도가 차면 다른 Flash 모델로 넘어갑니다.",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            OutlinedButton(onClick = {
-                LogRepository.setStatus("요약 중…")
-                coroutineScope.launch {
-                    when (val r = LogRepository.summarizeRecent(context, 24L * 60 * 60 * 1000)) {
-                        is Summarizer.SummaryResult.Ok -> LogRepository.setStatus("요약 완료")
-                        is Summarizer.SummaryResult.Unavailable -> LogRepository.setStatus("요약 불가: ${r.reason}")
-                    }
-                }
-            }) { Text("지금 요약 (최근 24시간)") }
-        }
+        Text(
+            "기록과 음성(녹음·통화 녹음)의 자동 전송을 데이터 요금이 없는 망(와이파이)에서만 합니다. 그동안은 폰에 쌓여 있다가 와이파이에 붙으면 보냅니다. '지금 전송', '밀린 음성 전사', 말하기는 바로 보냅니다.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         }
         if (page == "version") {
@@ -696,8 +617,8 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
         }
         if (page == "stt") {
         Text(
-            "녹음은 VAD로 말할 때만, 화면 꺼져도 유지됩니다. 전사 방식을 고르세요. " +
-                "준비가 안 됐으면 말소리는 음성파일(voice_pending)로 쌓였다가 준비되면 자동 전사됩니다.",
+            "녹음은 VAD로 말할 때만, 화면 꺼져도 유지됩니다. 폰은 전사하지 않습니다. 말소리는 금고로 보내 금고에서 고른 음성 모델로 전사합니다. " +
+                "금고에 닿지 않으면 음성파일(voice_pending)로 쌓였다가 닿으면 보냅니다.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Row(
@@ -735,119 +656,18 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
                 "소리가 이상하게 뭉개지면 끄세요. 기기마다 지원이 다릅니다.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        EngineOption(
-            selected = txEngine == TranscribeConfig.Engine.SERVER,
-            title = "내 서버 (권장)",
-            desc = "내 서버의 음성 모델로 전사. 소리가 내 서버 밖으로 안 나가고 정확합니다. 서버에 닿아야 하며, 못 닿으면 쌓아 두었다가 나중에 보냅니다.",
-        ) {
-            txEngine = TranscribeConfig.Engine.SERVER
-            TranscribeConfig.setEngine(context, txEngine)
-            coroutineScope.launch { WhisperEngine.release() }
-            LoggerService.reapply(context)
-        }
-        EngineOption(
-            selected = txEngine == TranscribeConfig.Engine.GEMINI,
-            title = "클라우드 · Gemini",
-            desc = "위 'Gemini API 키' 사용, 모델은 따로 선택. 무료 티어 가능. 소리가 구글로 감.",
-        ) {
-            txEngine = TranscribeConfig.Engine.GEMINI
-            TranscribeConfig.setEngine(context, txEngine)
-            coroutineScope.launch { WhisperEngine.release() }
-            LoggerService.reapply(context)
-        }
-        EngineOption(
-            selected = txEngine == TranscribeConfig.Engine.WHISPER,
-            title = "온디바이스 · whisper.cpp",
-            desc = "기기 안에서 전사(소리 안 나감). 모델 다운로드 필요.",
-        ) {
-            txEngine = TranscribeConfig.Engine.WHISPER
-            TranscribeConfig.setEngine(context, txEngine)
-            LoggerService.reapply(context)
-        }
-
-        when (txEngine) {
-            TranscribeConfig.Engine.SERVER -> {
-                Text(
-                    if (EndpointConfig.isConfigured(context)) "✓ 서버 주소 있음 — 위 'HTTP 내보내기'의 주소와 토큰을 그대로 씁니다."
-                    else "⚠ 'HTTP 내보내기'에 서버 주소가 없어 전사가 안 됩니다(음성은 쌓아 둡니다). 주소와 토큰을 넣으세요.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            TranscribeConfig.Engine.GEMINI -> {
-                Text(
-                    if (LlmConfig.isConfigured(context)) {
-                        "✓ Gemini 키 있음 — 바로 전사됩니다."
-                    } else {
-                        "⚠ 위 'Gemini API 키'가 비어 있어 전사가 안 됩니다. 키를 넣으세요."
-                    },
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    "모델은 자동입니다. ${TranscribeConfig.DEFAULT_GEMINI_MODEL} 로 받아쓰고, 하루 한도(모델당 500회)가 차면 " +
-                        "${TranscribeConfig.GEMINI_FALLBACKS.joinToString(" → ")} 순으로 넘어갑니다. 실패 사유는 상태줄에 표시됩니다.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            TranscribeConfig.Engine.WHISPER -> {
-                Text("정확도 — 클수록 정확·느림", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                WhisperModels.ALL.forEach { m ->
-                    val ready = WhisperModels.isReady(context, m.id)
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                        RadioButton(
-                            selected = whisperId == m.id,
-                            onClick = {
-                                whisperId = m.id
-                                TranscribeConfig.setModelId(context, m.id)
-                                LoggerService.reapply(context)
-                            },
-                        )
-                        Column {
-                            Text(m.label, style = MaterialTheme.typography.bodyMedium)
-                            Text(if (ready) "다운로드됨" else "다운로드 필요", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-                val selReady = WhisperModels.isReady(context, whisperId)
-                val dl = dlState
-                val downloadingThis = dl is ModelDownloader.State.Downloading && dl.id == whisperId
-                OutlinedButton(
-                    enabled = !downloadingThis && !selReady,
-                    onClick = {
-                        coroutineScope.launch {
-                            val ok = ModelDownloader.download(context, whisperId)
-                            LogRepository.setStatus(if (ok) "모델 다운로드 완료" else "모델 다운로드 실패")
-                            LoggerService.reapply(context)
-                        }
-                    },
-                ) {
-                    Text(
-                        when {
-                            selReady -> "다운로드됨"
-                            downloadingThis -> "다운로드 중…"
-                            else -> "모델 다운로드 (~${WhisperModels.byId(whisperId).approxMb}MB)"
-                        },
-                    )
-                }
-                when (dl) {
-                    is ModelDownloader.State.Downloading -> if (dl.id == whisperId) {
-                        Text("다운로드 중… ${dl.pct}%", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    is ModelDownloader.State.Failed -> Text("실패: ${dl.reason}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    else -> {}
-                }
-                Text(
-                    "arm64 기기만 지원. 첫 전사에서 모델 로딩에 수 초 걸릴 수 있습니다.",
-                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
+        Text(
+            if (EndpointConfig.isConfigured(context)) "✓ 금고 주소 있음 — '금고 연결'의 주소와 토큰을 그대로 씁니다."
+            else "⚠ '금고 연결'에 주소가 없어 전사가 안 됩니다(음성은 쌓아 둡니다). 주소와 토큰을 넣으세요.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         OutlinedButton(onClick = {
             LogRepository.setStatus("밀린 음성 전사 중…")
             coroutineScope.launch {
                 val done = PendingVoice.transcribePending(context)
                 LogRepository.setStatus(
-                    if (done > 0) "밀린 음성 ${done}건 전사됨" else "전사할 밀린 음성이 없거나 전사 준비가 안 됐습니다",
+                    if (done > 0) "밀린 음성 ${done}건 전사됨" else "전사할 밀린 음성이 없거나 금고에 닿지 않습니다",
                 )
             }
         }) { Text("밀린 음성 전사 (${PendingVoice.pendingCount(context)}건 대기)") }
@@ -884,22 +704,6 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
                 timeline.take(200).forEach { item -> TimelineRow(item) }
             }
         }
-        }
-    }
-}
-
-@Composable
-private fun EngineOption(
-    selected: Boolean,
-    title: String,
-    desc: String,
-    onSelect: () -> Unit,
-) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-        RadioButton(selected = selected, onClick = onSelect)
-        Column {
-            Text(title, style = MaterialTheme.typography.bodyMedium)
-            Text(desc, style = MaterialTheme.typography.bodySmall)
         }
     }
 }

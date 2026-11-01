@@ -34,8 +34,6 @@ class LogStore(context: Context, password: ByteArray) {
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_location_ts ON $TABLE_LOCATION(ts)")
         db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_NOTIF (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, pkg TEXT NOT NULL, label TEXT NOT NULL, title TEXT NOT NULL, text TEXT NOT NULL)")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_notif_ts ON $TABLE_NOTIF(ts)")
-        db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_SUMMARY (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, period_start INTEGER NOT NULL, period_end INTEGER NOT NULL, text TEXT NOT NULL)")
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_summary_ts ON $TABLE_SUMMARY(ts)")
         db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_COMM (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, kind TEXT NOT NULL, direction TEXT NOT NULL, party TEXT NOT NULL, party_name TEXT, content TEXT NOT NULL)")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_comm_ts ON $TABLE_COMM(ts)")
         db.execSQL("CREATE TABLE IF NOT EXISTS $TABLE_CAL (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, title TEXT NOT NULL, location TEXT NOT NULL, end_ms INTEGER NOT NULL, attendees TEXT NOT NULL DEFAULT '')")
@@ -46,6 +44,8 @@ class LogStore(context: Context, password: ByteArray) {
         runCatching { db.execSQL("ALTER TABLE $TABLE_CAL ADD COLUMN attendees TEXT NOT NULL DEFAULT ''") }
         // 음성 행에 보관 오디오 파일명(voice_kept/ 아래). 내보낸 뒤 또는 보존 기간 뒤 지우면 NULL.
         runCatching { db.execSQL("ALTER TABLE $TABLE_VOICE ADD COLUMN audio TEXT") }
+        // 폰 요약은 없앴다(#67, 요약은 금고에서). 예전 설치에 남은 요약 표를 지운다.
+        db.execSQL("DROP TABLE IF EXISTS summary")
     }
 
     fun insertVoice(timestampMs: Long, text: String, speaker: String?, audio: String? = null): Long {
@@ -196,7 +196,7 @@ class LogStore(context: Context, password: ByteArray) {
     }
 
     /** 모든 기록을 JSON 문자열로. 지식그래프 등 외부로 내보낼 때 쓴다. */
-    fun exportJson(exportedAtMs: Long, includeSummary: Boolean = true): String {
+    fun exportJson(exportedAtMs: Long): String {
         val root = JSONObject()
         root.put("exportedAt", exportedAtMs)
         root.put("voice", dump(TABLE_VOICE, arrayOf("id", "ts", "text", "speaker")))
@@ -204,7 +204,6 @@ class LogStore(context: Context, password: ByteArray) {
         root.put("screen", dump(TABLE_SCREEN, arrayOf("id", "ts", "pkg", "label", "text")))
         root.put("locations", dump(TABLE_LOCATION, arrayOf("id", "ts", "lat", "lon", "accuracy")))
         root.put("notifications", dump(TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text")))
-        if (includeSummary) root.put("summaries", dump(TABLE_SUMMARY, arrayOf("id", "ts", "period_start", "period_end", "text")))
         root.put("comms", dump(TABLE_COMM, arrayOf("id", "ts", "kind", "direction", "party", "party_name", "content")))
         root.put("calendar", dump(TABLE_CAL, arrayOf("id", "ts", "title", "location", "end_ms", "attendees")))
         root.put("conversations", dump(TABLE_CONV, arrayOf("id", "start_ms", "end_ms", "participants", "source", "status", "context")))
@@ -345,48 +344,6 @@ class LogStore(context: Context, password: ByteArray) {
         db.update(TABLE_CONV, values, "id = ?", arrayOf(id.toString()))
     }
 
-    fun insertSummary(timestampMs: Long, periodStartMs: Long, periodEndMs: Long, text: String): Long {
-        val values = ContentValues().apply {
-            put("ts", timestampMs)
-            put("period_start", periodStartMs)
-            put("period_end", periodEndMs)
-            put("text", text)
-        }
-        return db.insert(TABLE_SUMMARY, null, values)
-    }
-
-    fun recentSummary(limit: Int): List<Summary> {
-        val out = ArrayList<Summary>()
-        db.query(TABLE_SUMMARY, arrayOf("id", "ts", "period_start", "period_end", "text"), null, null, null, null, "ts DESC", limit.toString()).use { c ->
-            while (c.moveToNext()) {
-                out.add(Summary(c.getLong(0), c.getLong(1), c.getLong(2), c.getLong(3), c.getString(4)))
-            }
-        }
-        return out
-    }
-
-    /** 요약 입력용 묶음 텍스트. 지정 구간의 음성·화면·알림·앱 기록을 시간순 한 줄씩. */
-    fun digest(sinceMs: Long, untilMs: Long, maxChars: Int): String {
-        val sb = StringBuilder()
-        data class Row(val ts: Long, val line: String)
-        val rows = ArrayList<Row>()
-        fun collect(table: String, cols: Array<String>, render: (android.database.Cursor) -> String) {
-            db.query(table, cols, "ts >= ? AND ts < ?", arrayOf(sinceMs.toString(), untilMs.toString()), null, null, "ts ASC").use { c ->
-                while (c.moveToNext()) rows.add(Row(c.getLong(0), render(c)))
-            }
-        }
-        collect(TABLE_VOICE, arrayOf("ts", "text")) { "말: ${it.getString(1)}" }
-        collect(TABLE_SCREEN, arrayOf("ts", "label", "text")) { "화면(${it.getString(1)}): ${it.getString(2).take(200)}" }
-        collect(TABLE_NOTIF, arrayOf("ts", "label", "title", "text")) { "알림(${it.getString(1)}): ${it.getString(2)} ${it.getString(3)}" }
-        collect(TABLE_APP, arrayOf("ts", "label")) { "앱 전환: ${it.getString(1)}" }
-        rows.sortBy { it.ts }
-        for (r in rows) {
-            if (sb.length + r.line.length + 1 > maxChars) break
-            sb.append(r.line).append('\n')
-        }
-        return sb.toString().trim()
-    }
-
     /** 증분 내보내기용 새 행(각 테이블에서 id > 마지막 내보낸 id). 줄마다 type 이 붙은 NDJSON. */
     data class NewRows(val lines: List<String>, val newLastIds: Map<String, Long>)
 
@@ -394,7 +351,7 @@ class LogStore(context: Context, password: ByteArray) {
      * [lastIds] 이후 새 행을 줄로. [maxBytes]를 넘기 전까지만 담는다(한 줄은 넘어도 담는다): 커서는 담은 행까지만
      * 전진하므로, 나머지는 다음 호출에 이어서 나온다. 테이블마다 id 순이라 끊어도 빠지는 행이 없다.
      */
-    fun newRows(lastIds: Map<String, Long>, includeSummary: Boolean = true, maxBytes: Long = Long.MAX_VALUE): NewRows {
+    fun newRows(lastIds: Map<String, Long>, maxBytes: Long = Long.MAX_VALUE): NewRows {
         val lines = ArrayList<String>()
         val newIds = HashMap(lastIds)
         var bytes = 0L
@@ -425,7 +382,6 @@ class LogStore(context: Context, password: ByteArray) {
         emit("screen", TABLE_SCREEN, arrayOf("id", "ts", "pkg", "label", "text"))
         emit("location", TABLE_LOCATION, arrayOf("id", "ts", "lat", "lon", "accuracy"))
         emit("notification", TABLE_NOTIF, arrayOf("id", "ts", "pkg", "label", "title", "text"))
-        if (includeSummary) emit("summary", TABLE_SUMMARY, arrayOf("id", "ts", "period_start", "period_end", "text"))
         emit("comm", TABLE_COMM, arrayOf("id", "ts", "kind", "direction", "party", "party_name", "content"))
         emit("calendar", TABLE_CAL, arrayOf("id", "ts", "title", "location", "end_ms", "attendees"))
         emit("conversation", TABLE_CONV, arrayOf("id", "start_ms", "end_ms", "participants", "source", "status", "context"))
@@ -433,11 +389,11 @@ class LogStore(context: Context, password: ByteArray) {
     }
 
     /** 증분 내보내기가 커서로 쓰는 테이블 이름들. */
-    fun tables(): List<String> = listOf(TABLE_VOICE, TABLE_APP, TABLE_SCREEN, TABLE_LOCATION, TABLE_NOTIF, TABLE_SUMMARY, TABLE_COMM, TABLE_CAL, TABLE_CONV)
+    fun tables(): List<String> = listOf(TABLE_VOICE, TABLE_APP, TABLE_SCREEN, TABLE_LOCATION, TABLE_NOTIF, TABLE_COMM, TABLE_CAL, TABLE_CONV)
 
     /**
      * 보존 정리. 각 원본 테이블에서 ts < [cutoffMs] 이고 이미 내보낸(id <= 해당 테이블의
-     * [exportedLastIds]) 행만 지운다. 요약은 건드리지 않는다. 지운 행 수를 반환.
+     * [exportedLastIds]) 행만 지운다. 대화는 건드리지 않는다. 지운 행 수를 반환.
      */
     fun prune(cutoffMs: Long, exportedLastIds: Map<String, Long>): Int {
         var deleted = 0
@@ -455,7 +411,6 @@ class LogStore(context: Context, password: ByteArray) {
         db.delete(TABLE_SCREEN, null, null)
         db.delete(TABLE_LOCATION, null, null)
         db.delete(TABLE_NOTIF, null, null)
-        db.delete(TABLE_SUMMARY, null, null)
         db.delete(TABLE_COMM, null, null)
         db.delete(TABLE_CAL, null, null)
         db.delete(TABLE_CONV, null, null)
@@ -468,7 +423,6 @@ class LogStore(context: Context, password: ByteArray) {
         private const val TABLE_SCREEN = "screen_content"
         private const val TABLE_LOCATION = "location_point"
         private const val TABLE_NOTIF = "notification_event"
-        private const val TABLE_SUMMARY = "summary"
         private const val TABLE_COMM = "comm_event"
         private const val TABLE_CAL = "calendar_event"
         private const val TABLE_CONV = "conversation"

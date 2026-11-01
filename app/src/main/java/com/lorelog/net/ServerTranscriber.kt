@@ -9,8 +9,8 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * 내 서버(gungbuntu)의 음성 인식으로 전사한다. 서버가 tailnet 안의 음성 모델로 넘기므로 소리가 밖으로 나가지 않는다.
- * 내보내기 설정(주소·토큰)을 그대로 쓴다. 서버에 못 닿으면 null(대기 파일이 남아 나중에 다시 시도),
+ * 금고의 /transcribe 로 전사한다. 금고가 사용자가 고른 음성 모델로 넘긴다. 폰은 전사하지 않는다(#67).
+ * 금고 연결 설정(주소·토큰)을 그대로 쓴다. 금고에 못 닿으면 null(대기 파일이 남아 나중에 다시 시도),
  * 말소리가 없었으면 빈 문자열.
  */
 object ServerTranscriber {

@@ -14,7 +14,7 @@ android {
         versionCode = (providers.gradleProperty("appVersionCode").orNull?.toIntOrNull()) ?: 4
         versionName = providers.gradleProperty("appVersionName").orNull ?: "0.3.2"
         ndk {
-            abiFilters += listOf("arm64-v8a") // whisper 가 arm64 전용이고 onnxruntime(13MB)을 ABI 마다 싸 가기엔 무겁다
+            abiFilters += listOf("arm64-v8a") // VAD 의 onnxruntime(13MB)을 ABI 마다 싸 가기엔 무겁다
         }
     }
 
@@ -65,9 +65,6 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.10.5")
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("com.github.gkonovalov.android-vad:silero:2.0.10")
-    implementation("dev.ffmpegkit-maintained:whisper-android:1.0.0")
-    implementation("com.google.mlkit:genai-summarization:1.0.0-beta1")
-    implementation("androidx.concurrent:concurrent-futures-ktx:1.2.0")
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")

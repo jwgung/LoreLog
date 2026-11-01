@@ -18,6 +18,7 @@ import com.konovalov.vad.silero.config.Mode
 import com.konovalov.vad.silero.config.SampleRate
 import com.lorelog.data.LogRepository
 import com.lorelog.collect.PendingVoice
+import com.lorelog.work.PushPrefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,8 +35,8 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * 녹음+클라우드 음성 수집(VAD 기반). AudioRecord 로 원본 PCM 을 받아, Silero VAD(신경망, ONNX)로
- * 사람 말이 있을 때만 구간을 모아, 가까운 발화들을 ~4분으로 묶어 WAV 로 저장하고 선택한 엔진으로
+ * 녹음 음성 수집(VAD 기반). AudioRecord 로 원본 PCM 을 받아, Silero VAD(신경망, ONNX)로
+ * 사람 말이 있을 때만 구간을 모아, 가까운 발화들을 ~4분으로 묶어 WAV 로 저장하고 금고로 보내
  * 전사한다(짧은 토막은 오인식·요청 과다라 묶는다). WebRTC VAD 는 키보드·식기·에어컨 소리에 자주
  * 깨어나 잡음 배치로 한도를 태워서 교체했다. 32ms 프레임당 추론 1ms 안쪽. 화면이 꺼져도 끊기지 않는다.
  */
@@ -53,8 +54,9 @@ class RecordingVoiceCollector(context: Context) {
         if (loopJob?.isActive == true) return
         running = true
         enableBtMic()
-        // 밀린 전사는 별도 코루틴. 같은 코루틴에 두면 파일이 많거나 한도 대기 중일 때 녹음이 그만큼 늦게 시작된다.
-        scope.launch { PendingVoice.transcribePending(appContext) }
+        // 밀린 전사는 별도 코루틴. 같은 코루틴에 두면 파일이 많거나 금고 응답이 느릴 때 녹음이 그만큼 늦게 시작된다.
+        // 와이파이만 보내기가 켜져 있고 지금 데이터망이면 쌓아 두고 워커가 와이파이에서 보낸다
+        if (PushPrefs.mayAutoSend(appContext)) scope.launch { PendingVoice.transcribePending(appContext) }
         loopJob = scope.launch { runVadLoop() }
     }
 
@@ -308,8 +310,8 @@ class RecordingVoiceCollector(context: Context) {
         val file = PendingVoice.fileFor(appContext, label, startMs.takeIf { it > 0 } ?: System.currentTimeMillis())
         if (!writeWav(file, pcm)) { Log.w(TAG, "writeWav failed: $file"); return }
         PendingVoice.refresh(appContext)
-        // 즉시 1회 전사 시도. 실패(키 없음·오프라인)하면 파일이 남아 워커가 나중에 전사한다.
-        scope.launch { PendingVoice.transcribeFile(appContext, file) }
+        // 즉시 1회 전사 시도. 실패(금고 주소 없음·닿지 않음)하면 파일이 남아 워커가 나중에 보낸다.
+        if (PushPrefs.mayAutoSend(appContext)) scope.launch { PendingVoice.transcribeFile(appContext, file) }
     }
 
     private fun writeWav(file: File, pcm: ShortArray): Boolean = try {
@@ -412,10 +414,9 @@ class RecordingVoiceCollector(context: Context) {
         // 배치 안 말소리 합이 이보다 짧으면 버린다(3초). 사람 말 한마디는 보통 2~3초 넘고, 잡음에 잠깐
         // 깨어난 0.5~1초짜리 조각은 전사해도 빈 문장·환각이라 요청만 낭비한다.
         private const val MIN_SEG_SAMPLES = 16000 * 3
-        // 가까운 발화들을 ~4분으로 묶어 한 번에 전사. 요청 수가 곧 비용이다: Gemini 무료 티어는
-        // 모델당 하루 500회. 4분 배치면 연속 대화도 시간당 15회, 회의 6시간에 90회.
-        // 전사 결과가 최대 4분 늦게 뜨는 대신 하루 종일 버틴다. (whisper 는 긴 배치가 정확도도 더 좋다)
-        private const val BATCH_TARGET_SAMPLES = 16000 * 240 // 240초 @16kHz (7.7MB PCM, 인라인 한도 20MB 안)
+        // 가까운 발화들을 ~4분으로 묶어 한 번에 전사. 요청 수가 줄고 긴 배치가 정확도도 더 좋다.
+        // 4분 배치면 연속 대화도 시간당 15회. 전사 결과는 최대 4분 늦게 뜬다.
+        private const val BATCH_TARGET_SAMPLES = 16000 * 240 // 240초 @16kHz (7.7MB PCM)
         private const val BATCH_IDLE_FRAMES = 5625 // 침묵 ~3분(대화 끊김)이면 배치 마감. 잠깐 조용한 틈엔 쪼개지 않는다
     }
 }
