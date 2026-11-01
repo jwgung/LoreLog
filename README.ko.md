@@ -37,7 +37,7 @@
 | **위치** | FusedLocationProvider | 5분 간격·저전력·배치 |
 | **알림** | NotificationListenerService | 받은 알림 제목·본문 |
 | **통화·문자** | CallLog · SMS · 연락처 | 누구와 언제(번호→이름 매칭) |
-| **캘린더** | CalendarContract (+참석자) | 폰의 모든 캘린더(로컬 포함) |
+| **캘린더** | CalendarContract (+참석자) | 폰의 모든 캘린더(로컬 포함). 1년 전부터 1년 뒤까지 등록된 일정 전부(제목·시간·장소·메모·참석자 주소)를 `calendar_event` 줄로 금고에 보내고, 바뀌면 다시, 지우면 `deleted`로 한 번 보낸다. 금고는 이것을 일정으로 색인한다(CalDAV로도 들어온 같은 일정은 한 번). 캘린더 앱에서 숨긴 캘린더와 취소된 일정은 빼고, 수집 항목에서 끄면 보냈던 일정을 지운 것으로 한 번 보내 금고에서도 빠진다 |
 | **주소록** | ContactsContract | 주소록이 가진 것은 다(이름·별명·메일·전화·회사·직함·주소·웹사이트·메모·생일·기념일·관계·메신저·그룹, CardDAV와 같은 모양). 사진만 뺀다. 바뀌었을 때만 목록 전체를 금고의 `/ingest/contacts`로. 사서가 사람을 알아보는 데 쓴다. https나 tailnet 주소로만 보낸다. 수집 항목에서 끄면 빈 목록을 한 번 보내 금고에서도 빠진다 |
 
 ## 음성
@@ -61,8 +61,8 @@ LoreLog의 핵심이자 가장 까다로운 부분. 구글 실시간 인식기�
 
 - **JSON** — 전체 기록을 공유 시트로.
 - **폴더(증분 NDJSON)** — 새 기록만 앱 전용 외부 폴더에 append. `Android/data/com.lorelog/files/exports/`. USB·adb로 PC에서 접근.
-- **금고로 전송(HTTP)** — 금고 주소로 새 기록을 15분마다 POST(`Authorization: Bearer <토큰>`, NDJSON). 설정 → 금고 연결의 **"와이파이에 연결됐을 때만 보내기"**를 켜면 기록과 음성(녹음·통화 녹음)의 자동 전송을 와이파이(데이터 요금 없는 망)에서만 하고, 그동안은 폰에 쌓인다(기본 꺼짐). "지금 전송", "밀린 음성 전사", 말하기는 바로 보낸다.
-- 모든 줄에 `type`(voice/app/screen/location/notification/comm/calendar/conversation)이 붙는다.
+- **금고로 전송(HTTP)** — 금고 주소로 새 기록을 15분마다 POST(`Authorization: Bearer <토큰>`, NDJSON). 설정 → 금고 연결의 **"와이파이에 연결됐을 때만 보내기"**를 켜면 기록과 음성(녹음·통화 녹음)의 자동 전송을 와이파이(데이터 요금 없는 망)에서만 하고, 그동안은 폰에 쌓인다(기본 꺼짐). 폰 캘린더도 기록과 함께 보내며 같은 설정을 따른다. "지금 전송", "밀린 음성 전사", 말하기는 바로 보낸다.
+- 모든 줄에 `type`(voice/app/screen/location/notification/comm/calendar/calendar_event/conversation)이 붙는다.
 - **전체 삭제** — 확인 후 모든 기록 삭제(되돌릴 수 없음).
 
 ## 저장 · 보안 · 보존

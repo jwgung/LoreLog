@@ -231,16 +231,22 @@ object LogRepository {
      * 성공(2xx) 시에만 전송 커서를 전진시킨다(실패하면 다음에 다시 보냄). 오래 쌓였으면 [PUSH_CHUNK_BYTES]씩 나눠
      * 보내고, 한 번에 [PUSH_MAX_CHUNKS]개까지만 보낸다(나머지는 다음 주기에).
      * 반환: 보낸 줄 수(>=0), [PUSH_UNSET] 미설정, [PUSH_FAILED] 전송 실패(앞서 보낸 조각은 커서에 반영됨).
+     * 폰 캘린더(#77)도 바뀐 것이 있으면 함께 보낸다. 처음에는 2년치라 크므로, [userAsked]가 아니면(자동 전송)
+     * "와이파이에서만" 설정을 따른다([com.lorelog.work.PushPrefs.mayAutoSend]).
      */
-    suspend fun pushToHttp(context: Context): Int = withContext(Dispatchers.IO) { pushLock.withLock { push(context) } }
+    suspend fun pushToHttp(context: Context, userAsked: Boolean = false): Int =
+        withContext(Dispatchers.IO) { pushLock.withLock { push(context, userAsked) } }
 
     /** 대화 화면과 주기 작업이 겹쳐도 같은 줄을 두 번 보내지 않게: 커서를 읽고 전진시키는 동안 하나만. */
     private val pushLock = kotlinx.coroutines.sync.Mutex()
 
-    private suspend fun push(context: Context): Int {
+    private suspend fun push(context: Context, userAsked: Boolean): Int {
         val url = EndpointConfig.url(context) ?: return PUSH_UNSET
         val prefs = context.getSharedPreferences("http_state", Context.MODE_PRIVATE)
         com.lorelog.collect.ContactsExport.push(context) // only when the address book changed; its result is its own
+        // only what changed; its result is its own too. Held back off Wi-Fi when so set, but not the deletes after it
+        // was turned off
+        com.lorelog.collect.CalendarExport.push(context, mayUpsert = userAsked || com.lorelog.work.PushPrefs.mayAutoSend(context))
         var sent = 0
         repeat(PUSH_MAX_CHUNKS) {
             val lastIds = store.tables().associateWith { prefs.getLong("last_$it", 0L) }

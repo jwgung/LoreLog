@@ -223,6 +223,33 @@ fn the_events_of_the_vault_are_asked_about_too() {
     assert_eq!(now[0].title, "8분 뒤 「현장 점검」");
 }
 
+#[test]
+fn the_phones_calendar_in_the_vault_is_asked_about_too_and_once_with_the_phones_own_ask() {
+    let phone_calendar = || {
+        let s = world();
+        let start = at(DAY, "10:00").and_local_timezone(chrono::Local).unwrap().timestamp_millis();
+        let rec = json!({"type": "calendar_event", "ts": start - 86_400_000, "key": "5@1", "uid": "",
+                         "title": "현장 점검", "start": start, "end": start + 3_600_000, "all_day": false,
+                         "location": "", "attendees": ["이담당 <lee@client.co.kr>"], "status": "upsert"});
+        let dir = s.paths.raw().join("lorelog");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("2026-11-01.ndjson"), format!("{rec}\n")).unwrap();
+        index(&s);
+        s
+    };
+    // the desktop asks with nothing of its own: the phone's calendar, as the vault has it
+    let s = phone_calendar();
+    let now = ahead::take(&s.paths, &ask(Vec::new()), at(DAY, "09:52"), ahead::LEAD).unwrap();
+    assert_eq!(now.len(), 1);
+    assert_eq!(now[0].title, "8분 뒤 「현장 점검」");
+    // the phone asks with the same event of its own: one event, one line
+    let s = phone_calendar();
+    let mine = event("5@1", at(DAY, "10:00"), "현장 점검", &["lee@client.co.kr"]);
+    let got = ahead::take(&s.paths, &ask(vec![mine]), at(DAY, "09:00"), ahead::WINDOW).unwrap();
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert_eq!(got[0].event, "5@1", "the asker's own key comes back");
+}
+
 fn post_ahead(s: &Server, events: Value) -> (u16, Value) {
     s.post_json("/assistant/ahead", &json!({"events": events}))
 }

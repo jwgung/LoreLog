@@ -358,3 +358,23 @@ fn quoted_titles_cannot_end_the_quote() {
     let s = section(&mut lib, Period::ThisMonth, "2026-11-10");
     assert!(!s.contains(recall::QUOTE_END), "{s}");
 }
+
+#[test]
+fn the_phones_events_are_this_months_events_and_one_caldav_also_has_counts_once() {
+    let t = T::new();
+    t.event("2026-11-12T10:00:00", "킥오프 회의");
+    let at = |d: u32, h: u32| common::ms(2026, 11, d, h, 0);
+    let ev = |key: &str, title: &str, start: i64| {
+        json!({"type": "calendar_event", "ts": at(1, 8), "key": key, "uid": "", "title": title, "start": start,
+               "end": start + 3_600_000, "all_day": false, "location": "", "attendees": [], "status": "upsert"})
+    };
+    let lines = [ev("1@1", "킥오프 회의", at(12, 10)), ev("2@1", "현장 실사", at(18, 15))];
+    let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+    fs::create_dir_all(t.p.raw().join("lorelog")).unwrap();
+    fs::write(t.p.raw().join("lorelog").join("2026-11-01.ndjson"), text.join("\n") + "\n").unwrap();
+    let mut lib = t.open(false);
+    let s = section(&mut lib, Period::ThisMonth, "2026-11-10");
+    assert!(s.contains("현장 실사"), "the phone's own event\n{s}");
+    assert_eq!(s.matches("킥오프 회의").count(), 1, "on the phone and from CalDAV: once\n{s}");
+    assert!(!s.contains("앞 일정은 볼 수 없음"), "the phone's events are events ahead\n{s}");
+}

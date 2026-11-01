@@ -12,7 +12,9 @@
 //! until its file is removed; a phone file that cannot be read again keeps the states last read from it, since the raw
 //! files only grow); when a state changes, the days that conversation spans are read again, and nothing else (a span
 //! that cannot be believed makes every phone file be read again). When the allowed senders change, every phone file is
-//! read again. Phone files are read in two passes, so memory holds one file at a time.
+//! read again. Phone files are read in two passes, so memory holds one file at a time. The phone's calendar (#77) is
+//! kept the same way (table phone_events: every `calendar_event` state read, the latest per key wins); when it or a
+//! CalDAV note changes, its events are indexed again as a whole, each as a document of its own (`lorelog-calendar:<key>`).
 //!
 //! Every update takes the write lock first (BEGIN IMMEDIATE) and only then lists the files and reads the allowed
 //! senders, so `life sync` and a chat request never work from the same stale picture. A search reads one snapshot of
@@ -100,7 +102,7 @@ const SNIPPET_AFTER: usize = 140;
 const WINDOW: i64 = 400;
 /// Bump when the tables or what goes in them change: an index of another version is built again. (6 was the last
 /// Python version; the Rust index is built anew once.)
-pub const SCHEMA_VERSION: &str = "16"; // 16: a mail the vault holds more than once is indexed once, 15: organizations the user said are one (#47), 14: the graph (#45), 8: who each record is with, 9: the phone's address book (#22), 10: its company (#9), 11: attachments and the mail they came with (#15), 12: one matter beyond a thread (#8), 13: the matters the user took part in
+pub const SCHEMA_VERSION: &str = "17"; // 17: the phone's calendar (#77), 16: a mail the vault holds more than once is indexed once, 15: organizations the user said are one (#47), 14: the graph (#45), 8: who each record is with, 9: the phone's address book (#22), 10: its company (#9), 11: attachments and the mail they came with (#15), 12: one matter beyond a thread (#8), 13: the matters the user took part in
 
 /// A mail sent to more people than this is a mass mail: not counted as with any one of them.
 pub const MASS_MAIL: i64 = 10;
@@ -117,13 +119,15 @@ const TABLES: &str = "
 create table if not exists meta(key text primary key, value text);
 create table if not exists files(path text primary key, kind text, stamp text, mid text, copy integer not null default 0);
 create index if not exists files_mid on files(mid);
-create table if not exists docs(n integer primary key, file text, source text, kind text, day text, title text, thread text, text text, mid text, case_key text, involved integer);
+create table if not exists docs(n integer primary key, file text, source text, kind text, day text, title text, thread text, text text, mid text, case_key text, involved integer, uid text);
 create index if not exists docs_case on docs(case_key);
 create index if not exists docs_mid on docs(mid);
 create index if not exists docs_file on docs(file);
 create index if not exists docs_thread on docs(thread);
 create table if not exists convs(file text, seq integer, id text, data text);
 create index if not exists convs_file on convs(file);
+create table if not exists phone_events(file text, seq integer, key text, data text);
+create index if not exists phone_events_file on phone_events(file);
 create virtual table if not exists fts using fts5(terms);
 create table if not exists people(n integer, role text, name text, key text, addr text);
 create table if not exists contacts(person integer, name text, key text, addr text, org text);
@@ -273,9 +277,29 @@ fn stamp(path: &Path) -> std::io::Result<String> {
     Ok(format!("{ns}:{}", m.len()))
 }
 
-/// The conversation records of a phone file, without decoding its other lines (most of a phone file is screen and app).
-fn conversations_of(path: &Path) -> std::io::Result<Vec<Map<String, Value>>> {
-    Ok(conversations_in(read_records(path, Some("\"conversation\""))?))
+/// A phone file's conversation records, and its calendar records by their keys.
+type States = (Vec<Map<String, Value>>, Vec<(String, Map<String, Value>)>);
+
+/// The conversation and calendar records of a phone file, without decoding its other lines (most of a phone file is
+/// screen and app).
+fn states_of(path: &Path) -> std::io::Result<States> {
+    let bytes = fs::read(path)?;
+    let (mut convs, mut events) = (Vec::new(), Vec::new());
+    for line in String::from_utf8_lossy(&bytes).lines() {
+        let (conv, event) = (line.contains("\"conversation\""), line.contains("\"calendar_event\""));
+        if !conv && !event {
+            continue;
+        }
+        let Ok(Value::Object(o)) = serde_json::from_str::<Value>(line) else { continue };
+        if o.get("type").and_then(Value::as_str) == Some("calendar_event") {
+            if let Some(key) = records::phone_event_key(&o) {
+                events.push((key, o));
+            }
+        } else {
+            convs.push(o);
+        }
+    }
+    Ok((conversations_in(convs), events))
 }
 
 fn day_file(path: &str) -> String {
@@ -353,9 +377,20 @@ impl Librarian {
 
     /// Drop every table and make them again; the caller holds the write lock.
     fn make_tables(&self) -> rusqlite::Result<()> {
-        for t in
-            ["docs", "files", "convs", "fts", "meta", "people", "contacts", "nodes", "edges", "graph_seen", "org_same"]
-        {
+        for t in [
+            "docs",
+            "files",
+            "convs",
+            "phone_events",
+            "fts",
+            "meta",
+            "people",
+            "contacts",
+            "nodes",
+            "edges",
+            "graph_seen",
+            "org_same",
+        ] {
             self.db.execute_batch(&format!("drop table if exists {t}"))?;
         }
         self.db.execute_batch(TABLES)?;
@@ -404,8 +439,8 @@ impl Librarian {
 
     fn add(&self, path: &str, d: &Doc) -> rusqlite::Result<()> {
         self.db.execute(
-            "insert into docs(file, source, kind, day, title, thread, text, mid) values (?, ?, ?, ?, ?, ?, ?, ?)",
-            params![path, d.source, d.kind, d.day, d.title, d.thread, d.text, d.mid],
+            "insert into docs(file, source, kind, day, title, thread, text, mid, uid) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![path, d.source, d.kind, d.day, d.title, d.thread, d.text, d.mid, d.uid],
         )?;
         let n = self.db.last_insert_rowid();
         self.db.execute(
@@ -488,6 +523,79 @@ impl Librarian {
         Ok(out)
     }
 
+    /// The latest state of every event of the phone's calendar read so far (a later file, then a later line, wins).
+    fn phone_events(&self) -> rusqlite::Result<BTreeMap<String, Map<String, Value>>> {
+        let mut out = BTreeMap::new();
+        let mut st = self.db.prepare("select key, data from phone_events order by file, seq")?;
+        let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (key, data) = row?;
+            if let Ok(Value::Object(o)) = serde_json::from_str::<Value>(&data) {
+                out.insert(key, o);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Index the phone's calendar again: every event still there, once. An event the vault has from CalDAV (the same
+    /// UID on the same day, else the same [`records::event_key`]) is the note's; so is one the phone has twice (two
+    /// calendars).
+    fn keep_phone_events(&self) -> anyhow::Result<()> {
+        let mine = format!("{}%", records::PHONE_EVENT);
+        let olds: Vec<String> = {
+            let mut st = self.db.prepare("select distinct file from docs where file like ?")?;
+            st.query_map([&mine], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+        };
+        for f in &olds {
+            self.forget(f)?;
+        }
+        let (mut uids, mut keys) = (HashSet::new(), HashSet::new());
+        {
+            let mut st =
+                self.db.prepare("select day, title, text, uid from docs where source = 'event' and file not like ?")?;
+            let rows = st.query_map([&mine], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                ))
+            })?;
+            for row in rows {
+                let (day, title, text, uid) = row?;
+                if let Some(u) = uid {
+                    uids.insert((u, day.clone()));
+                }
+                keys.insert(records::doc_event_key(&day, &title, &text));
+            }
+        }
+        for (key, rec) in self.phone_events()? {
+            let Some(d) = records::phone_event_doc(&rec) else { continue };
+            if d.uid.as_ref().is_some_and(|u| uids.contains(&(u.clone(), d.day.clone())))
+                || !keys.insert(records::doc_event_key(&d.day, &d.title, &d.text))
+            {
+                continue;
+            }
+            self.add(&format!("{}{key}", records::PHONE_EVENT), &d)?;
+        }
+        Ok(())
+    }
+
+    /// The events of the phone's calendar still there, as their latest records, that start in `[from, to]` (local).
+    pub fn phone_calendar(
+        &self,
+        from: chrono::NaiveDateTime,
+        to: chrono::NaiveDateTime,
+    ) -> anyhow::Result<Vec<(String, Map<String, Value>)>> {
+        self.ready()?;
+        Ok(self
+            .phone_events()?
+            .into_iter()
+            .filter(|(_, r)| r.get("status").and_then(Value::as_str) != Some("deleted"))
+            .filter(|(_, r)| records::phone_event_times(r).is_some_and(|(s, _, _)| s >= from && s <= to))
+            .collect())
+    }
+
     /// (files to read again, files gone). Every phone file is read again when the allowed senders changed.
     fn changes(
         &self,
@@ -517,28 +625,29 @@ impl Librarian {
         Ok((dirty, removed))
     }
 
-    /// Keep the conversation states of the changed phone files, read again the days whose conversations changed, and
-    /// index them all, one file at a time. -> (indexed, skipped)
+    /// Keep the conversation and calendar states of the changed phone files, read again the days whose conversations
+    /// changed, and index them all, one file at a time. -> (indexed, skipped, whether the phone's calendar changed)
     fn update_phone(
         &self,
         found: &[(String, Kind, PathBuf)],
         dirty: &BTreeSet<String>,
         allow: &BTreeSet<String>,
-    ) -> anyhow::Result<(usize, usize)> {
+    ) -> anyhow::Result<(usize, usize, bool)> {
         let phone: HashMap<&String, &PathBuf> =
             found.iter().filter(|f| f.1 == Kind::Lorelog).map(|f| (&f.0, &f.2)).collect();
         let todo: BTreeSet<String> = dirty.iter().filter(|p| phone.contains_key(p)).cloned().collect();
         // files whose conversation states are kept but that are gone (also one skipped before it went, which has no
         // files row any more)
         let kept: Vec<String> = {
-            let mut st = self.db.prepare("select distinct file from convs")?;
+            let mut st = self.db.prepare("select file from convs union select file from phone_events")?;
             st.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?
         };
         let gone: Vec<String> = kept.into_iter().filter(|p| !phone.contains_key(p)).collect();
         if todo.is_empty() && gone.is_empty() {
-            return Ok((0, 0));
+            return Ok((0, 0, false));
         }
         let before = self.convs()?;
+        let events_before = self.phone_events()?;
         let mut stamps: std::collections::BTreeMap<String, String> = Default::default();
         let mut skipped = 0;
         // first pass: stamps and conversation states only
@@ -546,14 +655,21 @@ impl Librarian {
             |paths: &BTreeSet<String>, stamps: &mut std::collections::BTreeMap<String, String>| -> anyhow::Result<()> {
                 for path in paths {
                     let p = phone[path];
-                    match stamp(p).and_then(|s| conversations_of(p).map(|c| (s, c))) {
-                        Ok((s, convs)) => {
+                    match stamp(p).and_then(|s| states_of(p).map(|c| (s, c))) {
+                        Ok((s, (convs, events))) => {
                             stamps.insert(path.clone(), s);
                             self.db.execute("delete from convs where file = ?", [path])?;
                             for (i, c) in convs.iter().enumerate() {
                                 self.db.execute(
                                     "insert into convs(file, seq, id, data) values (?, ?, ?, ?)",
                                     params![path, i as i64, conversation_key(c), Value::Object(c.clone()).to_string()],
+                                )?;
+                            }
+                            self.db.execute("delete from phone_events where file = ?", [path])?;
+                            for (i, (key, e)) in events.iter().enumerate() {
+                                self.db.execute(
+                                    "insert into phone_events(file, seq, key, data) values (?, ?, ?, ?)",
+                                    params![path, i as i64, key, Value::Object(e.clone()).to_string()],
                                 )?;
                             }
                         }
@@ -569,6 +685,7 @@ impl Librarian {
             };
         for path in &gone {
             self.db.execute("delete from convs where file = ?", [path])?;
+            self.db.execute("delete from phone_events where file = ?", [path])?;
         }
         take(&todo, &mut stamps)?;
         let after = self.convs()?;
@@ -616,7 +733,7 @@ impl Librarian {
                 }
             }
         }
-        Ok((indexed, skipped))
+        Ok((indexed, skipped, self.phone_events()? != events_before))
     }
 
     /// Index new and changed files, forget removed ones. With `reset`, or when the index is of another version, it is
@@ -651,7 +768,7 @@ impl Librarian {
                 me.forget(path)?;
                 me.db.execute("delete from files where path = ?", [path])?;
             }
-            let (mut indexed, mut skipped) = me.update_phone(&found, &dirty, &allow)?;
+            let (mut indexed, mut skipped, mut calendar_changed) = me.update_phone(&found, &dirty, &allow)?;
             let books: Vec<&(String, Kind, PathBuf)> = found.iter().filter(|f| f.1 == Kind::Contacts).collect();
             let book_changed = book_removed || books.iter().any(|f| dirty.contains(&f.0));
             if book_changed {
@@ -672,6 +789,7 @@ impl Librarian {
                     continue;
                 }
                 relink |= linked(kind.name());
+                calendar_changed |= *kind == Kind::Event;
                 match stamp(p).map_err(anyhow::Error::from).and_then(|s| records::docs(*kind, p).map(|d| (s, d))) {
                     Ok((s, docs)) => {
                         me.keep(path, *kind, &s, &docs)?;
@@ -682,6 +800,11 @@ impl Librarian {
                         skipped += 1;
                     }
                 }
+            }
+            calendar_changed |= remade || kinds_removed.iter().any(|k| k == Kind::Event.name());
+            if calendar_changed {
+                me.keep_phone_events()?; // after the notes: an event they have is theirs
+                relink = true;
             }
             relink |= me.one_per_mail()?;
             if relink {

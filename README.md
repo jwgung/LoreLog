@@ -37,7 +37,7 @@ Everything runs in one foreground service, and you toggle each source in setting
 | **Location** | FusedLocationProvider | Every 5 min, low power, batched |
 | **Notifications** | NotificationListenerService | Title and body of notifications you receive |
 | **Calls / SMS** | CallLog · SMS · Contacts | Who and when (number → name) |
-| **Calendar** | CalendarContract (+attendees) | All calendars on the phone, local included |
+| **Calendar** | CalendarContract (+attendees) | All calendars on the phone, local included. Every registered event from a year back to a year ahead (title, time, place, notes, attendees' addresses) goes to the vault as `calendar_event` lines, again when it changes and once as `deleted` when it goes; the vault indexes them as events (the same event from CalDAV counts once). Calendars hidden in the calendar app and cancelled events are left out. Turning it off in the collectors sends what was sent as deleted once, so it leaves the vault's index too |
 | **Contacts** | ContactsContract | Everything the address book holds (name, nickname, emails, phones, company and title, addresses, websites, notes, birthdays and anniversaries, relations, messengers, groups), the same as from CardDAV; photos are left out. The whole list is sent to the vault's `/ingest/contacts`, only when it changed. The librarian uses it to recognize people. Sent only over https or to a tailnet address. Turning it off in the collectors sends an empty list once, so it leaves the vault's index too |
 
 ## Voice
@@ -61,8 +61,8 @@ The core of LoreLog, and the trickiest part. Google's live recognizer keeps grab
 
 - **JSON** — the whole log via the share sheet.
 - **Folder (incremental NDJSON)** — only new records appended to an app-private external folder. `Android/data/com.lorelog/files/exports/`. Reachable from a PC over USB/adb.
-- **Send to the vault (HTTP)** — POST new records to your vault address every 15 minutes (`Authorization: Bearer <token>`, NDJSON). Turn on **"와이파이에 연결됐을 때만 보내기"** (send only on Wi-Fi) under settings → 금고 연결 and the automatic sends of records and voice (recordings, call recordings) run only on an unmetered network (Wi-Fi); they wait on the phone until then. It is off by default. "지금 전송" (send now), "밀린 음성 전사" (send pending voice) and dictation always send right away.
-- Every line carries a `type` (voice/app/screen/location/notification/comm/calendar/conversation).
+- **Send to the vault (HTTP)** — POST new records to your vault address every 15 minutes (`Authorization: Bearer <token>`, NDJSON). Turn on **"와이파이에 연결됐을 때만 보내기"** (send only on Wi-Fi) under settings → 금고 연결 and the automatic sends of records and voice (recordings, call recordings) run only on an unmetered network (Wi-Fi); they wait on the phone until then. The phone's calendar is sent with the records and follows the same switch. It is off by default. "지금 전송" (send now), "밀린 음성 전사" (send pending voice) and dictation always send right away.
+- Every line carries a `type` (voice/app/screen/location/notification/comm/calendar/calendar_event/conversation).
 - **Delete all** — wipes every record after confirmation (irreversible).
 
 ## Storage · Security · Retention
