@@ -74,10 +74,10 @@ class ConnectCodeTest {
     }
 
     @Test
-    fun manualEntryWithATokenFollowsTheSameRule() {
-        assertEquals(null, ConnectCode.manualProblem("http://pc.tail8d1ab7.ts.net:8765/ingest/lorelog", token))
-        assertEquals(null, ConnectCode.manualProblem("http://192.168.0.10:8765/ingest/lorelog", ""))
-        assertEquals(null, ConnectCode.manualProblem("", ""))
-        assertTrue(ConnectCode.manualProblem("http://192.168.0.10:8765/ingest/lorelog", token)!!.contains("tailnet"))
+    fun manualEntryFollowsTheSameRule() {
+        assertEquals(null, ConnectCode.manualProblem("http://pc.tail8d1ab7.ts.net:8765/ingest/lorelog"))
+        // records go out in plain text too: an address the token may not go to is not kept either
+        assertTrue(ConnectCode.manualProblem("http://192.168.0.10:8765/ingest/lorelog")!!.contains("tailnet"))
+        assertEquals(null, ConnectCode.manualProblem(""))
     }
 }

@@ -608,7 +608,7 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = {
-                val problem = ConnectCode.manualProblem(endpointUrl, endpointToken)
+                val problem = ConnectCode.manualProblem(endpointUrl)
                 if (problem != null) {
                     LogRepository.setStatus(problem)
                 } else {

@@ -13,7 +13,7 @@ object ConnectCode {
     const val PREFIX = "lorelog://connect?"
     private const val MIN_TOKEN = 16
     private const val INGEST = "/ingest/lorelog"
-    private const val NOT_SAFE = "이 주소로는 토큰을 보내지 않습니다. https 주소이거나 tailnet(*.ts.net, 100.x) 주소여야 합니다"
+    private const val NOT_SAFE = "이 주소로는 기록과 토큰을 보내지 않습니다. https 주소이거나 tailnet(*.ts.net, 100.x) 주소여야 합니다"
 
     sealed class Parsed {
         /** [url]은 기록을 보내는 주소(…/ingest/lorelog)까지 붙인 것. */
@@ -81,7 +81,10 @@ object ConnectCode {
         return Parsed.Ok(exportUrl(u), t)
     }
 
-    /** 손으로 넣은 주소·토큰을 저장해도 되는지. null = 괜찮음, 아니면 이유. 토큰 없이 넣은 주소는 막지 않는다. */
-    fun manualProblem(url: String, token: String): String? =
-        if (token.isNotBlank() && url.isNotBlank() && !safeForToken(url)) NOT_SAFE else null
+    /**
+     * 손으로 넣은 주소를 저장해도 되는지. null = 괜찮음, 아니면 이유. 기록 자체도 이 주소로 나가므로 토큰이 없어도
+     * 같은 규칙이다(https, 또는 tailnet·이 기기의 http만). 금고는 토큰 없는 기록을 받지 않으니 막아서 잃는 것은 없다.
+     */
+    fun manualProblem(url: String): String? =
+        if (url.isNotBlank() && !safeForToken(url)) NOT_SAFE else null
 }
