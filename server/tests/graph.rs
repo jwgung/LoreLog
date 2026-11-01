@@ -196,3 +196,20 @@ fn a_role_that_only_says_who_a_mail_went_to_is_no_role() {
         lib.edges_from("person:kim@client.co.kr", Some("role")).into_iter().map(|e| e.label).collect();
     assert_eq!(labels, ["고객"]);
 }
+
+#[test]
+fn with_no_chat_model_set_the_graph_waits_and_no_address_is_tried() {
+    // a fresh install: no LIFE_LLM_URL in ingest.env (#66). The sync does not fail for it and asks no built-in server.
+    if std::env::var("LIFE_LLM_URL").is_ok_and(|v| !v.is_empty()) {
+        return; // this machine sets one in the environment
+    }
+    let t = T::new();
+    t.mail("a.md", "2026-03-02", "김철수 <kim@acme.co.kr>", "me <me@home.kr>", "견적", "견적 보내드립니다.", false);
+    drop(t.lib());
+    let mut lines = Vec::new();
+    let outcome = life_server::collect::sync::graph(&t.p, 10, &mut |l| lines.push(l));
+    assert_eq!(outcome, life_server::collect::sync::Outcome::Ok, "{lines:?}");
+    let said = format!("{lines:?}");
+    assert!(said.contains("LIFE_LLM_URL"), "says what to set: {said}");
+    assert!(!graph::cache_dir(&t.p).exists(), "nothing was asked: {said}");
+}

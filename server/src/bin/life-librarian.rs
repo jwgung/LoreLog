@@ -7,7 +7,7 @@ use life_server::config::Paths;
 use life_server::host::Models;
 use life_server::librarian::eval::{self, Kind};
 use life_server::librarian::{Librarian, Outdated};
-use life_server::llm::{Http, HttpSpeech, Model};
+use life_server::llm::Model;
 use serde_json::Value;
 
 const HELP: &str = "\
@@ -188,13 +188,8 @@ fn measure(lib: &mut Librarian, paths: &Paths, file: &std::path::Path, k: usize,
             return ExitCode::FAILURE;
         }
     };
-    // the chat model the server uses (ingest.env or the environment, else the home server's defaults)
-    let model = (!no_model).then(|| {
-        let (chat, asr) = (Http::from_env(), HttpSpeech::from_env());
-        let defaults = Models { chat_url: chat.url, chat_model: chat.model, asr_url: asr.url, asr_model: asr.model };
-        let m = Models::load(paths).or(&defaults);
-        Http { url: m.chat_url, model: m.chat_model }
-    });
+    // the chat model the server uses (ingest.env or the environment)
+    let model = (!no_model).then(|| Models::load(paths).chat());
     let results = match eval::run(lib, model.as_ref().map(|m| m as &dyn Model), &paths.vault, &cases, k) {
         Ok(r) => r,
         Err(e) if e.downcast_ref::<Outdated>().is_some() => {

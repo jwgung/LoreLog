@@ -581,18 +581,18 @@ pub const GRAPH_LIMIT: usize = 2000;
 /// asks at once
 pub const GRAPH_WORKERS: usize = 6;
 
-/// The chat model of these places (the home server's when none is set).
+/// The chat model of these places (ingest.env or the environment; none built in).
 pub fn model_of(paths: &Paths) -> crate::llm::Http {
-    let m = crate::host::Models::load(paths);
-    let d = crate::llm::Http::from_env();
-    crate::llm::Http {
-        url: if m.chat_url.is_empty() { d.url } else { m.chat_url },
-        model: if m.chat_model.is_empty() { d.model } else { m.chat_model },
-    }
+    crate::host::Models::load(paths).chat()
 }
 
-/// The graph: the model reads up to `limit` records not read yet (newest first).
+/// The graph: the model reads up to `limit` records not read yet (newest first). With no chat model set it waits.
 pub fn graph(paths: &Paths, limit: usize, out: Out) -> Outcome {
+    let model = model_of(paths);
+    if model.url.is_empty() {
+        say(out, "no chat model is set (LIFE_LLM_URL); the graph waits until one is");
+        return Outcome::Ok;
+    }
     // one reader at a time: two would ask about the same records and put their edges in twice
     let Some(_lock) = settings::lock("graph") else {
         say(out, "the graph is being read by another run; skipping this one");
@@ -601,7 +601,6 @@ pub fn graph(paths: &Paths, limit: usize, out: Out) -> Outcome {
     let result = (|| -> anyhow::Result<String> {
         let mut lib = Librarian::open(paths, None, Duration::from_secs(30))?;
         let t = Instant::now();
-        let model = model_of(paths);
         let d = crate::librarian::graph::extract(
             &mut lib,
             &model,

@@ -5,7 +5,6 @@ use std::sync::Arc;
 use life_server::config::Paths;
 use life_server::host::{IngestSettings, Models};
 use life_server::http::{serve, serve_tls};
-use life_server::llm::{Http, HttpSpeech};
 
 const HELP: &str = r#"life-ingest: collection endpoint that any client (phone, PC, ...) can send NDJSON to. Raw data is stored on this server.
 
@@ -48,7 +47,9 @@ Settings: <config>/ingest.env  (KEY=VALUE, mode 600; <config> is LIFE_CONF_DIR, 
   INGEST_MAX_MB=20            maximum size of one request
   INGEST_CERT / INGEST_KEY    HTTPS if both are set (PEM files)
   LIFE_LLM_URL / LIFE_LLM_MODEL, LIFE_ASR_URL / LIFE_ASR_MODEL
-                              the chat and speech models (OpenAI-compatible); the environment wins over this file
+                              the chat and speech models (OpenAI-compatible, e.g. Ollama http://127.0.0.1:11434/v1);
+                              the environment wins over this file. None is built in: unset, the chat and voice answer
+                              that no address is set and the graph waits
 
 Usage: life-ingest [-h]"#;
 
@@ -66,10 +67,8 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::from(2);
         }
     };
-    // the model addresses from ingest.env or the environment, else this server's old defaults
-    let (chat, asr) = (Http::from_env(), HttpSpeech::from_env());
-    let defaults = Models { chat_url: chat.url, chat_model: chat.model, asr_url: asr.url, asr_model: asr.model };
-    let app = Arc::new(Models::load(&paths).or(&defaults).app(paths.clone(), &s));
+    // the model addresses from ingest.env or the environment (none built in)
+    let app = Arc::new(Models::load(&paths).app(paths.clone(), &s));
     let addr = SocketAddr::new(s.bind, s.port);
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let result = rt.block_on(async move {
