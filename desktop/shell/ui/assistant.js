@@ -369,6 +369,26 @@ $("toSettings").addEventListener("click", () => { location.href = "settings.html
 $("toGraph").addEventListener("click", () => { location.href = "graph.html"; });
 document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") $("drawer").hidden = true; });
 
+// ---------- update: a newer version of this app is published (installed only when the user clicks) ----------
+async function checkUpdate() {
+  const u = await invoke("update_check").catch(() => null);
+  if (!u) return;
+  $("updateText").textContent = `새 버전 ${u.version}이 있어요`;
+  $("updateBox").hidden = false;
+  $("updateDot").hidden = false;
+}
+$("updateInstall").addEventListener("click", async () => {
+  const btn = $("updateInstall");
+  btn.disabled = true;
+  $("updateText").textContent = "내려받아 설치하는 중… 끝나면 다시 켜져요";
+  try {
+    await invoke("update_install");   // the app restarts into the new version
+  } catch (e) {
+    $("updateText").textContent = String(e);
+    btn.disabled = false;
+  }
+});
+
 // ---------- start ----------
 function onError(e) {
   if (e instanceof Unauthorized) showSetup("토큰이 맞지 않거나 바뀌었어요.");
@@ -399,3 +419,4 @@ async function boot() {
 }
 
 boot();
+if (invoke) checkUpdate();
