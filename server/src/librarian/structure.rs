@@ -4,7 +4,7 @@
 //! kept as corrections (`label:`, `order:`), and is the user's structure from then on; a group not answered stays the
 //! model's, used inside only.
 //!
-//! When: after a graph update, a group of three record words or more, in three matters or more, the same in two
+//! When: after a graph update, a group of three to eight record words, in three matters or more, the same in two
 //! updates in a row, with nothing of it corrected and never asked before. One question in seven days at most. A group
 //! of states asks for an order too, when most of its matters go through the stages in the same order.
 use std::collections::{HashMap, HashSet};
@@ -18,6 +18,8 @@ use crate::config::Paths;
 
 /// the fewest record words, and matters, a group is asked about with
 const MIN: usize = 3;
+/// the most record words a group is asked about with: a bigger one cannot be checked in one line
+const MAX: usize = 8;
 /// days between two questions at least
 const EVERY: i64 = 7;
 /// record words a question names
@@ -141,7 +143,7 @@ pub fn pick(lib: &Librarian, before: &Seen, asked: &HashSet<String>) -> anyhow::
             !e.touched
                 && !ordered.contains(*g)
                 && !asked.contains(*g)
-                && e.uses.len() >= MIN
+                && (MIN..=MAX).contains(&e.uses.len())
                 && e.matters.len() >= MIN
                 && before.get(*g) == seen.get(*g)
         })

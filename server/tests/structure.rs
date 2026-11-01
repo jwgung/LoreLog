@@ -30,7 +30,9 @@ fn mail(s: &Server, name: &str, day: &str, subject: &str, body: &str) {
 /// The model's grouping of the record's words for states.
 fn model_groups() -> Value {
     json!({"견적 요청": "견적", "견적서 송부": "견적", "가격 제안": "견적", "계약 체결": "계약", "납품 완료": "납품",
-           "지원자": "지원자", "응시자": "지원자", "후보자": "지원자"})
+           "지원자": "지원자", "응시자": "지원자", "후보자": "지원자",
+           "공급사": "관계사", "납품사": "관계사", "제조사": "관계사", "협력사": "관계사", "파트너사": "관계사",
+           "외주사": "관계사", "시공사": "관계사", "설계사": "관계사", "감리사": "관계사"})
 }
 
 /// The model: the states of each matter by the words of its mail, and the groups of their names.
@@ -79,6 +81,17 @@ fn reader() -> Arc<FakeModel> {
                 "2026-05-10",
                 format!("{role} {who}")
             ]])
+        } else if let Some(i) = ["협력 일", "협력 이", "협력 삼"].iter().position(|c| text.contains(c)) {
+            // a group too big to ask about in one line: nine words
+            let roles =
+                [["공급사", "납품사", "제조사"], ["협력사", "파트너사", "외주사"], ["시공사", "설계사", "감리사"]][i];
+            let case = format!("협력 {}:case", ["일", "이", "삼"][i]);
+            json!(
+                roles
+                    .iter()
+                    .map(|r| json!([format!("{r} 담당:person"), "role", case, r, "2026-06-10", r]))
+                    .collect::<Vec<_>>()
+            )
         } else {
             json!([])
         };
@@ -107,6 +120,9 @@ fn world_with(chat: Arc<FakeModel>) -> (Server, Librarian) {
     mail(&s, "h1.md", "2026-05-10", "연구원 채용", "연구원 채용: 지원자 정다운");
     mail(&s, "h2.md", "2026-05-10", "인턴 채용", "인턴 채용: 응시자 김하나");
     mail(&s, "h3.md", "2026-05-10", "엔지니어 채용", "엔지니어 채용: 후보자 이수진");
+    mail(&s, "p1.md", "2026-06-10", "협력 일", "협력 일: 공급사 납품사 제조사");
+    mail(&s, "p2.md", "2026-06-10", "협력 이", "협력 이: 협력사 파트너사 외주사");
+    mail(&s, "p3.md", "2026-06-10", "협력 삼", "협력 삼: 시공사 설계사 감리사");
     let mut lib = Librarian::open(&s.paths, None, Duration::from_secs(5)).unwrap();
     lib.update(false).unwrap();
     let model = reader();
@@ -275,7 +291,7 @@ fn the_evening_question_is_the_structure_question_on_its_day_and_at_most_once_in
     assert_eq!(evening(&s, "2026-11-04"), "어떠셨어요?", "not within seven days");
     assert_eq!(evening(&s, "2026-11-08"), ROLES, "a group of roles asks no order");
     structure::note(&lib).unwrap();
-    assert_eq!(evening(&s, "2026-11-20"), "어떠셨어요?", "nothing left to ask");
+    assert_eq!(evening(&s, "2026-11-20"), "어떠셨어요?", "nothing left to ask: nine words are too many for a line");
 }
 
 #[test]
