@@ -86,7 +86,8 @@ pub fn between(paths: &Paths, from: NaiveDate, to: NaiveDate, today: NaiveDate) 
 fn notes(lib: &Librarian, todos: &Value, structure: &Structure, e: &Listed, today: NaiveDate) -> anyhow::Result<Notes> {
     let addrs: Vec<String> = e.attendees.iter().map(|(_, a)| a.clone()).filter(|a| a.contains('@')).collect();
     let mut notes = Notes::default();
-    if addrs.is_empty() {
+    // a day off on a team calendar or a company event is not about the requests of some of its people
+    if addrs.is_empty() || e.all_day || super::ahead::crowded(&addrs) {
         return Ok(notes);
     }
     // what was by the event's day, or by today for one to come

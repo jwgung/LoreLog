@@ -1653,7 +1653,11 @@ pub fn apply_fixes(db: &Connection, paths: &Paths) -> anyhow::Result<usize> {
                             params![today, rowid],
                         )?;
                     } else {
-                        db.execute("update edges set label = ? where rowid = ?", params![f.right, rowid])?;
+                        // what the user said: no guess of the model's any more (#64)
+                        db.execute(
+                            "update edges set label = ?, origin = 'user' where rowid = ?",
+                            params![f.right, rowid],
+                        )?;
                     }
                     done += 1;
                 }

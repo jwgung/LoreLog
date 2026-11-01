@@ -313,3 +313,14 @@ fn the_route_needs_the_token_and_a_body_of_events() {
     let (code, got) = s.post_json("/assistant/ahead", &json!({}));
     assert_eq!((code, got), (200, json!({"items": []})), "no events here or in the vault");
 }
+
+#[test]
+fn nothing_is_said_before_an_event_of_many_people() {
+    // a team or company event: the people with requests are only some of many, the event is not about them
+    let s = world();
+    let mut many: Vec<String> = (0..11).map(|i| format!("동료{i} <c{i}@mine.co.kr>")).collect();
+    many.push("이담당 <lee@client.co.kr>".into());
+    let refs: Vec<&str> = many.iter().map(String::as_str).collect();
+    let e = event("m", at(DAY, "10:00"), "전사 행사", &refs);
+    assert!(ahead::take(&s.paths, &ask(vec![e]), at(DAY, "09:55"), ahead::WINDOW).unwrap().is_empty());
+}
