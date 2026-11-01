@@ -4,11 +4,12 @@
 use rusqlite::{OptionalExtension, params};
 
 use super::Librarian;
-use super::graph::{groups, mine};
+use super::graph::{Structure, mine};
 use crate::assistant::period::{Event, Gathered, Matter, RECENT_DAYS, Request, Span, Todo};
 
 /// Words of a state that say the matter is over (the label the model gave, or the group it was put in). A simple
-/// rule: the groups of [`super::graph::group_labels`] are free words of the model's, not a fixed "ended" mark.
+/// rule: the groups ([`super::graph::group_labels`], with the user's names over them) are free words, not a fixed
+/// "ended" mark.
 pub const ENDED: [&str; 16] = [
     "완료",
     "종료",
@@ -125,7 +126,7 @@ impl Librarian {
 
     /// Matters with a record since `since` whose last state up to `today` is not an end.
     fn under_way(&self, since: &str, today: &str) -> anyhow::Result<Vec<Matter>> {
-        let groups = groups(&self.paths);
+        let groups = Structure::load(&self.paths).groups; // the user's names where given (#63)
         let mut st = self.db.prepare(
             "select case_key from docs where case_key is not null and source != 'file' and day between ? and ?
              group by case_key order by max(day) desc",

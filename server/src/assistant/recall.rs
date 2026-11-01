@@ -114,7 +114,12 @@ fn known(h: &Value) -> String {
     };
     let mut out = String::new();
     if let Some(st) = h.get("state").filter(|v| v.is_object()) {
-        let mut line = said(st, s(st, "label"));
+        // the stage by the user's name for it, then the record's word (#63)
+        let label = match s(st, "group") {
+            g if g.is_empty() => s(st, "label"),
+            g => format!("{g}({})", s(st, "label")),
+        };
+        let mut line = said(st, label);
         let earlier: Vec<String> = h
             .get("earlier")
             .and_then(Value::as_array)

@@ -609,12 +609,15 @@ pub fn graph(paths: &Paths, limit: usize, out: Out) -> Outcome {
         // the new role and state names, put with the ones of the same meaning (a failure waits for the next run)
         let grouped = crate::librarian::graph::group_labels(&lib, &model).unwrap_or(0);
         let _ = crate::librarian::graph::abbreviate_orgs(&lib, &model); // short names for the new organizations
+        // the group to ask the user about in an evening, if one has held still (#63)
+        let due = crate::librarian::structure::note(&lib).ok().flatten().is_some();
         Ok(format!(
-            "read {} records ({} failed, tried again next time), {} relations, {} names grouped, {} waiting ({:.0}s)",
+            "read {} records ({} failed, tried again next time), {} relations, {} names grouped{}, {} waiting ({:.0}s)",
             d.asked,
             d.failed,
             d.edges,
             grouped,
+            if due { ", a structure question waits" } else { "" },
             d.left,
             t.elapsed().as_secs_f64()
         ))

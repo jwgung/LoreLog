@@ -84,7 +84,9 @@ pub fn generate(paths: &Paths, model: &dyn Model, day: &str, dry_run: bool) -> a
     let path = paths.vault.join("Diary").join(format!("{day}.md"));
     let existing = crate::note::read(&path).unwrap_or_default();
     let s = |k: &str| ai.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-    let text = render(day, &s("summary"), &s("question"), &existing);
+    // on the day a structure question is due, it is the evening's one question (#63)
+    let question = crate::librarian::structure::due(paths, day, !dry_run).unwrap_or_else(|| s("question"));
+    let text = render(day, &s("summary"), &question, &existing);
     if !dry_run {
         write_note(paths, day, &text)?;
     }

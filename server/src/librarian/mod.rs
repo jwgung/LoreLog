@@ -7,5 +7,6 @@ pub mod graph;
 pub mod hanging;
 pub mod index;
 pub mod records;
+pub mod structure;
 
 pub use index::{Exclude, Librarian, Outdated, Report};

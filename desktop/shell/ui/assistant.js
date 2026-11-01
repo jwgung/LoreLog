@@ -9,6 +9,8 @@ let API_BASE = "";     // the server's base URL; API calls are made absolute wit
 let token = "";
 let wrong = null;      // the summary sentence the user is correcting
 let busy = false;
+let askOpen = false;   // the structure question (#63) is the last line: the next message answers it
+const ASK_SHOWN = "lorelog.askShown";
 
 // The diary day rolls over at 04:00 (same as the phone app).
 function diaryDay() {
@@ -159,8 +161,15 @@ async function loadChat() {
   pending.remove();
   renderSummary(draft);
   const hist = (await api(`/diary/${day}/chat`)).data.messages || [];
-  if (!hist.length && draft.question) bubble("assistant", draft.question);
+  // the structure question not answered yet (#63), shown once: the day's question then waits
+  const ask = typeof draft.ask === "string" && draft.ask && localStorage.getItem(ASK_SHOWN) !== draft.ask ? draft.ask : "";
+  if (!hist.length && draft.question && !ask) bubble("assistant", draft.question);
   for (const m of hist) bubble(m.role, m.text, m.wrong);
+  if (ask) {
+    bubble("assistant", ask);
+    localStorage.setItem(ASK_SHOWN, ask);
+    askOpen = true;
+  }
 }
 
 async function send(text) {
@@ -173,10 +182,14 @@ async function send(text) {
   wait.classList.add("pending");
   document.querySelectorAll(".summary button").forEach((x) => x.setAttribute("aria-pressed", "false"));
   setWrong(null);
+  // the first message after the structure question answers it (#63), unless it corrects a sentence
+  const about = !w && askOpen ? { about: "ask" } : {};
+  askOpen = false;
   try {
-    const r = await api(`/diary/${diaryDay()}/chat`, { message: text, ...(w ? { wrong: w } : {}) });
+    const r = await api(`/diary/${diaryDay()}/chat`, { message: text, ...(w ? { wrong: w } : about) });
     wait.classList.remove("pending");
     wait.textContent = r.status === 200 ? r.data.reply : "답을 받지 못했어요. 말씀하신 내용은 저장됐어요.";
+    if (r.status === 200 && r.data.changed) wait.after(el("div", "sources", String(r.data.changed)));
     if (r.status === 200) sourcesLine(wait, r.data.sources);
   } catch (e) {
     if (e instanceof Unauthorized) return showSetup("토큰이 맞지 않거나 바뀌었어요. 다시 넣어 주세요.");
