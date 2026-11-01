@@ -3,6 +3,7 @@ pub mod chat;
 pub mod context;
 pub mod corrections;
 pub mod diary;
+pub mod period;
 pub mod recall;
 pub mod senders;
 pub mod summary;
