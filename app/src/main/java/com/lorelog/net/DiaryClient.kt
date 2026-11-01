@@ -92,8 +92,14 @@ object DiaryClient {
         }
     }
 
-    /** 비서의 답, 그리고 정정이었으면 무엇이 바뀌었는지 한 줄(서버가 만든다). */
-    data class ChatReply(val reply: String, val changed: String?)
+    /** 답이 인용한 기록 하나(날짜, 종류, 제목). 답 아래에 출처로 작게 보인다(#64). */
+    data class Source(val day: String, val kind: String, val title: String)
+
+    /**
+     * 비서의 답, 정정이었으면 무엇이 바뀌었는지 한 줄(서버가 만든다), 그리고 사서가 찾아 답에 인용한 기록.
+     * 예전 서버는 sources를 보내지 않는다: 그때는 빈 목록.
+     */
+    data class ChatReply(val reply: String, val changed: String?, val sources: List<Source> = emptyList())
 
     /**
      * 사용자가 한 말을 일기에 남기고 비서의 답을 받는다(서버의 로컬 LLM). [wrong]이 있으면 그것을 고치는 말이다:
@@ -111,11 +117,22 @@ object DiaryClient {
             if (conn.responseCode !in 200..299) return@withContext null
             val o = JSONObject(conn.inputStream.bufferedReader().readText())
             val reply = o.optString("reply").takeIf { it.isNotBlank() } ?: return@withContext null
-            ChatReply(reply, o.optString("changed").takeIf { it.isNotBlank() })
+            ChatReply(reply, o.optString("changed").takeIf { it.isNotBlank() }, sources(o.optJSONArray("sources")))
         } catch (e: Exception) {
             null
         } finally {
             conn?.disconnect()
+        }
+    }
+
+    /** 서버가 보낸 출처 목록. 없거나 모양이 다르면 그 항목은 건너뛴다. */
+    private fun sources(arr: org.json.JSONArray?): List<Source> {
+        if (arr == null) return emptyList()
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.optJSONObject(i) ?: return@mapNotNull null
+            val title = o.optString("title").trim()
+            val day = o.optString("day").trim()
+            if (title.isEmpty() && day.isEmpty()) null else Source(day, o.optString("kind").trim(), title)
         }
     }
 
