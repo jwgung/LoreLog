@@ -370,13 +370,24 @@ pub fn phone_event_doc(rec: &Record) -> Option<Doc> {
     })
 }
 
+/// When an event document's text says it is (`YYYY-MM-DD HH:MM~HH:MM` for a timed one): its start and end (`HH:MM`,
+/// the end "" when not said). None for a day's own event (its text starts with the day alone).
+pub fn event_when(text: &str) -> Option<(String, String)> {
+    let head = text.lines().next().unwrap_or("");
+    if head.get(10..11) != Some(" ") || head.get(13..14) != Some(":") {
+        return None;
+    }
+    let end = head.split_once('~').map(|x| x.1).filter(|e| e.len() == 5 && e.get(2..3) == Some(":"));
+    Some((head.get(11..16)?.to_string(), end.unwrap_or("").to_string()))
+}
+
 /// The [`event_key`] of an event document (its day, title and text), from the time its text starts with
 /// (`YYYY-MM-DD HH:MM`, else the day).
 pub fn doc_event_key(day: &str, title: &str, text: &str) -> String {
-    let head: String = text.chars().take(16).collect();
-    let timed = head.chars().nth(10) == Some(' ') && head.chars().nth(13) == Some(':');
-    let start = if timed { head.replacen(' ', "T", 1) } else { day.to_string() };
-    event_key(&start, title)
+    match event_when(text) {
+        Some((start, _)) => event_key(&format!("{}T{start}", text.get(..10).unwrap_or(day)), title),
+        None => event_key(day, title),
+    }
 }
 
 // ---------- traces ----------

@@ -399,6 +399,7 @@ $("drawerClose").addEventListener("click", () => ($("drawer").hidden = true));
 $("drawer").addEventListener("click", (ev) => { if (ev.target === $("drawer")) $("drawer").hidden = true; });
 $("toSettings").addEventListener("click", () => { location.href = "settings.html"; });
 $("toGraph").addEventListener("click", () => { location.href = "graph.html"; });
+$("toSchedule").addEventListener("click", () => { location.href = "schedule.html"; });
 document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") $("drawer").hidden = true; });
 
 // ---------- update: a newer version of this app is published (installed only when the user clicks) ----------
@@ -430,6 +431,14 @@ function onError(e) {
 async function start() {
   $("setup").hidden = true;
   $("app").hidden = false;
+  // a question to ask, from the schedule (#62): put in the input, not sent
+  const ask = new URLSearchParams(location.search).get("ask");
+  if (ask) {
+    $("input").value = ask.slice(0, 500);
+    autosize();
+    $("input").focus();
+    history.replaceState(null, "", "index.html");
+  }
   try {
     await Promise.all([loadChat(), loadTodos(true)]);
   } catch (e) { onError(e); }

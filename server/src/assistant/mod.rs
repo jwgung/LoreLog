@@ -6,6 +6,7 @@ pub mod corrections;
 pub mod diary;
 pub mod period;
 pub mod recall;
+pub mod schedule;
 pub mod senders;
 pub mod summary;
 pub mod todos;

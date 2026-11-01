@@ -316,6 +316,27 @@ pub struct Report {
     pub docs: usize,
 }
 
+/// An event of the index, as the schedule lists it (#62).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Listed {
+    /// who the event is ([`records::event_key`]): the same from CalDAV and the phone
+    pub key: String,
+    pub day: String,
+    /// `HH:MM`, "" for a day's own event
+    pub start: String,
+    /// `HH:MM`, "" when not known
+    pub end: String,
+    pub all_day: bool,
+    pub title: String,
+    pub place: String,
+    /// (name, address)
+    pub attendees: Vec<(String, String)>,
+    /// its matter (#8), if in one
+    pub case: Option<String>,
+    /// where it is: its note, or the phone's calendar ([`records::PHONE_EVENT`])
+    pub file: String,
+}
+
 /// What a search may leave out of one day: all of it, or only these lines the user said (as the chat log holds them).
 pub enum Exclude<'a> {
     Day(&'a str),
@@ -594,6 +615,38 @@ impl Librarian {
             .filter(|(_, r)| r.get("status").and_then(Value::as_str) != Some("deleted"))
             .filter(|(_, r)| records::phone_event_times(r).is_some_and(|(s, _, _)| s >= from && s <= to))
             .collect())
+    }
+
+    /// The events the index holds (CalDAV's notes and the phone's calendar, each once) that start on the days from
+    /// `from` to `to` (`YYYY-MM-DD`, both included), by day, the day's own events first, then by time (#62).
+    pub fn events_between(&self, from: &str, to: &str) -> anyhow::Result<Vec<Listed>> {
+        self.ready()?;
+        type Row = (i64, String, String, String, Option<String>, String);
+        let rows: Vec<Row> = {
+            let mut st = self.db.prepare(
+                "select n, day, title, text, case_key, file from docs where source = 'event' and day >= ? and day <= ?
+                 order by day, text, n",
+            )?;
+            st.query_map([from, to], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?
+                .collect::<rusqlite::Result<_>>()?
+        };
+        let mut people =
+            self.db.prepare("select name, addr from people where n = ? and role = 'attendee' order by rowid")?;
+        let mut out = Vec::new();
+        for (n, day, title, text, case, file) in rows {
+            let attendees: Vec<(String, String)> =
+                people.query_map([n], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+            let key = records::doc_event_key(&day, &title, &text);
+            if out.iter().any(|e: &Listed| e.key == key) {
+                continue; // one event written twice (two calendars)
+            }
+            let when = records::event_when(&text);
+            let place = text.lines().nth(1).and_then(|l| l.strip_prefix("장소 ")).unwrap_or("").trim().to_string();
+            let (start, end) = when.clone().unwrap_or_default();
+            out.push(Listed { key, day, all_day: when.is_none(), start, end, title, place, attendees, case, file });
+        }
+        out.sort_by(|a, b| a.day.cmp(&b.day).then(a.start.cmp(&b.start)));
+        Ok(out)
     }
 
     /// (files to read again, files gone). Every phone file is read again when the allowed senders changed.

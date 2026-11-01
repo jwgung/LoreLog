@@ -144,7 +144,7 @@ fn known(h: &Value) -> String {
 }
 
 /// The words that say it, on one line and short (they stay in the quote: no double quote of their own).
-fn evidence(text: &str) -> String {
+pub(crate) fn evidence(text: &str) -> String {
     let one = text.split_whitespace().collect::<Vec<_>>().join(" ").replace('"', "'");
     if one.chars().count() > MAX_EVIDENCE {
         format!("{}…", one.chars().take(MAX_EVIDENCE).collect::<String>())
