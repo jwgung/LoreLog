@@ -107,6 +107,46 @@ fn a_chat_message_is_answered_and_both_turns_are_kept() {
 }
 
 #[test]
+fn a_chat_answer_carries_the_records_it_quoted_and_older_answers_stay_as_they_were() {
+    use life_server::assistant::recall::{Recalled, Source};
+    let dir = tempfile::tempdir().unwrap();
+    let paths = life_server::config::Paths::under(dir.path());
+    let mut app = life_server::http::App::with(
+        paths.clone(),
+        common::TOKEN,
+        "personal",
+        1 << 20,
+        FakeModel::plain(),
+        std::sync::Arc::new(common::FakeSpeech),
+    );
+    app.recall = std::sync::Arc::new(|message: &str, _: &str, _: &[String], _: Option<&str>| {
+        message.contains("견적").then(|| Recalled {
+            section: "- 2026-03-05 [보낸 메일] 배관 교체 견적: 배관 견적 보냅니다".into(),
+            sources: vec![Source {
+                day: "2026-03-05".into(),
+                kind: "보낸 메일".into(),
+                title: "배관 교체 견적".into(),
+                refers: "Mail/2026/q3.md".into(),
+            }],
+        })
+    });
+    let s = Server::run(dir, paths, std::sync::Arc::new(app));
+    assert_eq!(
+        s.post_json("/diary/2026-02-05/chat", &json!({"message": "배관 견적 어떻게 됐지"})),
+        (
+            200,
+            json!({"reply": "네, 확인했어요.", "sources": [{"day": "2026-03-05", "kind": "보낸 메일",
+                   "title": "배관 교체 견적", "ref": "Mail/2026/q3.md"}]})
+        )
+    );
+    assert_eq!(
+        s.post_json("/diary/2026-02-05/chat", &json!({"message": "오늘 좀 바빴어"})),
+        (200, json!({"reply": "네, 확인했어요."})),
+        "nothing looked up: no sources"
+    );
+}
+
+#[test]
 fn a_failing_model_is_a_502_with_the_reason() {
     let s = Server::start_full(1 << 20, FakeModel::new(|_| anyhow::bail!("model down")));
     let (status, body) = s.post_json("/diary/2026-02-04/chat", &json!({"message": "안녕"}));

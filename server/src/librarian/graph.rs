@@ -1007,17 +1007,35 @@ impl Librarian {
         Ok(out)
     }
 
-    /// The last state of a matter up to `day`: (label, since).
-    fn last_state(&self, case: &str, day: &str) -> Option<(String, String)> {
-        self.db
-            .query_row(
-                "select label, since from edges where src = ? and rel = 'state' and since <= ? order by since desc limit 1",
-                params![case, day],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+    /// How a matter stands up to `day`, for a hit (#64): its last state with the words that say it and where it came
+    /// from (`{label, since, evidence, origin}`), and the other states it went through before, the latest first
+    /// (`[{label, since, origin}]`, two at most). None when it has no state.
+    fn states(&self, case: &str, day: &str) -> Option<(Value, Vec<Value>)> {
+        let mut st = self
+            .db
+            .prepare(
+                "select label, since, coalesce(evidence, ''), coalesce(origin, '') from edges where src = ? and rel = 'state' and since <= ?
+                 order by since desc, rowid desc",
             )
-            .optional()
-            .ok()
+            .ok()?;
+        let rows: Vec<(String, String, String, String)> = st
+            .query_map(params![case, day], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .ok()?
             .flatten()
+            .collect();
+        let ((label, since, evidence, origin), rest) = rows.split_first()?;
+        let mut seen = vec![label.clone()];
+        let earlier = rest
+            .iter()
+            .filter(|(l, ..)| {
+                let new = !seen.contains(l);
+                seen.push(l.clone());
+                new
+            })
+            .take(2)
+            .map(|(l, s, _, o)| json!({"label": l, "since": s, "origin": o}))
+            .collect();
+        Some((json!({"label": label, "since": since, "evidence": evidence, "origin": origin}), earlier))
     }
 
     /// The organization a name is exactly (by a name, an alias, a short name or its domain), if one.
@@ -1213,19 +1231,29 @@ impl Librarian {
         let mut out = Vec::new();
         for (_, _, n, c) in ranked.into_iter().take(limit) {
             let mut h = self.hit(n, Some(&c), &words.join(" "))?;
-            if let Some((l, since)) = self.last_state(&c, day) {
-                h["state"] = json!(format!("{l} ({since})"));
+            // what the graph knows of the matter, with the words that say it and where it came from: the model's
+            // reading is a guess, said as one (#64)
+            if let Some((last, earlier)) = self.states(&c, day) {
+                h["state"] = last;
+                if !earlier.is_empty() {
+                    h["earlier"] = json!(earlier);
+                }
             }
-            let roles: Vec<String> = {
+            let roles: Vec<Value> = {
                 let mut st = self.db.prepare(
-                    "select coalesce(n.name, e.src), e.label from edges e left join nodes n on n.id = e.src where e.dst = ? and e.rel = 'role' limit 4",
+                    "select coalesce(n.name, e.src), e.label, coalesce(e.since, ''), coalesce(e.evidence, ''), coalesce(e.origin, '') from edges e
+                     left join nodes n on n.id = e.src where e.dst = ? and e.rel = 'role' limit 4",
                 )?;
-                st.query_map([&c], |r| Ok(format!("{} {}", r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
-                    .flatten()
-                    .collect()
+                st.query_map([&c], |r| {
+                    Ok(json!({"who": r.get::<_, String>(0)?, "label": r.get::<_, String>(1)?,
+                              "since": r.get::<_, String>(2)?, "evidence": r.get::<_, String>(3)?,
+                              "origin": r.get::<_, String>(4)?}))
+                })?
+                .flatten()
+                .collect()
             };
             if !roles.is_empty() {
-                h["roles"] = json!(roles.join(", "));
+                h["roles"] = json!(roles);
             }
             if sure {
                 h["sure"] = json!(true); // the matters of the one asked about: before what the words find

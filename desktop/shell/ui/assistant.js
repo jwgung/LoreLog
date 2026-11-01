@@ -90,6 +90,24 @@ function bubble(role, text, fixed) {
 }
 function scrollDown() { const t = $("thread"); t.scrollTop = t.scrollHeight; }
 
+// The records the answer quoted (#64), as one small line under it: day, kind and title, three at most.
+function shortDay(d) {
+  const p = String(d || "").split("-");
+  if (p.length !== 3) return String(d || "");
+  const md = `${Number(p[1])}/${Number(p[2])}`;
+  return p[0] === String(new Date().getFullYear()) ? md : `${p[0]}/${md}`;
+}
+function sourcesLine(after, sources) {
+  if (!Array.isArray(sources) || !sources.length) return;
+  const shown = sources.slice(0, 3).map((s) => {
+    const t = String(s.title || "");
+    const title = t.length > 30 ? t.slice(0, 30) + "…" : t;
+    return [shortDay(s.day), String(s.kind || ""), title ? `「${title}」` : ""].filter(Boolean).join(" ");
+  });
+  const more = sources.length - shown.length;
+  after.after(el("div", "sources", `출처 · ${shown.join(" · ")}${more > 0 ? ` 외 ${more}건` : ""}`));
+}
+
 function renderSummary(draft) {
   const box = el("div", "summary");
   box.append(el("h2", "", "오늘 하루, 이렇게 정리해 봤어요"));
@@ -159,6 +177,7 @@ async function send(text) {
     const r = await api(`/diary/${diaryDay()}/chat`, { message: text, ...(w ? { wrong: w } : {}) });
     wait.classList.remove("pending");
     wait.textContent = r.status === 200 ? r.data.reply : "답을 받지 못했어요. 말씀하신 내용은 저장됐어요.";
+    if (r.status === 200) sourcesLine(wait, r.data.sources);
   } catch (e) {
     if (e instanceof Unauthorized) return showSetup("토큰이 맞지 않거나 바뀌었어요. 다시 넣어 주세요.");
     wait.classList.remove("pending");
