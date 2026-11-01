@@ -832,11 +832,71 @@ fn label_fits(label: &str, words: &[String], groups: &std::collections::HashMap<
 }
 
 /// The groups of the labels the model gave (label -> group), kept by [`group_labels`].
-fn groups(paths: &Paths) -> std::collections::HashMap<String, String> {
+fn model_groups(paths: &Paths) -> std::collections::HashMap<String, String> {
     std::fs::read_to_string(cache_dir(paths).join("labels.json"))
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default()
+}
+
+/// The groups of the record's words for roles and states, and the order of the stages: the model's groups, with what
+/// the user said over them (#63). The user's names are kept in the corrections, so they hold through a rebuild; a
+/// group the user did not answer is the model's, used inside only.
+#[derive(Clone, Debug, Default)]
+pub struct Structure {
+    /// label -> group (the user's name where the user gave one)
+    pub groups: std::collections::HashMap<String, String>,
+    /// the labels the user put under a name, or took out of any
+    pub named: HashSet<String>,
+    /// the orders the user gave the stages, each a list of group names
+    pub orders: Vec<Vec<String>>,
+}
+
+impl Structure {
+    pub fn load(paths: &Paths) -> Structure {
+        use crate::assistant::corrections::{Ref, of_structure, stages};
+        let mut groups = model_groups(paths);
+        let mut named = HashSet::new();
+        let mut orders: Vec<(String, Vec<String>)> = Vec::new();
+        for c in of_structure(paths) {
+            match &c.refers {
+                Ref::Label(w) => {
+                    named.insert(w.clone());
+                    if c.right == "-" {
+                        groups.remove(w);
+                    } else {
+                        groups.insert(w.clone(), c.right.clone());
+                    }
+                }
+                Ref::Order(g) => {
+                    if let Some(s) = stages(&c.right) {
+                        orders.retain(|(o, _)| o != g);
+                        orders.push((g.clone(), s));
+                    }
+                }
+                _ => {}
+            }
+        }
+        Structure { groups, named, orders: orders.into_iter().map(|(_, s)| s).collect() }
+    }
+
+    /// The group of a label and whether the name is the user's.
+    pub fn group_of(&self, label: &str) -> Option<(&str, bool)> {
+        self.groups.get(label).map(|g| (g.as_str(), self.named.contains(label)))
+    }
+
+    /// Is a label a stage past the one these words name, in an order the user gave? (A matter delivered went past the
+    /// contract, though no record says the contract.)
+    fn past(&self, label: &str, words: &[String]) -> bool {
+        let Some(g) = self.groups.get(label).map(|g| name_key(g)) else { return false };
+        let keys: Vec<String> = words.iter().map(|w| name_key(w)).filter(|w| !w.is_empty()).collect();
+        self.orders.iter().any(|o| {
+            let o: Vec<String> = o.iter().map(|s| name_key(s)).collect();
+            let at = o.iter().position(|s| *s == g);
+            let before = o.iter().position(|s| keys.iter().any(|k| s.contains(k)));
+            matches!((at, before), (Some(a), Some(b)) if a > b)
+        })
+    }
 }
 
 impl Librarian {
@@ -1100,7 +1160,8 @@ impl Librarian {
             return Ok(Vec::new());
         }
         self.ready_graph()?;
-        let groups = groups(&self.paths);
+        let structure = Structure::load(&self.paths);
+        let groups = &structure.groups;
         // who and what
         let mut ids = Vec::new();
         // sure: every organization asked about is exactly one known by its mail domain, and nothing else is asked
@@ -1131,7 +1192,7 @@ impl Librarian {
             Some(
                 rows.into_iter()
                     .filter(|(src, _, l)| {
-                        label_fits(l, &a.roles, &groups) && (person_ids.is_empty() || person_ids.contains(src))
+                        label_fits(l, &a.roles, groups) && (person_ids.is_empty() || person_ids.contains(src))
                     })
                     .map(|(_, dst, _)| dst)
                     .collect(),
@@ -1173,12 +1234,15 @@ impl Librarian {
                 let hit = if a.states.is_empty() {
                     Some(0)
                 } else {
-                    states.iter().rposition(|(l, _)| label_fits(l, &a.states, &groups))
+                    states.iter().rposition(|(l, _)| label_fits(l, &a.states, groups))
                 };
                 match hit {
                     None => false,
                     Some(i) => {
-                        !states[i..].iter().any(|(l, _)| !a.absent.is_empty() && label_fits(l, &a.absent, &groups))
+                        // a stage past the one that did not follow, in the user's order, is as if it had (#63)
+                        !states[i..].iter().any(|(l, _)| {
+                            !a.absent.is_empty() && (label_fits(l, &a.absent, groups) || structure.past(l, &a.absent))
+                        })
                     }
                 }
             });
@@ -1233,7 +1297,11 @@ impl Librarian {
             let mut h = self.hit(n, Some(&c), &words.join(" "))?;
             // what the graph knows of the matter, with the words that say it and where it came from: the model's
             // reading is a guess, said as one (#64)
-            if let Some((last, earlier)) = self.states(&c, day) {
+            if let Some((mut last, earlier)) = self.states(&c, day) {
+                // the stage it is in, by the user's name for it (one the user did not give stays inside)
+                if let Some((g, true)) = last["label"].as_str().and_then(|l| structure.group_of(l)) {
+                    last["group"] = json!(g);
+                }
                 h["state"] = last;
                 if !earlier.is_empty() {
                     h["earlier"] = json!(earlier);
@@ -1274,18 +1342,24 @@ impl Librarian {
 }
 
 /// Put the labels the model gave roles and states not grouped yet into groups of the same meaning (the model
-/// decides; titles and ranks are no roles). Kept beside the answers. -> labels grouped
+/// decides; titles and ranks are no roles). The user's names are among the groups it may use, and what the user named
+/// is not grouped again (#63). Kept beside the answers. -> labels grouped
 pub fn group_labels(lib: &Librarian, model: &dyn Model) -> anyhow::Result<usize> {
     let path = cache_dir(&lib.paths).join("labels.json");
-    let mut known: std::collections::HashMap<String, String> = groups(&lib.paths);
+    let mut known: std::collections::HashMap<String, String> = model_groups(&lib.paths);
+    let users = Structure::load(&lib.paths);
     let mut st = lib.db.prepare("select distinct label from edges where rel in ('role', 'state') and label != ''")?;
-    let new: Vec<String> =
-        st.query_map([], |r| r.get::<_, String>(0))?.flatten().filter(|l| !known.contains_key(l)).take(300).collect();
+    let new: Vec<String> = st
+        .query_map([], |r| r.get::<_, String>(0))?
+        .flatten()
+        .filter(|l| !known.contains_key(l) && !users.named.contains(l))
+        .take(300)
+        .collect();
     if new.is_empty() {
         return Ok(0);
     }
     let names: Vec<&String> = {
-        let mut v: Vec<&String> = known.values().collect();
+        let mut v: Vec<&String> = users.groups.values().collect();
         v.sort();
         v.dedup();
         v
@@ -1412,6 +1486,19 @@ impl Librarian {
                 .map(|rows| rows.flatten().any(|e| edge_key(&e) == *k))
                 .unwrap_or(false)
             }
+            // a word the graph has for a role or a state, put under a name or taken out (#63)
+            Ref::Label(w) => {
+                (c.right == "-" || crate::assistant::corrections::a_name(&c.right).is_some())
+                    && self
+                        .db
+                        .query_row(
+                            "select count(*) from edges where rel in ('role', 'state') and label = ?",
+                            [w],
+                            |r| r.get::<_, i64>(0),
+                        )
+                        .is_ok_and(|n| n > 0)
+            }
+            Ref::Order(g) => crate::assistant::corrections::stages(&c.right).is_some_and(|s| s.contains(g)),
             _ => false,
         }
     }
@@ -1475,6 +1562,7 @@ impl Librarian {
         let Some(n) = self.node(id) else { return Ok(None) };
         let short = short_names(&self.paths).remove(id).unwrap_or_default();
         let same = self.with_same(vec![id.to_string()])?.into_iter().skip(1).collect::<Vec<_>>();
+        let structure = Structure::load(&self.paths);
         let mut edges = Vec::new();
         for (dir, list) in [("out", self.edges_from(id, None)), ("in", self.edges_to(id, None))] {
             for e in list.into_iter().take(300) {
@@ -1488,11 +1576,17 @@ impl Librarian {
                     })
                     .optional()?
                     .unwrap_or_default();
-                edges.push(
-                    json!({"key": edge_key(&e), "rel": e.rel, "dir": dir, "other": other, "other_name": other_name,
+                let mut edge = json!({"key": edge_key(&e), "rel": e.rel, "dir": dir, "other": other, "other_name": other_name,
                                   "label": e.label, "since": e.since, "evidence": e.evidence, "origin": e.origin,
-                                  "title": title, "day": day}),
-                );
+                                  "title": title, "day": day});
+                // the group of the record's word: the user's name, or the model's guess (#63)
+                if matches!(e.rel.as_str(), "role" | "state")
+                    && let Some((g, users)) = structure.group_of(&e.label)
+                {
+                    edge["group"] = json!(g);
+                    edge["group_by"] = json!(if users { "user" } else { "model" });
+                }
+                edges.push(edge);
             }
         }
         Ok(Some(json!({"node": {"id": n.id, "kind": n.kind, "name": n.name, "aliases": n.aliases, "short": short},

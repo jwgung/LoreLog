@@ -304,7 +304,7 @@ fn correction_post(app: &App, req: &Request, _: &regex::Captures) -> Result<Repl
             diary::save_user(&app.paths, day, &fix).map_err(|e| internal(req, &e))?;
         }
         Ref::Chat(_) => {}
-        Ref::Org(_) | Ref::Edge(_) => {
+        Ref::Org(_) | Ref::Edge(_) | Ref::Label(_) | Ref::Order(_) => {
             let lib = crate::librarian::Librarian::open(&app.paths, None, std::time::Duration::from_secs(5))
                 .map_err(|e| internal(req, &e.to_string()))?;
             if !lib.graph_fix_fits(&c) {

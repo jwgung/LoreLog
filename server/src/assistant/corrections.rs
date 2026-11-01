@@ -3,7 +3,9 @@
 //! (the day it was said). Then it is applied where it refers to, and what changed is said back in one line:
 //!   - `summary:<day>`: the day's note keeps it under 정정, and the summary is made again with it;
 //!   - `chat:<day>`: the assistant answers the rest of that day with it;
-//!   - `todo:<id>`: the to-do is named as the user said.
+//!   - `todo:<id>`: the to-do is named as the user said;
+//!   - `org:<domain>`, `edge:<key>`: the graph (#47);
+//!   - `label:<record word>`, `order:<group>`: the structure the user gave the graph's words (#63).
 //!
 //! The same pairs are later what the persona and the assistant learn from: nothing is summarised away here.
 use std::sync::LazyLock;
@@ -35,10 +37,36 @@ pub enum Ref {
     Org(String),
     /// a relation of the graph, by [`crate::librarian::graph::edge_key`] (#47)
     Edge(String),
+    /// a record's word for a role or a state, put under the user's name for it (right `-`: under none) (#63)
+    Label(String),
+    /// the order the user's stages go in, about one of them (right `a→b→c`) (#63)
+    Order(String),
+}
+
+/// the longest record word or group name a structure correction is about
+pub const MAX_NAME: usize = 60;
+
+/// A record word or a group name as a structure correction may hold it: one line, not empty, not too long.
+pub fn a_name(s: &str) -> Option<String> {
+    let s = s.trim();
+    (!s.is_empty() && s.chars().count() <= MAX_NAME && !s.chars().any(char::is_control)).then(|| s.to_string())
+}
+
+/// The stages of an order (`a→b→c`), when it is one: two at least, each a name, none twice.
+pub fn stages(order: &str) -> Option<Vec<String>> {
+    let names: Vec<String> = order.split('→').map(a_name).collect::<Option<_>>()?;
+    let mut seen = std::collections::HashSet::new();
+    (names.len() >= 2 && names.len() <= 8 && names.iter().all(|n| seen.insert(n.clone()))).then_some(names)
 }
 
 impl Ref {
     pub fn parse(s: &str) -> Option<Ref> {
+        if let Some(w) = s.strip_prefix("label:") {
+            return a_name(w).filter(|n| n == w).map(Ref::Label);
+        }
+        if let Some(g) = s.strip_prefix("order:") {
+            return a_name(g).filter(|n| n == g).map(Ref::Order);
+        }
         if let Some(c) = GRAPH_RE.captures(s.trim()) {
             return Some(match (c.get(1), c.get(2)) {
                 (Some(d), _) => Ref::Org(d.as_str().into()),
@@ -62,6 +90,8 @@ impl Ref {
             Ref::Todo(id) => format!("todo:{id}"),
             Ref::Org(d) => format!("org:{d}"),
             Ref::Edge(k) => format!("edge:{k}"),
+            Ref::Label(w) => format!("label:{w}"),
+            Ref::Order(g) => format!("order:{g}"),
         }
     }
 }
@@ -99,6 +129,9 @@ impl Correction {
             },
             Ref::Edge(_) if self.right == "-" => format!("관계를 지웠어요: {w}"),
             Ref::Edge(_) => format!("관계를 고쳤어요: {w} → {r}"),
+            Ref::Label(word) if self.right == "-" => format!("묶음에서 뺐어요: {}", cut(word)),
+            Ref::Label(word) => format!("묶음 이름을 정했어요: {} → {r}", cut(word)),
+            Ref::Order(_) => format!("순서를 정했어요: {r}"),
         }
     }
 }
@@ -137,14 +170,24 @@ pub fn about(paths: &Paths, refs: &[Ref]) -> Vec<Correction> {
 
 /// Every correction kept that is about the graph, oldest first.
 pub fn of_graph(paths: &Paths) -> Vec<Correction> {
+    kept_where(paths, |r| matches!(r, Ref::Org(_) | Ref::Edge(_)))
+}
+
+/// Every correction kept of the structure the user gave (names of groups, orders of stages), oldest first.
+pub fn of_structure(paths: &Paths) -> Vec<Correction> {
+    kept_where(paths, |r| matches!(r, Ref::Label(_) | Ref::Order(_)))
+}
+
+fn kept_where(paths: &Paths, wanted: impl Fn(&Ref) -> bool) -> Vec<Correction> {
     let mut files = crate::assistant::util::files_like(&paths.raw().join("corrections"), "", ".ndjson");
     files.sort();
     let mut out = Vec::new();
     for f in files {
         let Ok(text) = std::fs::read_to_string(&f) else { continue };
         for v in text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()) {
-            if let (Some(refers @ (Ref::Org(_) | Ref::Edge(_))), Some(w), Some(r)) =
+            if let (Some(refers), Some(w), Some(r)) =
                 (Ref::parse(v["ref"].as_str().unwrap_or("")), v["wrong"].as_str(), v["right"].as_str())
+                && wanted(&refers)
                 && let Some(c) = Correction::new(w, r, refers)
             {
                 out.push(c);
@@ -172,12 +215,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_ref_is_one_of_three_kinds_and_round_trips() {
-        for s in ["summary:2026-01-02", "chat:2026-01-02", "todo:0123456789"] {
+    fn a_ref_is_one_of_its_kinds_and_round_trips() {
+        for s in ["summary:2026-01-02", "chat:2026-01-02", "todo:0123456789", "label:견적서 송부", "order:견적"]
+        {
             assert_eq!(Ref::parse(s).unwrap().as_str(), s);
         }
-        for s in ["summary:2026-1-2", "todo:xyz", "elsewhere:1", "chat:2026-01-02/../x", ""] {
+        for s in ["summary:2026-1-2", "todo:xyz", "elsewhere:1", "chat:2026-01-02/../x", "", "label:", "label: x"] {
             assert!(Ref::parse(s).is_none(), "{s}");
+        }
+        assert!(Ref::parse(&format!("label:{}", "가".repeat(MAX_NAME + 1))).is_none());
+        assert!(Ref::parse("order:a\tb").is_none());
+    }
+
+    #[test]
+    fn an_order_is_two_stages_at_least_each_once() {
+        assert_eq!(stages("견적 → 계약→납품"), Some(vec!["견적".into(), "계약".into(), "납품".into()]));
+        for bad in ["견적", "견적→견적", "견적→→계약", ""] {
+            assert!(stages(bad).is_none(), "{bad}");
         }
     }
 

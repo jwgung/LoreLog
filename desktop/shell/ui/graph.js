@@ -52,6 +52,15 @@ async function correct(body, then) {
   else say("고치지 못했습니다: " + (r.data.error || r.status), true);
 }
 
+// The record's word, and the group it is in (#63): the user's name as it is, the model's guess marked as one.
+function labelCell(e) {
+  const td = el("td", e.label);
+  if (e.group && e.group !== e.label) {
+    td.append(el("span", e.group_by === "user" ? ` · ${e.group}` : ` · ${e.group}(추정)`, "gkind"));
+  }
+  return td;
+}
+
 async function show(id) {
   const r = await api("/graph/node?id=" + encodeURIComponent(id));
   const view = $("gview");
@@ -86,7 +95,7 @@ async function show(id) {
     tr.append(el("td", (REL[e.rel] || e.rel) + (e.dir === "in" ? " ←" : " →")));
     const other = el("td");
     if (e.other) { const a = el("a", e.other_name); a.onclick = () => show(e.other); other.append(a); }
-    tr.append(other, el("td", e.label), el("td", e.since));
+    tr.append(other, labelCell(e), el("td", e.since));
     const ev = el("td");
     ev.append(el("div", e.evidence ? `«${e.evidence}»` : ""), el("div", `${e.day} ${e.title}`, "gev"));
     tr.append(ev);
