@@ -1,5 +1,6 @@
 //! The vault taken out whole (#11): one zip of what the user's records are, in open formats, with a list of hashes
-//! to check it by; what can be made again (the index, caches) and secrets stay behind.
+//! to check it by, and the graph's model answers (slow to ask again); what is quick to make again (the index, other
+//! caches) and secrets stay behind.
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -25,6 +26,9 @@ fn vault() -> (tempfile::TempDir, Paths) {
     put(&p.vault.join("Diary/2026-03-01.md"), "# 하루".as_bytes());
     put(&p.vault.join("Private/mine.md"), b"not ours to take"); // the user's own notes elsewhere in the vault
     put(&p.allow_file, b"{\"allow\":[]}");
+    // the model's graph answers: slow to ask again, so they go out (only those of the graph version in use)
+    put(&life_server::librarian::graph::cache_dir(&p).join("ab/abcd.json"), b"{\"edges\":[]}");
+    put(&p.data.join("cache/graph-0/cd/cdef.json"), b"old version");
     // what stays behind
     put(&p.data.join("librarian.sqlite"), b"index");
     put(&p.data.join("cache/attach-text-1/ab/ab12.pdf"), b"text");
@@ -51,6 +55,7 @@ fn the_records_notes_files_and_settings_go_out_and_the_index_caches_and_secrets_
         [
             "MANIFEST.sha256",
             "README.md",
+            &format!("data/cache/graph-{}/ab/abcd.json", life_server::librarian::graph::VERSION),
             "data/librarian-asks.ndjson",
             "data/raw/files/ab/ab12",
             "data/raw/lorelog/2026-03-01.ndjson",
@@ -62,7 +67,7 @@ fn the_records_notes_files_and_settings_go_out_and_the_index_caches_and_secrets_
             "settings/diary.json",
         ]
     );
-    assert_eq!(report.files, 9);
+    assert_eq!(report.files, 10);
     let mut z = zip::ZipArchive::new(fs::File::open(&out).unwrap()).unwrap();
     let mut manifest = String::new();
     z.by_name("MANIFEST.sha256").unwrap().read_to_string(&mut manifest).unwrap();
@@ -75,7 +80,7 @@ fn the_records_notes_files_and_settings_go_out_and_the_index_caches_and_secrets_
     z.by_name("notes/Mail/2026/a.md").unwrap().read_to_string(&mut text).unwrap();
     assert_eq!(text, "---\ntype: mail\n---\n견적");
     assert!(!dir.path().join("out/lorelog.zip.part").exists());
-    assert_eq!(export::verify(&out).unwrap(), 9);
+    assert_eq!(export::verify(&out).unwrap(), 10);
 }
 
 #[test]

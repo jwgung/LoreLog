@@ -1,5 +1,5 @@
 //! Copies to go back to (#16). The vault lives in one place (docs/adr/0002), so that place's disk must not be the only
-//! copy. Once a day, with the hourly sync, the export (#11: records, files, notes, a list of hashes; not the index) is
+//! copy. Once a day, with the hourly sync, the export (#11: records, files, notes, the graph's model answers, a list of hashes; not the index) is
 //! sealed with the user's password (age, passphrase) into a folder they chose: an external disk, a NAS, a synced
 //! folder. The seal covers the names too (mail notes are named by their subjects). Each copy is opened again and
 //! checked against its hashes before it counts; 7 days and 4 weeks are kept. The same on the home server and in the
