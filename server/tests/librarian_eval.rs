@@ -144,6 +144,12 @@ fn records_that_disagree_are_found_only_when_each_record_is_shown_not_only_its_t
     assert_eq!(out[0].raw_rank, None, "one mail of the thread is shown, the other is folded away: a miss");
     assert_eq!(out[1].raw_rank, Some(2), "both shown: counted at the rank of the later one");
     assert_eq!(eval::summary(&out)[&Kind::Conflict].raw, (1, 2));
+    let unknown = cases(&p, "[[case]]\nkind = \"conflict\"\nq = \"영희\"\nrecords = [\"b1.md@x\", \"nope@x\"]\n");
+    let err = eval::run(&mut lib, None, &p.vault, &unknown, 8).unwrap_err().to_string();
+    assert!(
+        err.contains("not in the index") && !err.contains("nope"),
+        "a broken case is an error, naming no id: {err}"
+    );
     let f = p.data.join("bad.toml");
     fs::write(&f, "[[case]]\nkind = \"conflict\"\nq = \"뭐지\"\nrecords = [\"a1.md@x\"]\n").unwrap();
     assert!(eval::load(&f).unwrap_err().to_string().contains("records"));

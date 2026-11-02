@@ -238,7 +238,11 @@ pub fn run(
     k: usize,
 ) -> anyhow::Result<Vec<Result1>> {
     let mut out = Vec::new();
-    for c in cases {
+    for (i, c) in cases.iter().enumerate() {
+        // a record the index does not hold is a broken case, not a miss: it would pass for "not shown"
+        if c.kind == Kind::Conflict && c.records.iter().flatten().any(|r| lib.file_of_mail(r).is_none()) {
+            anyhow::bail!("case {} (Conflict): a record is not in the index", i + 1);
+        }
         let addr = c.person.as_ref().map(|a| a.trim().to_lowercase());
         let targets: HashSet<String> = match (c.kind, &c.thread, &addr) {
             (Kind::Person, _, Some(a)) => person_threads(lib, vault, a),
