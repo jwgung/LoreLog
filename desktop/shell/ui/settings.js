@@ -1,6 +1,7 @@
 // The settings page. It talks to the Rust shell through tauri invoke; the shell owns the config and, when the vault is
 // on this PC, the server's settings. Every value from the shell goes into the page as text (textContent / value).
 import { initSources, loadSources } from "./sources.js";
+import { LAN_NOTE, chosenIsLan, fillAddresses } from "./reach.js";
 
 const { invoke } = window.__TAURI__.core;
 const $ = (id) => document.getElementById(id);
@@ -39,10 +40,13 @@ async function loadHost() {
   $("devToken").value = token;
   const info = await invoke("host_info").catch(() => null);
   if (info) {
-    $("devAddr").value = info.address_for_devices || "";
-    $("devAddrNote").textContent = info.address_for_devices
-      ? "폰 앱의 서버 연결에 이 주소와 아래 토큰을 넣습니다."
-      : "아직 tailnet 주소가 없습니다. 이 PC에 Tailscale을 켜면 몇십 초 뒤 생깁니다. 그때까지는 이 PC 안에서만 받습니다.";
+    const offered = fillAddresses($("devAddr"), info);
+    $("devAddrNote").textContent = !offered.length
+      ? "아직 다른 기기가 닿을 주소가 없습니다. 이 PC를 와이파이(공유기)에 잇거나 Tailscale을 켜면 몇십 초 뒤 생깁니다. 그때까지는 이 PC 안에서만 받습니다."
+      : info.address_for_devices
+        ? "폰 앱의 서버 연결에 이 주소와 아래 토큰을 넣습니다. Tailscale 주소는 어디서나 닿습니다."
+        : "폰 앱의 서버 연결에 이 주소와 아래 토큰을 넣습니다. 아직 tailnet 주소가 없어 같은 와이파이 주소만 있습니다.";
+    showLanNote();
     const failed = info.failed.length ? " · 열지 못한 주소: " + info.failed.join(", ") : "";
     $("hostNote").textContent = "받는 곳: " + info.listening.join(", ") + failed + " · 노트: " + info.notes_dir;
   }
@@ -60,6 +64,12 @@ const copy = async (text, what) => {
   try { await navigator.clipboard.writeText(text); msg(what + "을(를) 복사했습니다.", true); }
   catch (e) { msg("복사하지 못했습니다: " + e, false); }
 };
+function showLanNote() {
+  const lan = chosenIsLan($("devAddr"));
+  $("lanNote").textContent = lan ? LAN_NOTE : "";
+  $("lanNote").hidden = !lan;
+}
+$("devAddr").onchange = showLanNote;
 $("copyAddr").onclick = () => copy($("devAddr").value, "주소");
 $("copyToken").onclick = () => copy(token, "토큰");
 

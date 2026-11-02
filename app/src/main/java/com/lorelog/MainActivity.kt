@@ -158,7 +158,7 @@ private fun ConnectPrompt(onConnect: () -> Unit) {
             Text(
                 "기록은 이 폰에 쌓이고, 서랍(데스크톱 앱이나 내 서버)에 연결하면 그리로 보냅니다. " +
                     "데스크톱 앱의 '처음 설정' ④에서 연결 코드를 복사해 '서랍 연결'에 붙여 넣으세요. " +
-                    "폰과 PC에 Tailscale을 설치해 같은 계정으로 로그인해 두어야 합니다.",
+                    "폰과 PC가 같은 와이파이에 있거나, 둘 다 Tailscale에 같은 계정으로 로그인해 두어야 합니다.",
             )
         },
         confirmButton = { TextButton(onClick = { close(); onConnect() }) { Text("연결하기") } },
@@ -570,7 +570,7 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
         Text("기록을 서랍으로 보내는 주소입니다. 음성 전사와 일기도 같은 주소와 토큰을 씁니다.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(
             "데스크톱 앱의 '처음 설정' ④ 폰 연결에서 '연결 코드 보기' → 복사한 한 줄을 여기에 붙여 넣으면 주소와 토큰이 채워집니다. " +
-                "폰과 PC 모두 Tailscale에 같은 계정으로 로그인해 두세요. 코드에는 토큰이 들어 있으니 남에게 보내지 마세요.",
+                "같은 와이파이에 있거나, 폰과 PC 모두 Tailscale에 같은 계정으로 로그인해 두세요. 코드에는 토큰이 들어 있으니 남에게 보내지 마세요.",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         OutlinedTextField(
@@ -600,6 +600,12 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
             onValueChange = { endpointUrl = it },
             label = { Text("서랍 주소 (엔드포인트 URL)") },
             singleLine = true,
+            // 같은 와이파이 주소: 암호화 없이 간다는 것을 주소 칸 바로 아래에 둔다
+            supportingText = if (ConnectCode.overSameWifi(endpointUrl)) {
+                { Text(ConnectCode.SAME_WIFI_NOTE) }
+            } else {
+                null
+            },
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(

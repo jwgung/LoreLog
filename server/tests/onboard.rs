@@ -10,7 +10,7 @@ use life_server::onboard::{self, check_model, connect_code, parse_connect_code, 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
 #[test]
-fn a_token_goes_only_over_https_or_to_the_tailnet_and_this_device() {
+fn a_token_goes_only_over_https_or_to_the_tailnet_the_same_network_and_this_device() {
     for ok in [
         "https://vault.example.com/ingest/lorelog",
         "https://pc.tail8d1ab7.ts.net:48765",
@@ -22,11 +22,39 @@ fn a_token_goes_only_over_https_or_to_the_tailnet_and_this_device() {
         "http://[fd7a:115c:a1e0::1]:8765",
         "http://pc.tail8d1ab7.ts.net.:8765",
         "http://100.64.0.1.:8765",
+        // the same network (a private IPv4 address): plain http in the user's own Wi-Fi
+        "http://192.168.0.10:8765",
+        "http://192.168.100.3:8765/ingest/lorelog",
+        "http://10.0.0.1:8765",
+        "http://10.255.255.254:8765",
+        "http://172.16.0.1:8765",
+        "http://172.31.255.1:8765",
     ] {
         assert!(safe_for_token(ok), "{ok}");
     }
     for bad in [
-        "http://192.168.0.10:8765",
+        "http://172.15.0.1:8765",  // just below 172.16.0.0/12
+        "http://172.32.0.1:8765",  // just above
+        "http://192.169.0.1:8765", // not 192.168
+        "http://11.0.0.1:8765",
+        "http://169.254.1.1:8765", // link-local
+        "http://0.0.0.0:8765",
+        "http://8.8.8.8:8765",
+        "http://012.0.0.1:8765", // octal: 10.0.0.1 to some readers, so a leading zero is refused
+        "http://192.168.00.1:8765", // a leading zero
+        "http://0xa.0.0.1:8765", // hex
+        "http://10.1:8765",      // short form of 10.0.0.1
+        "http://3232235521:8765", // 192.168.0.1 as one number
+        "http://100.64.1:8765",  // short form of a tailnet address
+        "http://10.0.0.1@evil.com/", // userinfo
+        "http://10.0.0.1\\@evil.com/",
+        "http://evil.com\\@10.0.0.1/",
+        "http://%31%30.0.0.1:8765", // percent-encoded
+        "http://+10.0.0.1:8765",
+        "http://nas.local:8765", // names are not looked up: https only
+        "http://nas:8765",
+        "http://[fd00::1]:8765", // an IPv6 private address is not the same network rule
+        "http://[::ffff:192.168.0.1]:8765", // nor a mapped one
         "http://evil.example.com",
         "http://100.200.1.2:8765", // outside 100.64.0.0/10
         "http://100.064.0.1:8765", // octal: 100.52.0.1
@@ -63,12 +91,18 @@ fn the_connection_code_carries_address_and_token_and_reads_back() {
         connect_code("https://vault.example.com/ingest/lorelog", odd).unwrap(),
         "lorelog://connect?u=https%3A%2F%2Fvault.example.com%2Fingest%2Florelog&t=ab%2Bc%2Fd%3De%26f%3Fg%25h_0123456789"
     );
+    // a code for this PC's address in the same Wi-Fi, the line ConnectCodeTest.kt reads too
+    assert_eq!(
+        connect_code("http://192.168.100.3:8765", TOKEN).unwrap(),
+        format!("lorelog://connect?u=http%3A%2F%2F192.168.100.3%3A8765&t={TOKEN}")
+    );
+    assert!(parse_connect_code(&format!("lorelog://connect?u=http%3A%2F%2F012.0.0.1%3A8765&t={TOKEN}")).is_err());
 }
 
 #[test]
 fn no_code_is_made_or_read_for_an_address_the_token_must_not_go_to() {
-    let e = connect_code("http://192.168.0.10:8765", TOKEN).unwrap_err();
-    assert!(e.contains("tailnet"), "{e}");
+    let e = connect_code("http://8.8.8.8:8765", TOKEN).unwrap_err();
+    assert!(e.contains("tailnet") && e.contains("와이파이"), "{e}");
     let e = connect_code("http://pc.tail8d1ab7.ts.net:8765", "short").unwrap_err();
     assert!(e.contains("토큰"), "{e}");
 

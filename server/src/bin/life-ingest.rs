@@ -40,7 +40,10 @@ const HELP: &str = r#"life-ingest: collection endpoint that any client (phone, P
 
 Settings: <config>/ingest.env  (KEY=VALUE, mode 600; <config> is LIFE_CONF_DIR, else Linux ~/.config/vault-sync)
   INGEST_TOKEN=...            required. The value clients send as the Bearer token (at least 16 characters)
-  INGEST_BIND=127.0.0.1       address to listen on; for Tailscale use this machine's tailnet address
+  INGEST_BIND=127.0.0.1       address(es) to listen on, comma-separated, each one bound
+                              (e.g. 100.101.171.95,192.168.0.20). For Tailscale use this machine's tailnet address;
+                              for phones and PCs in the same Wi-Fi add its private address (10.x, 172.16-31.x,
+                              192.168.x): plain HTTP there is not encrypted, so only on a network you trust
   INGEST_PORT=8765
   LIFE_DATA_DIR=...           default: the OS data location (Linux ~/.local/share/life, Windows %LOCALAPPDATA%\life,
                               macOS ~/Library/Application Support/life)
@@ -70,27 +73,62 @@ fn main() -> std::process::ExitCode {
     };
     // the model addresses from ingest.env or the environment (none built in)
     let app = Arc::new(Models::load(&paths).app(paths.clone(), &s));
-    let addr = SocketAddr::new(s.bind, s.port);
+    let addrs: Vec<SocketAddr> = s.bind.iter().map(|ip| SocketAddr::new(*ip, s.port)).collect();
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
     let result = rt.block_on(async move {
         let https = s.cert.is_some() && s.key.is_some();
+        let shown: Vec<String> = addrs.iter().map(|a| a.to_string()).collect();
         eprintln!(
-            "life-ingest started: {}:{}  data: {}  {}",
-            s.bind,
-            s.port,
+            "life-ingest started: {}  data: {}  {}",
+            shown.join(", "),
             paths.data.display(),
             if https { "HTTPS" } else { "HTTP" }
         );
+        let mut servers = tokio::task::JoinSet::new();
         match (&s.cert, &s.key) {
-            (Some(c), Some(k)) => serve_tls(app, addr, c.as_ref(), k.as_ref()).await,
+            (Some(c), Some(k)) => {
+                // as for HTTP below: an address that cannot be bound stops the start before any serves
+                for addr in &addrs {
+                    drop(
+                        std::net::TcpListener::bind(addr)
+                            .map_err(|e| std::io::Error::new(e.kind(), format!("{addr}: {e}")))?,
+                    );
+                }
+                for addr in addrs {
+                    let (app, c, k) = (app.clone(), c.clone(), k.clone());
+                    servers.spawn(async move { serve_tls(app, addr, c.as_ref(), k.as_ref()).await });
+                }
+            }
             _ => {
-                let listener = tokio::net::TcpListener::bind(addr).await?;
-                serve(app, listener, async {
+                // every address is bound before any serves: one that cannot be bound stops the start
+                let mut listeners = Vec::new();
+                for addr in &addrs {
+                    let l = tokio::net::TcpListener::bind(addr)
+                        .await
+                        .map_err(|e| std::io::Error::new(e.kind(), format!("{addr}: {e}")))?;
+                    listeners.push(l);
+                }
+                let (stop, watch) = tokio::sync::watch::channel(false);
+                tokio::spawn(async move {
                     let _ = tokio::signal::ctrl_c().await;
-                })
-                .await
+                    let _ = stop.send(true);
+                });
+                for listener in listeners {
+                    let (app, mut watch) = (app.clone(), watch.clone());
+                    servers.spawn(async move {
+                        serve(app, listener, async move {
+                            let _ = watch.wait_for(|s| *s).await;
+                        })
+                        .await
+                    });
+                }
             }
         }
+        // one listener failing ends the server (the service manager restarts it), as with a single address
+        while let Some(done) = servers.join_next().await {
+            done.map_err(std::io::Error::other)??;
+        }
+        Ok::<(), std::io::Error>(())
     });
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,

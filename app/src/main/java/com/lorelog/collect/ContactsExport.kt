@@ -115,7 +115,7 @@ object ContactsExport {
 
     /**
      * 내보내기 URL(…/ingest/lorelog) 옆의 …/ingest/contacts(앞에 붙은 경로는 그대로). 주소록은 남의 연락처라 평문으로 보내지
-     * 않는다: 토큰과 같은 규칙([com.lorelog.net.ConnectCode.safeForToken]) — https, 또는 tailnet·이 기기의 http만.
+     * 않는다: 토큰과 같은 규칙([com.lorelog.net.ConnectCode.safeForToken]) — https, 또는 tailnet·이 기기·같은 와이파이의 http만.
      */
     private fun url(context: Context): String? {
         val u = EndpointConfig.url(context) ?: return null

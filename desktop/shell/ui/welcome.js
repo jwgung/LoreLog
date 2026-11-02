@@ -1,9 +1,10 @@
 // The first-run guide (#69), for a vault on this PC: ① where the vault is ② the chat model, checked with a tiny request
-// ③ mail and calendar (the settings' forms) ④ the phone: Tailscale and the connection code ⑤ the first sync and the
-// graph. Every step can be skipped; closing the guide marks it done, and the settings page opens it again. Every value
-// from the shell goes into the page as text. The connection code holds the token: it is fetched only when the user
+// ③ mail and calendar (the settings' forms) ④ the phone: the same Wi-Fi or Tailscale, and the connection code for
+// either address ⑤ the first sync and the graph. Every step can be skipped; closing the guide marks it done, and the
+// settings page opens it again. Every value from the shell goes into the page as text. The connection code holds the token: it is fetched only when the user
 // clicks to see it, and dropped again when they hide it or leave the step.
 import { initSources, loadSources } from "./sources.js";
+import { LAN_NOTE, chosenIsLan, fillAddresses } from "./reach.js";
 
 const { invoke } = window.__TAURI__.core;
 const $ = (id) => document.getElementById(id);
@@ -69,14 +70,22 @@ $("openTailscale").onclick = () => invoke("open_tailscale_download").catch((e) =
 
 async function loadPhone() {
   const info = await invoke("host_info").catch(() => null);
-  const addr = info && info.address_for_devices;
-  $("devAddr").value = addr || "";
-  $("devAddrNote").textContent = addr
-    ? "Tailscale이 켜진 폰에서 이 주소로 이 PC에 닿습니다."
-    : "아직 tailnet 주소가 없습니다. 이 PC에 Tailscale을 켜고 로그인하면 몇십 초 뒤 생깁니다. 그 뒤 '다시 보기'.";
-  $("codeShow").disabled = !addr;
+  const offered = fillAddresses($("devAddr"), info);
+  $("devAddrNote").textContent = !offered.length
+    ? "아직 폰이 닿을 주소가 없습니다. 이 PC를 와이파이(공유기)에 잇거나, Tailscale을 켜고 로그인하면 몇십 초 뒤 생깁니다. 그 뒤 '다시 보기'."
+    : info.address_for_devices
+      ? "Tailscale 주소는 Tailscale이 켜진 폰에서 어디서나 닿습니다."
+      : "아직 tailnet 주소가 없어 같은 와이파이 주소를 씁니다. 밖에서도 닿게 하려면 이 PC와 폰에 Tailscale을 켜세요.";
+  $("codeShow").disabled = !offered.length;
+  showLanNote();
+}
+function showLanNote() {
+  const lan = chosenIsLan($("devAddr"));
+  $("lanNote").textContent = lan ? LAN_NOTE : "";
+  $("lanNote").hidden = !lan;
 }
 $("devRecheck").onclick = loadPhone;
+$("devAddr").onchange = () => { hideCode(); say("codeMsg", "", true); showLanNote(); };
 
 function hideCode() {
   $("code").value = "";
@@ -89,7 +98,7 @@ function hideCode() {
 }
 $("codeShow").onclick = async () => {
   try {
-    const c = await invoke("phone_code");
+    const c = await invoke("phone_code", { url: $("devAddr").value });
     $("code").value = c.code;
     $("qr").src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(c.qr_svg);
     for (const id of ["code", "qr", "codeCopy", "codeHide"]) $(id).hidden = false;

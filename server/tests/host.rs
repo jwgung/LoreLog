@@ -14,7 +14,7 @@ fn map(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
 #[test]
 fn ingest_settings_have_the_old_defaults_and_refuse_a_short_token() {
     let s = IngestSettings::from_map(&map(&[("INGEST_TOKEN", "0123456789abcdef")])).unwrap();
-    assert_eq!(s.bind, "127.0.0.1".parse::<IpAddr>().unwrap());
+    assert_eq!(s.bind, vec!["127.0.0.1".parse::<IpAddr>().unwrap()]);
     assert_eq!((s.port, s.max_bytes, s.cls.as_str()), (8765, 20 * 1024 * 1024, "personal"));
     assert_eq!((s.cert.as_deref(), s.key.as_deref()), (None, None));
 
@@ -28,13 +28,54 @@ fn ingest_settings_have_the_old_defaults_and_refuse_a_short_token() {
         ("INGEST_KEY", ""),
     ]))
     .unwrap();
-    assert_eq!((s.bind.to_string().as_str(), s.port, s.max_bytes), ("100.101.1.2", 9000, 1_572_864));
+    assert_eq!(
+        (s.bind.clone(), s.port, s.max_bytes),
+        (vec!["100.101.1.2".parse::<IpAddr>().unwrap()], 9000, 1_572_864)
+    );
     assert_eq!((s.cls.as_str(), s.cert.as_deref(), s.key.as_deref()), ("work", Some("/c.pem"), None));
 
     let short = IngestSettings::from_map(&map(&[("INGEST_TOKEN", "short")])).unwrap_err();
     assert!(short.contains("INGEST_TOKEN"), "{short}");
     assert!(IngestSettings::from_map(&map(&[("INGEST_TOKEN", "0123456789abcdef"), ("INGEST_BIND", "x")])).is_err());
     assert!(IngestSettings::from_map(&map(&[("INGEST_TOKEN", "0123456789abcdef"), ("INGEST_PORT", "y")])).is_err());
+}
+
+#[test]
+fn ingest_bind_may_list_several_addresses() {
+    let bind = |v: &str| IngestSettings::from_map(&map(&[("INGEST_TOKEN", "0123456789abcdef"), ("INGEST_BIND", v)]));
+    let ips = |l: &[&str]| l.iter().map(|a| a.parse::<IpAddr>().unwrap()).collect::<Vec<_>>();
+    assert_eq!(bind("100.101.171.95,192.168.0.20").unwrap().bind, ips(&["100.101.171.95", "192.168.0.20"]));
+    assert_eq!(bind(" 100.101.171.95 , 192.168.0.20 ,").unwrap().bind, ips(&["100.101.171.95", "192.168.0.20"]));
+    assert_eq!(bind("127.0.0.1,127.0.0.1").unwrap().bind, ips(&["127.0.0.1"]), "an address twice is bound once");
+    assert_eq!(bind("::1").unwrap().bind, ips(&["::1"]));
+    for bad in ["", ",", "100.101.171.95,x", "192.168.0.20:8765"] {
+        let e = bind(bad).unwrap_err();
+        assert!(e.contains("INGEST_BIND"), "{bad}: {e}");
+    }
+}
+
+#[test]
+fn same_network_addresses_are_the_private_ipv4_ranges() {
+    let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+    for ok in ["10.0.0.1", "10.255.255.255", "172.16.0.1", "172.31.255.255", "192.168.0.1", "192.168.100.3"] {
+        assert!(host::is_private_lan_ip(ip(ok)), "{ok}");
+    }
+    for bad in [
+        "172.15.255.255",
+        "172.32.0.0",
+        "192.169.0.1",
+        "11.0.0.1",
+        "169.254.1.1",
+        "0.0.0.0",
+        "127.0.0.1",
+        "100.64.0.1",
+        "8.8.8.8",
+        "fd00::1",
+        "fe80::1",
+        "::ffff:192.168.0.1",
+    ] {
+        assert!(!host::is_private_lan_ip(ip(bad)), "{bad}");
+    }
 }
 
 #[test]
