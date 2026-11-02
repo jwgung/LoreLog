@@ -130,7 +130,7 @@ body.form a.back { font-size: 14px; color: var(--muted); text-decoration: none; 
 body.form a { color: var(--accent); }
 body.form hr { border: 0; border-top: 1px solid var(--line); margin: 22px 0; }
 body.form .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-body.form .row input { flex: 1; min-width: 160px; }
+body.form .row input, body.form .row select { flex: 1; min-width: 160px; }
 body.form .row button { margin-top: 0; }
 body.form .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
 body.form ul { list-style: none; padding: 0; margin: 8px 0 0; }

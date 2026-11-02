@@ -6,14 +6,20 @@ import java.net.URLDecoder
 
 /**
  * 데스크톱 앱이 보여 주는 한 줄 '연결 코드'(#69): `lorelog://connect?u=<서랍 주소>&t=<토큰>`. 토큰이 들어 있으니 로그에 남기지 않는다.
- * 토큰은 https, 또는 WireGuard로 암호화되는 tailnet(*.ts.net, 100.64.0.0/10, fd7a:115c:a1e0::/48)·이 기기(loopback)의
- * http로만 보낸다. 코드로 넣든 손으로 넣든 같은 규칙이다(서랍 서버의 `life_server::onboard::safe_for_token`과 같다).
+ * 토큰은 https, 또는 WireGuard로 암호화되는 tailnet(*.ts.net, 100.64.0.0/10, fd7a:115c:a1e0::/48)·이 기기(loopback)·
+ * 같은 와이파이의 사설 IPv4 주소(10/8, 172.16/12, 192.168/16, 암호화 없음: 사용자가 믿는 와이파이에서 고른다)의 http로만
+ * 보낸다. 코드로 넣든 손으로 넣든 같은 규칙이다(서랍 서버의 `life_server::onboard::safe_for_token`과 같다).
  */
 object ConnectCode {
     const val PREFIX = "lorelog://connect?"
     private const val MIN_TOKEN = 16
     private const val INGEST = "/ingest/lorelog"
-    private const val NOT_SAFE = "이 주소로는 기록과 토큰을 보내지 않습니다. https 주소이거나 tailnet(*.ts.net, 100.x) 주소여야 합니다"
+    private const val NOT_SAFE =
+        "이 주소로는 기록과 토큰을 보내지 않습니다. https 주소이거나 tailnet(*.ts.net, 100.x) 또는 같은 와이파이(192.168.x, 10.x, 172.16~31.x) 주소여야 합니다"
+
+    /** 같은 와이파이 주소(암호화 없는 http)를 넣었을 때 주소 칸 아래에 보이는 말. */
+    const val SAME_WIFI_NOTE =
+        "같은 와이파이 안에서만 닿고, 기록과 토큰이 암호화 없이 와이파이로 갑니다. 집이나 사무실처럼 믿는 와이파이에서만 쓰세요."
 
     sealed class Parsed {
         /** [url]은 기록을 보내는 주소(…/ingest/lorelog)까지 붙인 것. */
@@ -32,13 +38,33 @@ object ConnectCode {
         return scheme == "https" || (scheme == "http" && inside)
     }
 
-    /** 숫자로 쓴 주소만 본다(이름을 찾아보지 않는다): loopback, tailnet 범위. */
-    private fun ipInside(host: String): Boolean {
+    /** 같은 와이파이로 가는 주소인가: http이고 사설 IPv4 주소(암호화 없이 와이파이로 간다). */
+    fun overSameWifi(url: String): Boolean {
+        val u = runCatching { URI(url.trim()) }.getOrNull() ?: return false
+        if (u.scheme?.lowercase() != "http") return false
+        val v4 = u.host?.removeSuffix(".")?.let(::ipv4) ?: return false
+        return privateLan(v4)
+    }
+
+    /** 0으로 시작하는 칸(100.064.0.1)은 8진수로 읽는 곳이 있어 다른 주소가 될 수 있다: 네 칸 10진수로 쓴 것만 받는다. */
+    private fun ipv4(host: String): List<Int>? {
         val v4 = host.split('.')
-        // 0으로 시작하는 칸(100.064.0.1)은 8진수로 읽는 곳이 있어 다른 주소가 될 수 있다: 받지 않는다
-        if (v4.size == 4 && v4.all { p -> !(p.length > 1 && p.startsWith('0')) && p.toIntOrNull()?.let { it in 0..255 } == true }) {
-            val a = v4[0].toInt(); val b = v4[1].toInt()
-            return a == 127 || (a == 100 && b in 64..127)
+        val plain = { p: String -> p.length in 1..3 && p.all { it in '0'..'9' } && !(p.length > 1 && p.startsWith('0')) && p.toInt() <= 255 }
+        if (v4.size != 4 || !v4.all(plain)) return null
+        return v4.map { it.toInt() }
+    }
+
+    /** 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16. */
+    private fun privateLan(v4: List<Int>): Boolean {
+        val (a, b) = v4
+        return a == 10 || (a == 172 && b in 16..31) || (a == 192 && b == 168)
+    }
+
+    /** 숫자로 쓴 주소만 본다(이름을 찾아보지 않는다): loopback, tailnet, 같은 와이파이 범위. */
+    private fun ipInside(host: String): Boolean {
+        ipv4(host)?.let { v4 ->
+            val (a, b) = v4
+            return a == 127 || (a == 100 && b in 64..127) || privateLan(v4)
         }
         if (!host.contains(':') || !host.all { it.isDigit() || it in 'a'..'f' || it == ':' }) return false
         val b = runCatching { InetAddress.getByName(host).address }.getOrNull() ?: return false
@@ -83,7 +109,7 @@ object ConnectCode {
 
     /**
      * 손으로 넣은 주소를 저장해도 되는지. null = 괜찮음, 아니면 이유. 기록 자체도 이 주소로 나가므로 토큰이 없어도
-     * 같은 규칙이다(https, 또는 tailnet·이 기기의 http만). 서랍은 토큰 없는 기록을 받지 않으니 막아서 잃는 것은 없다.
+     * 같은 규칙이다(https, 또는 tailnet·이 기기·같은 와이파이의 http만). 서랍은 토큰 없는 기록을 받지 않으니 막아서 잃는 것은 없다.
      */
     fun manualProblem(url: String): String? =
         if (url.isNotBlank() && !safeForToken(url)) NOT_SAFE else null

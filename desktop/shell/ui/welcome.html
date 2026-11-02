@@ -75,14 +75,16 @@
   <!-- ④ the phone -->
   <section data-step="3" hidden>
     <h2>④ 폰 연결</h2>
-    <p>폰은 Tailscale로 이 PC에 기록을 보냅니다. Tailscale은 내 기기끼리만 이어 주는 사설망입니다(무료 개인 요금제).</p>
+    <p>폰은 같은 와이파이로, 또는 Tailscale로 이 PC에 기록을 보냅니다. Tailscale은 내 기기끼리만 이어 주는 사설망입니다(무료 개인 요금제). 밖에서도 닿고 오가는 내용이 암호화됩니다.</p>
     <ul class="plain">
-      <li>이 PC와 폰에 Tailscale을 설치하고 같은 계정으로 로그인합니다: <button id="openTailscale" class="link">tailscale.com/download</button></li>
+      <li>같은 와이파이: 폰이 이 PC와 같은 와이파이(공유기)에 있으면 아래 '같은 와이파이' 주소로 닿습니다.</li>
+      <li>Tailscale: 이 PC와 폰에 설치하고 같은 계정으로 로그인합니다: <button id="openTailscale" class="link">tailscale.com/download</button></li>
       <li>폰에 LoreLog 앱(Releases의 APK)을 설치하고 열면 '서랍 연결'에서 연결 코드를 붙여 넣습니다.</li>
     </ul>
-    <label>폰에 넣을 주소</label>
-    <div class="row"><input id="devAddr" type="text" readonly /><button id="devRecheck" class="secondary">다시 보기</button></div>
+    <label for="devAddr">폰에 넣을 주소</label>
+    <div class="row"><select id="devAddr"></select><button id="devRecheck" class="secondary">다시 보기</button></div>
     <p id="devAddrNote" class="note"></p>
+    <p id="lanNote" class="warn" hidden></p>
     <label>연결 코드</label>
     <p class="warn">연결 코드에는 토큰이 들어 있습니다. 코드를 아는 기기는 이 서랍에 쓰고 읽을 수 있으니 내 폰에만 넣고, 메신저나 메일로 남에게 보내지 마세요.</p>
     <div class="row">

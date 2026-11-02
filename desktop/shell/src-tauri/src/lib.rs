@@ -10,8 +10,8 @@
 //!      (url, token, watched folders) live in the core config, shared with the CLI.
 //!
 //!   3. **The server, in host mode** — when the user keeps the vault on this PC (docs/adr/0002), the app runs the
-//!      server library itself (`host.rs`): receiving on loopback and the tailnet address, syncing every hour, the
-//!      librarian. The screens and the collector then talk to it on loopback like to any server.
+//!      server library itself (`host.rs`): receiving on loopback, the tailnet and same-network addresses, syncing
+//!      every hour, the librarian. The screens and the collector then talk to it on loopback like to any server.
 //!
 //! The shell owns no judgement about the diary: it exposes the config to the UI as commands and runs the collector.
 mod ahead;
@@ -207,13 +207,17 @@ struct PhoneCode {
     qr_svg: String,
 }
 
-/// The one-line connection code a phone pastes: this PC's tailnet address and the vault's token. Made only on the
-/// user's click, never logged, and only for an address the token may go to.
+/// The one-line connection code a phone pastes: this PC's address (`url`: the tailnet one or one in the same Wi-Fi the
+/// screen offered; none given: the tailnet one) and the vault's token. Made only on the user's click, never logged,
+/// and only for an address this app offers and the token may go to.
 #[tauri::command]
-fn phone_code(slot: tauri::State<HostSlot>) -> Result<PhoneCode, String> {
-    let url = hosting(&slot, |h| h.info().address_for_devices)
-        .ok_or("이 PC에 서랍을 둔 경우에만 만듭니다")?
-        .ok_or("아직 tailnet 주소가 없습니다. 이 PC에 Tailscale을 켜고 로그인하세요")?;
+fn phone_code(slot: tauri::State<HostSlot>, url: Option<String>) -> Result<PhoneCode, String> {
+    let url = hosting(&slot, |h| match url.filter(|u| !u.is_empty()) {
+        Some(u) if h.offers(&u) => Ok(u),
+        Some(_) => Err("이 PC가 지금 받는 주소가 아닙니다. '다시 보기'를 누르세요"),
+        None => h.info().address_for_devices.ok_or("아직 tailnet 주소가 없습니다. 이 PC에 Tailscale을 켜고 로그인하세요"),
+    })
+    .ok_or("이 PC에 서랍을 둔 경우에만 만듭니다")??;
     let code = life_server::onboard::connect_code(&url, &config::load()?.token)?;
     let qr_svg = pair::qr_svg(&code)?;
     Ok(PhoneCode { code, qr_svg })
@@ -361,7 +365,8 @@ fn server_config(slot: tauri::State<HostSlot>) -> Result<ServerConfig, String> {
 }
 
 /// Save the server address and (if given) the token. An empty token leaves the stored one untouched. The address
-/// must be a tailnet/loopback host (see `config::is_acceptable_url`) so the token is never sent to a public host.
+/// must be a tailnet, same-network or loopback host (see `config::is_acceptable_url`) so the token is never sent to a
+/// public host.
 #[tauri::command]
 fn save_settings(url: String, token: Option<String>) -> Result<(), String> {
     if config::load()?.mode == Some(Mode::Host) {
@@ -369,7 +374,10 @@ fn save_settings(url: String, token: Option<String>) -> Result<(), String> {
     }
     let url = url.trim().trim_end_matches('/').to_string();
     if !config::is_acceptable_url(&url) {
-        return Err("주소는 tailnet(*.ts.net) 이어야 합니다 (http는 로컬/테일넷만)".into());
+        return Err(
+            "주소는 tailnet(*.ts.net)이나 같은 와이파이의 주소(192.168.x, 10.x, 172.16~31.x)여야 합니다 (http는 로컬·테일넷·같은 와이파이만)"
+                .into(),
+        );
     }
     let mut cfg = config::load()?;
     cfg.url = url;

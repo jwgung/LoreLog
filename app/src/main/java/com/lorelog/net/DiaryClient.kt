@@ -50,7 +50,7 @@ object DiaryClient {
                 else -> Draft.Error("서랍 응답 $code: " + (conn.errorStream?.bufferedReader()?.readText() ?: ""))
             }
         } catch (e: Exception) {
-            Draft.Error("서랍에 연결하지 못했습니다(${e.javaClass.simpleName}). tailnet 연결을 확인하세요.")
+            Draft.Error("서랍에 연결하지 못했습니다(${e.javaClass.simpleName}). 와이파이나 Tailscale 연결을 확인하세요.")
         } finally {
             conn?.disconnect()
         }

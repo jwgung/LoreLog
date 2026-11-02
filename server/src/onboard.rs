@@ -10,7 +10,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::config::Paths;
-use crate::host::{MIN_TOKEN, is_tailnet_ip};
+use crate::host::{MIN_TOKEN, is_private_lan_ip, is_tailnet_ip};
 use crate::llm::{Ask, Http, Model};
 
 /// What every connection code starts with.
@@ -20,15 +20,22 @@ pub const CODE_PREFIX: &str = "lorelog://connect?";
 const CHECK_TIMEOUT_S: u64 = 120;
 
 /// May the token be sent to this address? Over https anywhere, or over plain http only inside the tailnet
-/// (`*.ts.net`, 100.64.0.0/10, fd7a:115c:a1e0::/48, encrypted by WireGuard) or to this device (loopback).
+/// (`*.ts.net`, 100.64.0.0/10, fd7a:115c:a1e0::/48, encrypted by WireGuard), to this device (loopback), or to a
+/// private IPv4 address in the same network (10/8, 172.16/12, 192.168/16: not encrypted, the user's choice for a
+/// trusted Wi-Fi). An IPv4 address counts only written plainly (four decimal parts, no leading zeros): `012.0.0.1`
+/// or `10.1` mean different addresses to different readers.
 pub fn safe_for_token(u: &str) -> bool {
-    let Ok(parsed) = url::Url::parse(u.trim()) else { return false };
+    let u = u.trim();
+    let Ok(parsed) = url::Url::parse(u) else { return false };
     let inside = match parsed.host() {
         Some(url::Host::Domain(d)) => {
             let d = d.strip_suffix('.').unwrap_or(d);
             d.ends_with(".ts.net") || d == "localhost"
         }
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback() || is_tailnet_ip(IpAddr::V4(ip)),
+        Some(url::Host::Ipv4(ip)) => {
+            let ip4 = IpAddr::V4(ip);
+            written_host(u) == ip.to_string() && (ip.is_loopback() || is_tailnet_ip(ip4) || is_private_lan_ip(ip4))
+        }
         Some(url::Host::Ipv6(ip)) => ip.is_loopback() || is_tailnet_ip(IpAddr::V6(ip)),
         None => return false,
     };
@@ -39,7 +46,17 @@ pub fn safe_for_token(u: &str) -> bool {
     }
 }
 
-const NOT_SAFE: &str = "이 주소로는 토큰을 보내지 않습니다. https 주소이거나 tailnet(*.ts.net, 100.x) 주소여야 합니다";
+/// The host as written in `u` (no userinfo, port or trailing dot), to tell `10.0.0.1` from `012.0.0.1`, which the
+/// URL parser reads as the same address.
+fn written_host(u: &str) -> &str {
+    let rest = u.split_once("://").map_or(u, |(_, r)| r);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host = host_port.split(':').next().unwrap_or("");
+    host.strip_suffix('.').unwrap_or(host)
+}
+
+const NOT_SAFE: &str = "이 주소로는 토큰을 보내지 않습니다. https 주소이거나 tailnet(*.ts.net, 100.x) 또는 같은 와이파이(192.168.x, 10.x, 172.16~31.x) 주소여야 합니다";
 
 fn token_ok(t: &str) -> bool {
     t.chars().count() >= MIN_TOKEN && !t.chars().any(|c| c.is_whitespace() || c.is_control())

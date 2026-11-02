@@ -1,7 +1,7 @@
 //! Running the receiving server inside another program (the desktop app keeps the vault on the user's PC, see
 //! docs/adr/0002). Its settings are those of `life-ingest`, in `<config>/ingest.env`; the token is made on first use.
 //! The host starts it on its own tokio runtime, on the addresses it chooses (loopback for its own screen, the tailnet
-//! address for phones and other PCs), and stops it when it exits.
+//! and same-network addresses for phones and other PCs), and stops it when it exits.
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -15,7 +15,8 @@ use crate::llm::{Http, HttpSpeech};
 #[derive(Clone)]
 pub struct IngestSettings {
     pub token: String,
-    pub bind: IpAddr,
+    /// the addresses to listen on (`INGEST_BIND`, comma-separated), each once, in the order given
+    pub bind: Vec<IpAddr>,
     pub port: u16,
     pub max_bytes: usize,
     /// the class records get when the sender says nothing (`personal` or `work`)
@@ -57,8 +58,7 @@ impl IngestSettings {
         if token.chars().count() < MIN_TOKEN {
             return Err(format!("needs INGEST_TOKEN (at least {MIN_TOKEN} characters)"));
         }
-        let bind = get("INGEST_BIND", "127.0.0.1");
-        let bind = bind.parse::<IpAddr>().map_err(|_| format!("INGEST_BIND is not an IP address: {bind}"))?;
+        let bind = parse_bind(&get("INGEST_BIND", "127.0.0.1"))?;
         let port = get("INGEST_PORT", "8765").parse::<u16>().map_err(|_| "INGEST_PORT is not a port number")?;
         let max_mb: f64 = get("INGEST_MAX_MB", "20").parse().unwrap_or(20.0);
         Ok(IngestSettings {
@@ -71,6 +71,21 @@ impl IngestSettings {
             key: set("INGEST_KEY"),
         })
     }
+}
+
+/// `INGEST_BIND`: one IP address or several separated by commas (e.g. the tailnet address and the same-network one).
+fn parse_bind(v: &str) -> Result<Vec<IpAddr>, String> {
+    let mut out: Vec<IpAddr> = Vec::new();
+    for part in v.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let ip = part.parse::<IpAddr>().map_err(|_| format!("INGEST_BIND is not an IP address: {part}"))?;
+        if !out.contains(&ip) {
+            out.push(ip);
+        }
+    }
+    if out.is_empty() {
+        return Err(format!("INGEST_BIND has no address: {v:?}"));
+    }
+    Ok(out)
 }
 
 /// Where the chat and speech models are: `LIFE_LLM_URL`, `LIFE_LLM_MODEL`, `LIFE_ASR_URL`, `LIFE_ASR_MODEL`, in
@@ -147,6 +162,13 @@ pub fn is_tailnet_ip(ip: IpAddr) -> bool {
     }
 }
 
+/// Is this an address in the same private network (the user's home or office Wi-Fi)? The private IPv4 ranges
+/// 10.0.0.0/8, 172.16.0.0/12 and 192.168.0.0/16 only: not link-local, not 0.0.0.0, not IPv6. Plain http to it is not
+/// encrypted, so the user chooses it only for a network they trust.
+pub fn is_private_lan_ip(ip: IpAddr) -> bool {
+    matches!(ip, IpAddr::V4(v) if v.is_private())
+}
+
 /// The server running in this process.
 pub struct Running {
     stop: tokio::sync::watch::Sender<bool>,
@@ -181,7 +203,8 @@ impl Running {
 /// Start serving `app` on each of `addrs` at `port` on the given runtime (call it from outside the runtime: it waits
 /// for the binds). An address that cannot be bound is reported in [`Running::failed`]; the others serve. Started again
 /// later with the same `app` (an address that appeared since), both serve the same state. Plain HTTP: inside the
-/// tailnet the traffic is already encrypted, and HTTPS is for the user to add (`tailscale serve`).
+/// tailnet the traffic is already encrypted, in the same network it is not (the user's choice for a trusted Wi-Fi),
+/// and HTTPS is for the user to add (`tailscale serve`).
 pub fn start(rt: &tokio::runtime::Handle, app: Arc<App>, port: u16, addrs: &[IpAddr]) -> Running {
     let (stop, watch) = tokio::sync::watch::channel(false);
     let broken = Arc::new(Mutex::new(Vec::new()));

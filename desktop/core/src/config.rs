@@ -6,10 +6,12 @@ use std::path::PathBuf;
 pub const HIDDEN_TITLE: &str = "(제목 숨김)";
 
 /// Is this a server address the token may be sent to? The server lives on the tailnet: https to a `*.ts.net` host,
-/// or http only to loopback (`localhost`/`127.0.0.1`/`::1`) or `*.ts.net`. Nothing else — a mistyped public host must
-/// not receive the Bearer token. Parsed with `url` so userinfo (`user@host`), ports and IPv6 brackets are read the
+/// or http only to loopback (`localhost`/`127.0.0.1`/`::1`) or `*.ts.net`; or in the same network: a private IPv4
+/// address (10/8, 172.16/12, 192.168/16) written plainly, over http or https (plain http there is not encrypted, the
+/// user's choice for a trusted Wi-Fi). Nothing else — a mistyped public host must not receive the Bearer token. Parsed with `url` so userinfo (`user@host`), ports and IPv6 brackets are read the
 /// way the real HTTP client reads them (a hand split on `:` would let `http://127.0.0.1@evil.com` through).
 pub fn is_acceptable_url(u: &str) -> bool {
+    let u = u.trim();
     let Ok(parsed) = url::Url::parse(u) else {
         return false;
     };
@@ -19,11 +21,23 @@ pub fn is_acceptable_url(u: &str) -> bool {
     let host = host.strip_suffix('.').unwrap_or(host); // an absolute FQDN (host.ts.net.) is the same host
     let is_tailnet = host == "ts.net" || host.ends_with(".ts.net");
     let is_loopback = matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]");
+    let same_network =
+        matches!(parsed.host(), Some(url::Host::Ipv4(ip)) if ip.is_private() && written_host(u) == ip.to_string());
     match parsed.scheme() {
-        "https" => is_tailnet,
-        "http" => is_loopback || is_tailnet,
+        "https" => is_tailnet || same_network,
+        "http" => is_loopback || is_tailnet || same_network,
         _ => false,
     }
+}
+
+/// The host as written in `u` (no userinfo, port or trailing dot): the URL parser reads `012.0.0.1` and `10.1` as
+/// 10.0.0.1, so a private address counts only written plainly (as `life_server::onboard::safe_for_token` does).
+fn written_host(u: &str) -> &str {
+    let rest = u.split_once("://").map_or(u, |(_, r)| r);
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    let host = host_port.split(':').next().unwrap_or("");
+    host.strip_suffix('.').unwrap_or(host)
 }
 
 /// Where the vault lives (docs/adr/0002).
@@ -321,5 +335,28 @@ mod tests {
 
         // an absolute FQDN (trailing dot) is the same host, accepted for tailnet
         assert!(is_acceptable_url("https://host.ts.net."), "a trailing-dot tailnet FQDN is accepted");
+    }
+
+    #[test]
+    fn a_private_address_in_the_same_network_is_acceptable() {
+        // the same Wi-Fi: a private IPv4 address written plainly (as the server's safe_for_token)
+        for ok in ["http://192.168.100.3:8765", "http://10.0.0.1:8765", "http://172.16.0.1:8765", "http://172.31.255.1"] {
+            assert!(is_acceptable_url(ok), "{ok}");
+        }
+        for bad in [
+            "http://172.15.0.1:8765",
+            "http://172.32.0.1:8765",
+            "http://169.254.1.1:8765",
+            "http://0.0.0.0:8765",
+            "http://012.0.0.1:8765", // octal for 10.0.0.1 to some readers
+            "http://192.168.00.1:8765",
+            "http://10.1:8765",
+            "http://3232235521:8765",
+            "http://10.0.0.1@evil.com/",
+            "http://nas.local:8765",
+            "http://[fd00::1]:8765",
+        ] {
+            assert!(!is_acceptable_url(bad), "{bad}");
+        }
     }
 }

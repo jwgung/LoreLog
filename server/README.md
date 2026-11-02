@@ -51,6 +51,12 @@ Rust 툴체인(저장소 루트의 `rust-toolchain.toml`)이 필요하다. `depl
 ## HTTPS 주소
 `life-ingest`는 기본으로 `127.0.0.1`에 HTTP로 뜬다(`INGEST_CERT`·`INGEST_KEY`에 PEM 파일을 주면 직접 HTTPS). 폰·PC에서 받으려면 `ingest.env`의 `INGEST_BIND`를 이 머신의 tailnet 주소로 바꾸고, 보통은 tailscale serve로 앞에 HTTPS를 붙여 쓴다(한 번만, sudo 필요).
 
+`INGEST_BIND`에는 주소를 쉼표로 여럿 줄 수 있고, 하나하나에서 받는다. 같은 와이파이의 폰·PC가 Tailscale 없이 닿게 하려면 이 머신의 사설 주소(`10.x`, `172.16~31.x`, `192.168.x`)를 더한다:
+
+    INGEST_BIND=100.101.171.95,192.168.0.20
+
+같은 와이파이 주소는 그 와이파이 안에서만 닿고, 기록과 토큰이 암호화 없이 와이파이로 간다. 집이나 사무실처럼 믿는 와이파이에서만 쓴다. 폰과 데스크톱 앱은 https, tailnet, 이 기기, 같은 와이파이(사설 IPv4 주소를 숫자 그대로 쓴 것)의 http 말고는 토큰을 보내지 않는다. 주소 하나를 못 열면(그 주소가 이 머신에 없는 등) 시작하지 않는다. 바꾼 뒤 `systemctl --user restart life-ingest`.
+
     sudo tailscale serve --bg --https=48765 http://<tailnet 주소>:8765
 
 주소는 `https://<머신>.<tailnet>.ts.net:48765/`. 폰 앱은 기존 HTTP 주소를 그대로 쓸 수 있다. 되돌리기: `sudo tailscale serve --https=48765 off`.
