@@ -1278,22 +1278,30 @@ impl Librarian {
     /// What the matter of an indexed file holds, as the eval names it: its mails' threads and its events
     /// (`event:<title>`). A file in no matter: its own thread, or its event.
     pub fn case_threads(&self, file: &str) -> HashSet<String> {
-        let rows = |sql: &str| -> Vec<(String, Option<String>, String)> {
-            self.db
-                .prepare(sql)
-                .and_then(|mut st| {
-                    st.query_map([file], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()
-                })
-                .unwrap_or_default()
-        };
-        let mut found = rows(
-            "select source, thread, title from docs where case_key in (select case_key from docs where file = ? and case_key is not null)",
-        );
+        let by_case = "select source, thread, title from docs where case_key in (select case_key from docs where file = ? and case_key is not null)";
+        let mut found = self.thread_rows(by_case, file);
         if found.is_empty() {
-            found = rows("select source, thread, title from docs where file = ?");
+            found = self.thread_rows("select source, thread, title from docs where file = ?", file);
         }
-        found
-            .into_iter()
+        Self::named_threads(found)
+    }
+
+    /// The threads (and events) of a matter, by its key (`case:<n>`).
+    pub fn key_threads(&self, case_key: &str) -> HashSet<String> {
+        Self::named_threads(self.thread_rows("select source, thread, title from docs where case_key = ?", case_key))
+    }
+
+    fn thread_rows(&self, sql: &str, arg: &str) -> Vec<(String, Option<String>, String)> {
+        self.db
+            .prepare(sql)
+            .and_then(|mut st| {
+                st.query_map([arg], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()
+            })
+            .unwrap_or_default()
+    }
+
+    fn named_threads(rows: Vec<(String, Option<String>, String)>) -> HashSet<String> {
+        rows.into_iter()
             .filter_map(|(source, thread, title)| match source.as_str() {
                 "event" => Some(format!("event:{title}")),
                 _ => thread,
