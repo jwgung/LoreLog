@@ -365,6 +365,9 @@ fn several_matters(lib: &mut dyn Index, hits: &[Value], day: &str) -> anyhow::Re
         hits.iter().filter(|h| h.get("case").and_then(Value::as_str).is_some_and(|c| seen.insert(c))).collect();
     let count = |h: &Value| h.get("count").and_then(Value::as_u64).unwrap_or(1) as f64;
     ms.sort_by(|a, b| count(b).total_cmp(&count(a))); // stable: the librarian's order among the same size
+    // a matter of one record is no candidate: the first one stands as it is, the others need more than one record
+    let top = ms.first().copied();
+    ms.retain(|h| count(h) > 1.0 || top.is_some_and(|t| std::ptr::eq(t, *h)));
     if ms.len() < 2 || count(ms[1]) < count(ms[0]) * MATTER_SHARE {
         return Ok(None);
     }

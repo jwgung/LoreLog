@@ -115,6 +115,27 @@ fn a_matter_far_bigger_than_the_others_is_answered_without_asking() {
 }
 
 #[test]
+fn a_matter_of_one_record_is_not_a_candidate() {
+    let t = T::new();
+    t.matter("a", "견적 일차", "2026-03-01", 3);
+    t.matter("b", "견적 이차", "2026-05-01", 1); // 1 of 3 passes the share, but one mail is no matter to ask about
+    let s = t.ask(ONE);
+    assert!(!s.contains(recall::MATTERS) && s.contains("견적 일차"), "{s}");
+}
+
+#[test]
+fn a_matter_of_one_record_is_left_out_of_the_candidates_of_others() {
+    let t = T::new();
+    t.matter("a", "견적 일차", "2026-03-01", 3);
+    t.matter("b", "견적 이차", "2026-05-01", 2);
+    t.matter("c", "견적 삼차", "2026-07-01", 1);
+    let s = t.ask(ONE);
+    assert!(s.contains(recall::MATTERS), "two matters of several records are still asked about: {s}");
+    assert_eq!(candidates(&s).len(), 2, "{s}");
+    assert!(!s.contains("견적 삼차"), "{s}");
+}
+
+#[test]
 fn a_question_about_several_matters_is_not_asked_back() {
     let t = several();
     let s = t.ask(r#"{"search": true, "words": ["견적"]}"#);
