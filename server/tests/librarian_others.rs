@@ -154,3 +154,37 @@ fn a_copy_of_a_mail_is_one_other_and_a_matter_of_one_mail_has_none() {
     let one = hits.iter().find(|h| h["count"] == 1).unwrap();
     assert!(one.get("others").is_none());
 }
+
+#[test]
+fn two_mails_of_a_day_that_differ_only_beyond_the_snippet_are_two_others() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = Paths::under(dir.path());
+    let long = "가".repeat(400);
+    mail(&p, "a1.md", "견적 금액", "견적 금액은 100만원입니다", "2026-04-01", "[]");
+    mail(&p, "a2.md", "RE: 견적 금액", &format!("견적 금액 {long} 120만원"), "2026-04-03", "[<a1.md@x>]");
+    mail(&p, "a3.md", "RE: 견적 금액", &format!("견적 금액 {long} 130만원"), "2026-04-03", "[<a1.md@x>]");
+    let mut lib = open(&p);
+    let hits = lib.search("견적 금액", 8, None).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(refs_of(&hits[0]).len(), 3, "{}", hits[0]);
+}
+
+#[test]
+fn a_record_whose_copy_is_shown_counts_as_shown() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = Paths::under(dir.path());
+    mail(&p, "a1.md", "견적 금액", "견적 금액은 100만원입니다", "2026-04-01", "[]");
+    mail(&p, "a2.md", "RE: 견적 금액", "견적 금액은 120만원입니다", "2026-04-03", "[<a1.md@x>]");
+    mail(&p, "a2copy.md", "RE: 견적 금액", "견적 금액은 120만원입니다", "2026-04-03", "[<a1.md@x>]");
+    let mut lib = open(&p);
+    let f = p.data.join("c.toml");
+    fs::create_dir_all(&p.data).unwrap();
+    fs::write(
+        &f,
+        "[[case]]\nkind = \"conflict\"\nq = \"견적 금액\"\nrecords = [\"a1.md@x\", \"a2.md@x\", \"a2copy.md@x\"]\n",
+    )
+    .unwrap();
+    let cs = eval::load(&f).unwrap();
+    let out = eval::run(&mut lib, None, &p.vault, &cs, 8).unwrap();
+    assert_eq!(eval::summary(&out)[&Kind::Conflict].raw, (1, 1), "the copy says what its twin says");
+}

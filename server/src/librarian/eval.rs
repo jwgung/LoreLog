@@ -203,9 +203,10 @@ fn shown_all(lib: &Librarian, hits: &[serde_json::Value], records: &[String]) ->
     for r in records {
         let file = lib.file_of_mail(r)?;
         // a mail folded behind a hit of its matter is shown with it, in that hit's `others`
+        // (a copy of it, the same day and text, shown in its place says the same)
+        let is = |r: &serde_json::Value| r.as_str().is_some_and(|r| r == file || lib.same_mail(r, &file));
         let shows = |h: &serde_json::Value| {
-            h["ref"].as_str() == Some(file.as_str())
-                || h["others"].as_array().is_some_and(|o| o.iter().any(|o| o["ref"].as_str() == Some(file.as_str())))
+            is(&h["ref"]) || h["others"].as_array().is_some_and(|o| o.iter().any(|o| is(&o["ref"])))
         };
         last = last.max(hits.iter().position(shows)? + 1);
     }

@@ -1053,7 +1053,7 @@ impl Librarian {
         if let Some(c) = case {
             hit["case"] = json!(c); // the matter: one hit each, wherever it was found (#46)
             if count > 1 && (source == "mail" || source == "file") {
-                let (others, more) = self.others(c, n, (&day, &own), &file, q, bound)?;
+                let (others, more) = self.others(c, n, (&day, &text), &file, q, bound)?;
                 if !others.is_empty() {
                     hit["others"] = json!(others);
                     if more > 0 {
@@ -1067,7 +1067,7 @@ impl Librarian {
 
     /// The other mails of a matter, folded behind its one hit: at most [`MAX_OTHERS`], the latest first, each
     /// `{day, title, snippet, ref}` (ADR 0003), and how many more there were. A copy of a mail (the same day, the same
-    /// snippet; the hit's own too) is one. Whether they disagree with the hit is for the model to see.
+    /// text, not only the same snippet; the hit's own too) is one. Whether they disagree with the hit is for the model to see.
     fn others(
         &self,
         case: &str,
@@ -1089,7 +1089,7 @@ impl Librarian {
         for r in rows {
             let (day, title, text, file) = r?;
             let snippet = snippet(&text, q);
-            if !seen.insert((day.clone(), snippet.clone())) {
+            if !seen.insert((day.clone(), text)) {
                 continue;
             }
             if out.len() < MAX_OTHERS {
@@ -1099,6 +1099,18 @@ impl Librarian {
             }
         }
         Ok((out, more))
+    }
+
+    /// Whether two indexed mails are copies of one (the same day, the same text): what one says, the other says.
+    pub(crate) fn same_mail(&self, a: &str, b: &str) -> bool {
+        self.db
+            .query_row(
+                "select count(*) from docs x join docs y on x.day = y.day and x.text = y.text
+                 where x.source = 'mail' and y.source = 'mail' and x.file = ? and y.file = ?",
+                [a, b],
+                |r| r.get::<_, i64>(0),
+            )
+            .is_ok_and(|n| n > 0)
     }
 
     fn ready(&self) -> anyhow::Result<()> {
