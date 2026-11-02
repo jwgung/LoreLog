@@ -21,9 +21,14 @@
     <div class="row"><select id="devAddr"></select><button id="copyAddr" class="secondary">복사</button></div>
     <p id="devAddrNote" class="note"></p>
     <p id="lanNote" class="warn" hidden></p>
+    <label class="check plain"><input id="sameWifi" type="checkbox" /> 같은 와이파이에서도 받기</label>
+    <p id="sameWifiNote" class="note"></p>
     <label>토큰</label>
     <div class="row"><input id="devToken" type="password" readonly /><button id="showToken" class="secondary">보기</button><button id="copyToken" class="secondary">복사</button></div>
     <p class="note">토큰을 아는 기기는 이 서랍에 쓰고 읽을 수 있습니다. 내 기기에만 넣으세요.</p>
+    <p class="note">토큰이나 연결 코드를 아는 기기를 잃었거나 코드가 남에게 갔으면 토큰을 바꿉니다. 이전 토큰은 바로 쓸 수 없게 됩니다.</p>
+    <button id="replaceToken" class="secondary">토큰 바꾸기</button>
+    <div id="tokenMsg" class="msg"></div>
     <p id="hostNote" class="note"></p>
     <button id="toConnect" class="secondary">다른 곳의 서랍에 연결하기로 바꾸기</button>
   </div>

@@ -59,6 +59,9 @@ pub struct Config {
     pub vault_dir: Option<String>,
     /// e.g. https://<machine>.<tailnet>.ts.net:48765 (in host mode the app's own server on loopback)
     pub url: String,
+    /// Host mode: also receive on this PC's private addresses in the same Wi-Fi (plain http, not encrypted). Off
+    /// unless the user turns it on in the settings or the first-run guide, also for a setup older than the setting.
+    pub same_wifi: bool,
     /// The server's INGEST_TOKEN. Kept in its own file, not in config.toml — never serialized here.
     #[serde(skip)]
     pub token: String,
@@ -104,6 +107,7 @@ impl Default for Config {
             mode: None,
             vault_dir: None,
             url: String::new(),
+            same_wifi: false,
             token: String::new(),
             source: "pc".into(),
             interval_s: 5,
@@ -292,6 +296,21 @@ mod tests {
             assert!(cfg.url.is_empty() && cfg.token.is_empty());
             assert_eq!(cfg.max_upload_mb, 20);
             assert!(!cfg.hide_title_apps.is_empty(), "title hiding is on by default");
+        });
+    }
+
+    #[test]
+    fn the_same_wifi_is_off_by_default_and_for_a_setup_that_never_chose() {
+        with_home(|| {
+            assert!(!load().unwrap().same_wifi, "a first run does not listen on the Wi-Fi");
+            // installed before the setting existed (it listened on the Wi-Fi then): off too
+            std::fs::create_dir_all(home()).unwrap();
+            std::fs::write(config_path(), "mode = \"host\"\nurl = \"http://127.0.0.1:8765\"\n").unwrap();
+            assert!(!load().unwrap().same_wifi);
+            let cfg = Config { same_wifi: true, ..load().unwrap() };
+            save(&cfg).unwrap();
+            assert!(std::fs::read_to_string(config_path()).unwrap().contains("same_wifi = true"));
+            assert!(load().unwrap().same_wifi, "the user's choice is kept");
         });
     }
 

@@ -1,8 +1,9 @@
 //! Host mode: the vault lives on this PC and the app runs the server itself (docs/adr/0002). The same library as the
-//! home server: it receives on loopback (this app's screen and PC collector), on the tailnet address and on this PC's
-//! private address in the same Wi-Fi (phones and other PCs), syncs mail and calendars every hour, and keeps the librarian's index. Settings and data sit where the
-//! server keeps them on this OS, so the command line tools on the same PC see the same vault.
-use std::net::{IpAddr, Ipv4Addr};
+//! home server: it receives on loopback (this app's screen and PC collector), on the tailnet address and, when the user
+//! turns it on (`same_wifi`, off by default), on this PC's private address in the same Wi-Fi (phones and other PCs),
+//! syncs mail and calendars every hour, and keeps the librarian's index. Settings and data sit where the server keeps
+//! them on this OS, so the command line tools on the same PC see the same vault.
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
@@ -18,6 +19,8 @@ use serde::Serialize;
 
 const SYNC_EVERY: Duration = Duration::from_secs(3600);
 const ADDR_RETRY: Duration = Duration::from_secs(30);
+/// How long turning the same Wi-Fi off waits for its listeners to close (so turning it on again can bind them).
+const LAN_CLOSE: Duration = Duration::from_secs(3);
 const LOG_MAX: u64 = 5 * 1024 * 1024;
 /// The library's log sink keeps only targets under `life_server` (see life_server::logging).
 const LOG_TARGET: &str = "life_server::desktop";
@@ -120,7 +123,7 @@ fn tailnet_name() -> Option<String> {
 }
 
 /// What the screens show about the server this app runs.
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct Info {
     /// where it listens, e.g. "127.0.0.1:8765", "100.101.1.2:8765"
     pub listening: Vec<String>,
@@ -128,8 +131,11 @@ pub struct Info {
     pub failed: Vec<String>,
     /// the address other devices put in, when the PC is on a tailnet (the first choice)
     pub address_for_devices: Option<String>,
-    /// the addresses devices in the same Wi-Fi put in (`http://192.168.0.20:8765`): plain http, not encrypted
+    /// the addresses devices in the same Wi-Fi put in (`http://192.168.0.20:8765`): plain http, not encrypted. Empty
+    /// while `same_wifi` is off
     pub lan_addresses: Vec<String>,
+    /// does it receive in the same Wi-Fi (the user's setting)
+    pub same_wifi: bool,
     pub notes_dir: String,
     pub syncing: bool,
 }
@@ -143,15 +149,17 @@ pub struct Hosting {
     app: Arc<App>,
     paths: Paths,
     port: u16,
+    /// loopback and the tailnet
     running: Arc<Mutex<Vec<Running>>>,
+    lan: Arc<Mutex<Lan>>,
     sync_now: mpsc::Sender<()>,
     syncing: Arc<AtomicBool>,
 }
 
 impl Hosting {
     /// Start it: make the token on first use, listen on loopback (an error if even that fails), point this app's
-    /// screen and PC collector at it, and keep trying the tailnet and same-network addresses and syncing every hour
-    /// until `stop`.
+    /// screen and PC collector at it, and keep trying the tailnet addresses (and the same-network ones when
+    /// `cfg.same_wifi`) and syncing every hour until `stop`.
     pub fn start(cfg: &mut Config, stop: Arc<AtomicBool>) -> Result<Hosting, String> {
         let paths = paths(cfg);
         life_server::fsutil::ensure_private_dir(&paths.data).map_err(|e| format!("데이터 폴더를 만들지 못했습니다: {e}"))?;
@@ -182,36 +190,59 @@ impl Hosting {
             paths,
             port: addr.port(),
             running: Arc::new(Mutex::new(vec![local])),
+            lan: Arc::new(Mutex::new(Lan { on: cfg.same_wifi, running: Vec::new() })),
             sync_now,
             syncing: Arc::new(AtomicBool::new(false)),
         };
         let halt = Halt { app: stop, own: hosting.halted.clone() };
+        locked(&hosting.lan).listen(hosting.rt.handle(), &hosting.app, hosting.port); // turned on: from the start
         hosting.keep_reachable(halt.clone());
         hosting.keep_syncing(halt, wake);
         Ok(hosting)
     }
 
-    /// Listen on the tailnet and same-network addresses too as soon as there are any (Tailscale or the Wi-Fi may come
-    /// up after the app, the Wi-Fi may give another address).
+    /// Listen on the tailnet addresses, and the same-network ones while the user has them on, as soon as there are
+    /// any (Tailscale or the Wi-Fi may come up after the app, the Wi-Fi may give another address).
     fn keep_reachable(&self, stop: Halt) {
         let (rt, app, port, running) = (self.rt.handle().clone(), self.app.clone(), self.port, self.running.clone());
+        let lan = self.lan.clone();
         std::thread::spawn(move || {
             // an address is tried once: one that cannot be bound (port taken, refused) is reported, not retried
             let mut tried: Vec<IpAddr> = Vec::new();
             while !stop.is_set() {
-                let here = tailnet_addrs().into_iter().chain(lan_addrs());
-                let fresh: Vec<IpAddr> = here.filter(|a| !tried.contains(a)).collect();
+                let fresh: Vec<IpAddr> = tailnet_addrs().into_iter().filter(|a| !tried.contains(a)).collect();
                 if !fresh.is_empty() {
                     let r = host::start(&rt, app.clone(), port, &fresh);
-                    for (ip, why) in r.failed() {
-                        log::warn!(target: LOG_TARGET, "cannot listen on {ip}:{port}: {why}");
-                    }
+                    warn_failed(&r, port);
                     tried.extend(fresh);
                     locked(&running).push(r);
                 }
+                locked(&lan).listen(&rt, &app, port);
                 sleep_unless(&stop, ADDR_RETRY);
             }
         });
+    }
+
+    /// Receive in the same Wi-Fi or not (the user's setting, saved by the caller). On: listen on this PC's addresses
+    /// there now. Off: stop listening on them (requests in flight finish) and wait until they are closed.
+    pub fn set_same_wifi(&self, on: bool) {
+        let mut lan = locked(&self.lan);
+        lan.on = on;
+        if on {
+            lan.listen(self.rt.handle(), &self.app, self.port);
+        } else {
+            lan.stop();
+        }
+    }
+
+    /// Replace the token with a new one: written to ingest.env (the old file kept, see `host::replace_token`) and
+    /// this app's config, and used by the running server from the next request on, so the old one stops working at
+    /// once. Every phone and PC with the old token needs the new connection code or token.
+    pub fn replace_token(&self, cfg: &mut Config) -> Result<(), String> {
+        let token = host::replace_token(&self.paths)?;
+        self.app.set_token(&token);
+        cfg.token = token;
+        config::save(cfg)
     }
 
     /// Sync now, then every hour, and whenever asked ([`Hosting::sync_now`]), until `stop`.
@@ -277,7 +308,9 @@ impl Hosting {
     }
 
     pub fn info(&self) -> Info {
-        let running = locked(&self.running);
+        let lan = locked(&self.lan);
+        let tailnet = locked(&self.running);
+        let running: Vec<&Running> = tailnet.iter().chain(lan.running.iter()).collect();
         let listening: Vec<String> = running.iter().flat_map(|r| r.listening().iter().map(|a| a.to_string())).collect();
         let failed = running.iter().flat_map(|r| r.failed().iter().map(|(ip, w)| format!("{ip}: {w}"))).collect();
         let on_tailnet = running.iter().flat_map(|r| r.listening()).find(|a| host::is_tailnet_ip(a.ip())).copied();
@@ -287,7 +320,8 @@ impl Hosting {
         });
         // only addresses this PC still has (a Wi-Fi that gave another address leaves the old listener behind)
         let lan_now = lan_addrs();
-        let mut lan_addresses: Vec<String> = running
+        let mut lan_addresses: Vec<String> = lan
+            .running
             .iter()
             .flat_map(|r| r.listening())
             .filter(|a| lan_now.contains(&a.ip()))
@@ -299,13 +333,14 @@ impl Hosting {
             failed,
             address_for_devices,
             lan_addresses,
+            same_wifi: lan.on,
             notes_dir: self.paths.vault.to_string_lossy().to_string(),
             syncing: self.syncing.load(Ordering::SeqCst),
         }
     }
 
-    /// The address a device may be given: the tailnet one or one in the same Wi-Fi this app listens on (the connection
-    /// code is made only for these).
+    /// The address a device may be given: the tailnet one or, while the same Wi-Fi is on, one there this app listens
+    /// on (the connection code is made only for these).
     pub fn offers(&self, url: &str) -> bool {
         let info = self.info();
         info.address_for_devices.as_deref() == Some(url) || info.lan_addresses.iter().any(|a| a == url)
@@ -316,6 +351,56 @@ impl Hosting {
         self.halted.store(true, Ordering::SeqCst);
         for r in locked(&self.running).iter() {
             r.stop();
+        }
+        for r in locked(&self.lan).running.iter() {
+            r.stop();
+        }
+    }
+}
+
+fn warn_failed(r: &Running, port: u16) {
+    for (ip, why) in r.failed() {
+        log::warn!(target: LOG_TARGET, "cannot listen on {ip}:{port}: {why}");
+    }
+}
+
+/// The listeners on this PC's addresses in the same Wi-Fi: none while the user has it off.
+struct Lan {
+    on: bool,
+    running: Vec<Running>,
+}
+
+impl Lan {
+    /// When on, listen on this PC's addresses in the same Wi-Fi not tried yet (one that cannot be bound is reported,
+    /// not retried until the setting is turned off and on).
+    fn listen(&mut self, rt: &tokio::runtime::Handle, app: &Arc<App>, port: u16) {
+        if !self.on {
+            return;
+        }
+        let tried: Vec<IpAddr> = self
+            .running
+            .iter()
+            .flat_map(|r| r.listening().iter().map(|a| a.ip()).chain(r.failed().iter().map(|(ip, _)| *ip)))
+            .collect();
+        let fresh: Vec<IpAddr> = lan_addrs().into_iter().filter(|a| !tried.contains(a)).collect();
+        if !fresh.is_empty() {
+            let r = host::start(rt, app.clone(), port, &fresh);
+            warn_failed(&r, port);
+            self.running.push(r);
+        }
+    }
+
+    /// Stop every listener and wait (a little) until none accepts any more.
+    fn stop(&mut self) {
+        let gone: Vec<SocketAddr> = self.running.iter().flat_map(|r| r.listening().iter().copied()).collect();
+        for r in self.running.drain(..) {
+            r.stop();
+        }
+        let until = Instant::now() + LAN_CLOSE;
+        while Instant::now() < until
+            && gone.iter().any(|a| std::net::TcpStream::connect_timeout(a, Duration::from_millis(200)).is_ok())
+        {
+            std::thread::sleep(Duration::from_millis(50));
         }
     }
 }
@@ -397,27 +482,76 @@ mod tests {
 
         let ok = ureq::get(&format!("{}/todos", cfg.url)).header("Authorization", format!("Bearer {}", cfg.token));
         assert_eq!(ok.call().unwrap().status(), 200);
-        std::thread::sleep(Duration::from_millis(300)); // the tailnet and same-network listeners start on their thread
-        let info = h.info();
-        assert_eq!(info.listening[0], cfg.url.trim_start_matches("http://"));
-        let (on_tailnet, lan) = (!tailnet_addrs().is_empty(), lan_addrs());
-        assert_eq!(info.listening.len() > 1, on_tailnet || !lan.is_empty(), "the tailnet and same-network addresses too");
-        assert_eq!(info.address_for_devices.is_some(), on_tailnet);
-        let port = cfg.url.rsplit(':').next().unwrap();
+        std::thread::sleep(Duration::from_millis(300)); // the tailnet listeners start on their thread
+        let port = cfg.url.rsplit(':').next().unwrap().to_string();
+        let lan = lan_addrs();
         let want: Vec<String> = lan.iter().map(|ip| format!("http://{ip}:{port}")).collect();
+        let answers = |a: &str| ureq::get(&format!("{a}/healthz")).call().is_ok();
+
+        // the same Wi-Fi is off by default: not listened on, not offered
+        assert!(!cfg.same_wifi, "off unless the user turns it on");
+        let info = h.info();
+        assert!(!info.same_wifi);
+        assert_eq!(info.listening[0], cfg.url.trim_start_matches("http://"));
+        let on_tailnet = !tailnet_addrs().is_empty();
+        assert_eq!(info.listening.len() > 1, on_tailnet, "the tailnet addresses only");
+        assert_eq!(info.address_for_devices.is_some(), on_tailnet);
+        assert!(info.lan_addresses.is_empty(), "{:?}", info.lan_addresses);
+        assert!(!info.listening.iter().any(|a| lan.iter().any(|ip| a.starts_with(&format!("{ip}:")))), "{info:?}");
+        for a in &want {
+            assert!(!h.offers(a), "{a} is not offered while off");
+            assert!(!answers(a), "{a} is not listened on while off");
+        }
+
+        // turned on: listened on right away, offered
+        h.set_same_wifi(true);
+        let info = h.info();
+        assert!(info.same_wifi);
         assert_eq!(info.lan_addresses, want, "this PC's own private addresses, each listened on");
         for a in &info.lan_addresses {
             assert!(h.offers(a), "{a}");
-            assert_eq!(ureq::get(&format!("{a}/healthz")).call().unwrap().status(), 200, "{a} answers");
+            assert!(answers(a), "{a} answers");
         }
         assert!(!h.offers(&cfg.url), "loopback is not for other devices");
         assert!(!h.offers("http://192.0.2.1:8765"), "nor an address this PC does not have");
+
+        // turned off again: stopped, not offered; on again: listened on again
+        h.set_same_wifi(false);
+        assert!(h.info().lan_addresses.is_empty() && !h.info().same_wifi);
+        for a in &want {
+            assert!(!h.offers(a) && !answers(a), "{a} stopped");
+        }
+        h.set_same_wifi(true);
+        assert_eq!(h.info().lan_addresses, want, "listened on again");
+        h.set_same_wifi(false);
         assert_eq!(h.status()["jobs"], serde_json::json!([]), "nothing to sync until mail or a calendar is added");
+
+        // a new token: saved, the old one refused at once, no restart
+        let old = cfg.token.clone();
+        h.replace_token(&mut cfg).unwrap();
+        assert!(cfg.token != old && cfg.token.len() == old.len(), "a new token of the same strength");
+        assert_eq!(config::load().unwrap().token, cfg.token, "saved for this app's screen and collector");
+        assert_eq!(host::IngestSettings::load(&p).unwrap().token, cfg.token, "and in ingest.env");
+        let todos = |t: &str| {
+            let r = ureq::get(&format!("{}/todos", cfg.url)).header("Authorization", format!("Bearer {t}")).call();
+            r.map(|r| r.status().as_u16()).map_err(|e| e.to_string())
+        };
+        assert_eq!(todos(&old), Err("http status: 401".to_string()), "the old token stops working");
+        assert_eq!(todos(&cfg.token), Ok(200));
 
         h.stop(); // its own threads end without the app's flag
         std::thread::sleep(Duration::from_millis(300));
         assert!(h.halted.load(Ordering::SeqCst) && !stop.load(Ordering::SeqCst));
         assert!(ureq::get(&format!("{}/healthz", cfg.url)).call().is_err());
+
+        // turned on in the settings: listened on from the start
+        cfg.same_wifi = true;
+        let h = Hosting::start(&mut cfg, stop.clone()).unwrap();
+        let port = cfg.url.rsplit(':').next().unwrap().to_string();
+        let want: Vec<String> = lan.iter().map(|ip| format!("http://{ip}:{port}")).collect();
+        assert_eq!(h.info().lan_addresses, want, "{:?}", h.info());
+        assert!(h.info().same_wifi);
+        h.stop();
         unsafe {
             std::env::remove_var("XDG_CONFIG_HOME");
             std::env::remove_var("XDG_DATA_HOME");

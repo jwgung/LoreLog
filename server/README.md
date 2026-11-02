@@ -37,7 +37,7 @@ Rust 툴체인(저장소 루트의 `rust-toolchain.toml`)이 필요하다. `depl
 
 ## 어느 OS에서든
 
-라이브러리는 어느 OS에서든 그대로 돌아야 한다. 기본 위치는 `config::OsDirs`로 OS에서 고르고(리눅스는 예전 그대로 `~/.config/vault-sync`, `~/.local/share/life`, `~/.local/share/vault-sync`. `XDG_CONFIG_HOME`·`XDG_DATA_HOME`을 두면 그쪽을 따른다), 한 OS의 경로를 코드에 적지 않는다. 1시간마다의 동기화 같은 예약 실행은 라이브러리가 아니라 그것을 띄우는 쪽의 일이다(상시 서버는 `deploy/systemd/life-sync.timer`, 서랍을 PC에 둔 데스크톱 앱은 앱이 1시간마다). 라이브러리 안의 스레드는 요청 하나에 딸린 일회성 작업(하루 정리 만들기, 할 일 뽑기)뿐이다. 받기 서버를 다른 프로그램 안에서 띄울 때는 `host`(설정 읽기 `IngestSettings`·`Models`, 모델 저장·실행 중 바꾸기 `save_models`·`LiveModels`, 토큰 만들기, 주소별로 띄우고 멈추기)를 쓴다. 모을 곳 설정(메일 계정·폴더, 달력)은 `collect::sources`가 하고, `life add`와 데스크톱 설정 화면이 같이 쓴다. 라이브러리가 남기는 기록은 `log` 매크로로 나가고 띄우는 쪽이 받을 곳을 한 번 정한다(`logging`): 명령줄 도구는 예전처럼 stderr, 데스크톱 앱은 파일. 동기화 작업(메일, 첨부, 일정, 사서 갱신)은 `collect::sync`의 함수이고, 출력하지 않고 줄 단위로 알린다. 명령줄 도구는 그 줄을 stdout·stderr로 옮기고, 데스크톱 앱은 같은 함수를 직접 부른다.
+라이브러리는 어느 OS에서든 그대로 돌아야 한다. 기본 위치는 `config::OsDirs`로 OS에서 고르고(리눅스는 예전 그대로 `~/.config/vault-sync`, `~/.local/share/life`, `~/.local/share/vault-sync`. `XDG_CONFIG_HOME`·`XDG_DATA_HOME`을 두면 그쪽을 따른다), 한 OS의 경로를 코드에 적지 않는다. 1시간마다의 동기화 같은 예약 실행은 라이브러리가 아니라 그것을 띄우는 쪽의 일이다(상시 서버는 `deploy/systemd/life-sync.timer`, 서랍을 PC에 둔 데스크톱 앱은 앱이 1시간마다). 라이브러리 안의 스레드는 요청 하나에 딸린 일회성 작업(하루 정리 만들기, 할 일 뽑기)뿐이다. 받기 서버를 다른 프로그램 안에서 띄울 때는 `host`(설정 읽기 `IngestSettings`·`Models`, 모델 저장·실행 중 바꾸기 `save_models`·`LiveModels`, 토큰 만들기·바꾸기(`ensure_token`·`replace_token`, 실행 중인 서버는 `App::set_token`으로 바로 새 토큰만 받는다), 주소별로 띄우고 멈추기)를 쓴다. 모을 곳 설정(메일 계정·폴더, 달력)은 `collect::sources`가 하고, `life add`와 데스크톱 설정 화면이 같이 쓴다. 라이브러리가 남기는 기록은 `log` 매크로로 나가고 띄우는 쪽이 받을 곳을 한 번 정한다(`logging`): 명령줄 도구는 예전처럼 stderr, 데스크톱 앱은 파일. 동기화 작업(메일, 첨부, 일정, 사서 갱신)은 `collect::sync`의 함수이고, 출력하지 않고 줄 단위로 알린다. 명령줄 도구는 그 줄을 stdout·stderr로 옮기고, 데스크톱 앱은 같은 함수를 직접 부른다.
 
 ## 테스트
 
@@ -60,3 +60,12 @@ Rust 툴체인(저장소 루트의 `rust-toolchain.toml`)이 필요하다. `depl
     sudo tailscale serve --bg --https=48765 http://<tailnet 주소>:8765
 
 주소는 `https://<머신>.<tailnet>.ts.net:48765/`. 폰 앱은 기존 HTTP 주소를 그대로 쓸 수 있다. 되돌리기: `sudo tailscale serve --https=48765 off`.
+
+## 토큰 바꾸기
+토큰(`ingest.env`의 `INGEST_TOKEN`) 하나가 서랍에 쓰고 읽는 모든 권한이다. 토큰이나 연결 코드를 아는 기기를 잃었거나 코드가 남에게 갔으면 새 토큰으로 바꾼다:
+
+    life token new            # 새 토큰을 ingest.env에 쓴다. 토큰은 출력하지 않는다
+    life token new --show     # 새 토큰을 화면에 보여 준다
+    systemctl --user restart life-ingest
+
+새 토큰은 처음 만들 때와 같이 OS의 난수 16바이트(16진수 32자)다. 다른 설정은 그대로 두고, 바꾸기 전의 파일은 `ingest.env.bak-token`에 남긴다(둘 다 0600). `life-ingest`를 다시 시작할 때까지는 이전 토큰을 받고, 다시 시작하면 이전 토큰은 바로 거절된다. 그 뒤 폰은 새 연결 코드를, 다른 PC는 새 토큰을 넣어 다시 잇는다. `ingest.env`가 없으면 아무것도 만들지 않고 실패한다. 서랍을 PC에 둔 데스크톱 앱은 설정의 '토큰 바꾸기'로 같은 일을 하고, 다시 시작하지 않아도 바로 새 토큰만 받는다.

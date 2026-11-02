@@ -141,10 +141,34 @@ pub fn ensure_token(paths: &Paths) -> std::io::Result<String> {
     if let Some(t) = cfg.get("INGEST_TOKEN").filter(|t| t.chars().count() >= MIN_TOKEN) {
         return Ok(t.clone());
     }
+    let token = random_token()?;
+    crate::config::set_env_keys(&file, &[("INGEST_TOKEN", Some(&token))]).map_err(std::io::Error::other)?;
+    Ok(token)
+}
+
+/// A new token: 16 random bytes from the OS, as 32 hex characters.
+fn random_token() -> std::io::Result<String> {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).map_err(|e| std::io::Error::other(format!("no randomness: {e}")))?;
-    let token = hex::encode(bytes);
-    crate::config::set_env_keys(&file, &[("INGEST_TOKEN", Some(&token))]).map_err(std::io::Error::other)?;
+    Ok(hex::encode(bytes))
+}
+
+/// Where [`replace_token`] keeps ingest.env as it was: `<config>/ingest.env.bak-token`.
+pub fn token_backup(paths: &Paths) -> PathBuf {
+    paths.conf.join("ingest.env.bak-token")
+}
+
+/// Replace the token in ingest.env with a new one (made like [`ensure_token`]'s), keeping the other settings and the
+/// file as it was in [`token_backup`] (both mode 0600). Every device with the old token must get the new one. A
+/// server already running keeps the old token until it is told ([`App::set_token`]) or restarted. Err: there is no
+/// ingest.env (nothing is made), or it could not be written.
+pub fn replace_token(paths: &Paths) -> Result<String, String> {
+    let file = ingest_env(paths);
+    let old = std::fs::read(&file).map_err(|e| format!("{}을(를) 읽지 못했습니다: {:?}", file.display(), e.kind()))?;
+    crate::fsutil::write_private_atomic(&token_backup(paths), &old)
+        .map_err(|e| format!("{}에 백업하지 못해 바꾸지 않았습니다: {:?}", token_backup(paths).display(), e.kind()))?;
+    let token = random_token().map_err(|e| e.to_string())?;
+    crate::config::set_env_keys(&file, &[("INGEST_TOKEN", Some(&token))])?;
     Ok(token)
 }
 

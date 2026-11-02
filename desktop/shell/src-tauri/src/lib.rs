@@ -10,8 +10,9 @@
 //!      (url, token, watched folders) live in the core config, shared with the CLI.
 //!
 //!   3. **The server, in host mode** — when the user keeps the vault on this PC (docs/adr/0002), the app runs the
-//!      server library itself (`host.rs`): receiving on loopback, the tailnet and same-network addresses, syncing
-//!      every hour, the librarian. The screens and the collector then talk to it on loopback like to any server.
+//!      server library itself (`host.rs`): receiving on loopback, the tailnet and (when the user turns it on) the
+//!      same-network addresses, syncing every hour, the librarian. The screens and the collector then talk to it on
+//!      loopback like to any server.
 //!
 //! The shell owns no judgement about the diary: it exposes the config to the UI as commands and runs the collector.
 mod ahead;
@@ -70,6 +71,16 @@ fn hosting<T>(s: &HostSlot, f: impl FnOnce(&host::Hosting) -> T) -> Option<T> {
 
 /// The app-wide stop flag (set when the app exits).
 struct Stop(Arc<AtomicBool>);
+
+/// The stop flag of the collector's current run: set to start it again with the config read anew (a new token).
+#[derive(Default)]
+struct CollectorRun(Mutex<Arc<AtomicBool>>);
+
+impl CollectorRun {
+    fn restart(&self) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).store(true, Ordering::SeqCst);
+    }
+}
 
 /// Start the server unless it runs. A failure is kept (the screen shows it) and returned.
 fn start_hosting(s: &HostSlot, stop: &Arc<AtomicBool>) -> Result<(), String> {
@@ -207,20 +218,50 @@ struct PhoneCode {
     qr_svg: String,
 }
 
-/// The one-line connection code a phone pastes: this PC's address (`url`: the tailnet one or one in the same Wi-Fi the
-/// screen offered; none given: the tailnet one) and the vault's token. Made only on the user's click, never logged,
-/// and only for an address this app offers and the token may go to.
+/// The one-line connection code a phone pastes: this PC's address (`url`: the tailnet one or, while the same Wi-Fi is
+/// on, one there the screen offered; none given: the tailnet one) and the vault's token. Made only on the user's
+/// click, never logged, and only for an address this app offers and the token may go to.
 #[tauri::command]
 fn phone_code(slot: tauri::State<HostSlot>, url: Option<String>) -> Result<PhoneCode, String> {
     let url = hosting(&slot, |h| match url.filter(|u| !u.is_empty()) {
         Some(u) if h.offers(&u) => Ok(u),
         Some(_) => Err("이 PC가 지금 받는 주소가 아닙니다. '다시 보기'를 누르세요"),
-        None => h.info().address_for_devices.ok_or("아직 tailnet 주소가 없습니다. 이 PC에 Tailscale을 켜고 로그인하세요"),
+        None => h.info().address_for_devices.ok_or(
+            "아직 tailnet 주소가 없습니다. 이 PC에 Tailscale을 켜고 로그인하거나, 같은 와이파이 안에서만 쓰려면 '같은 와이파이에서도 받기'를 켜세요",
+        ),
     })
     .ok_or("이 PC에 서랍을 둔 경우에만 만듭니다")??;
     let code = life_server::onboard::connect_code(&url, &config::load()?.token)?;
     let qr_svg = pair::qr_svg(&code)?;
     Ok(PhoneCode { code, qr_svg })
+}
+
+/// Receive in the same Wi-Fi too, or not (host mode): saved in the config and applied at once.
+#[tauri::command]
+fn same_wifi_set(on: bool, slot: tauri::State<HostSlot>) -> Result<host::Info, String> {
+    let held = self::slot(&slot);
+    let Ok(Some(h)) = &*held else {
+        return Err("이 PC에 서랍을 둔 경우에만 설정합니다".into());
+    };
+    let mut cfg = config::load()?;
+    cfg.same_wifi = on;
+    config::save(&cfg)?;
+    h.set_same_wifi(on);
+    Ok(h.info())
+}
+
+/// A new token for the vault on this PC (the screen asked the user first): the old one stops working at once, so every
+/// phone and other PC needs the new connection code. This app's collector starts again with the new one.
+#[tauri::command]
+fn token_replace(slot: tauri::State<HostSlot>, collector: tauri::State<CollectorRun>) -> Result<(), String> {
+    let held = self::slot(&slot);
+    let Ok(Some(h)) = &*held else {
+        return Err("이 PC에 서랍을 둔 경우에만 바꿉니다".into());
+    };
+    let mut cfg = config::load()?;
+    h.replace_token(&mut cfg)?;
+    collector.restart();
+    Ok(())
 }
 
 /// How far the first sync and the graph got (host mode).
@@ -421,16 +462,20 @@ fn go(app: &AppHandle, page: &str) {
 /// The collection loop, run on a background thread for as long as the app lives. It is exactly `life-agent run`'s
 /// loop (`run_until`), driven by the app's stop flag instead of Ctrl+C. `run_until` returns an error until url and
 /// token are set, so we retry; a repeated error is logged once so a real problem is not silent. Note the shell does
-/// not take the CLI's single-instance lock, so do not also run `life-agent run` at the same time.
-fn start_collector(stop: Arc<AtomicBool>) {
+/// not take the CLI's single-instance lock, so do not also run `life-agent run` at the same time. Each run has its own
+/// stop flag in [`CollectorRun`]: [`CollectorRun::restart`] ends the run and the next one reads the config anew; the
+/// app's flag ends them all.
+fn start_collector(app: AppHandle, stop: Arc<AtomicBool>) {
     std::thread::spawn(move || {
         let mut last_err = String::new();
         loop {
+            let this_run = Arc::new(AtomicBool::new(false));
+            *app.state::<CollectorRun>().0.lock().unwrap_or_else(|e| e.into_inner()) = this_run.clone();
             if stop.load(Ordering::SeqCst) {
-                return;
+                return; // checked after this run's flag is in place: an exit that came before it is seen here
             }
-            match life_agent::run::run_until(stop.clone()) {
-                Ok(()) => return, // stopped cleanly (app exiting)
+            match life_agent::run::run_until(this_run) {
+                Ok(()) => continue, // stopped: the app is exiting (seen above) or the config changed
                 Err(e) => {
                     if e != last_err {
                         life_agent_core::agent::log(&config::home(), &format!("collector not running: {e}"));
@@ -505,6 +550,7 @@ fn set_autostart(app: AppHandle, on: bool) -> Result<bool, String> {
 /// Stop the collector and the server this app runs (the app is exiting, or an update is about to replace it).
 fn shutdown(app: &AppHandle) {
     app.state::<Stop>().0.store(true, Ordering::SeqCst);
+    app.state::<CollectorRun>().restart();
     hosting(&app.state::<HostSlot>(), |h| h.stop());
 }
 
@@ -546,6 +592,8 @@ pub fn run() {
             asks_get,
             model_check,
             phone_code,
+            same_wifi_set,
+            token_replace,
             first_progress,
             open_tailscale_download,
             export_vault,
@@ -561,6 +609,7 @@ pub fn run() {
         ])
         .manage(HostSlot::default())
         .manage(Stop(stop.clone()))
+        .manage(CollectorRun::default())
         .manage(update::Pending::default())
         .setup(move |app| {
             build_tray(app.handle())?;
@@ -575,7 +624,7 @@ pub fn run() {
                 let _ = w.hide(); // started at login: collect in the tray, open when the user asks
             }
             // the window loads index.html (the assistant), which reads server_config and shows setup or chat itself
-            start_collector(stop.clone());
+            start_collector(app.handle().clone(), stop.clone());
             Ok(())
         })
         .on_window_event(|window, event| {

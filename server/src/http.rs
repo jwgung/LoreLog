@@ -35,7 +35,9 @@ pub type RecallFn =
 pub struct App {
     pub paths: Paths,
     pub store: RawStore,
-    pub token: String,
+    /// the Bearer token every route but `/healthz` needs; replaced in place ([`App::set_token`]) so the old one stops
+    /// working at once
+    token: std::sync::RwLock<String>,
     /// the class records get when the sender says nothing (`personal` or `work`)
     pub cls: String,
     /// largest body for uploads (records, files, audio)
@@ -64,7 +66,7 @@ impl App {
         App {
             paths,
             store,
-            token: token.to_string(),
+            token: std::sync::RwLock::new(token.to_string()),
             cls: cls.to_string(),
             max_bytes,
             model,
@@ -72,6 +74,15 @@ impl App {
             recall,
             jobs: Arc::new(Jobs::default()),
         }
+    }
+
+    /// Answer to this token from the next request on; the one before is refused from then on.
+    pub fn set_token(&self, token: &str) {
+        *self.token.write().unwrap_or_else(|e| e.into_inner()) = token.to_string();
+    }
+
+    fn token(&self) -> String {
+        self.token.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 
@@ -193,7 +204,7 @@ pub fn handle(app: &App, req: &Request) -> Reply {
 }
 
 fn authorized(app: &App, req: &Request) -> bool {
-    authorized_token(&app.token, &req.headers)
+    authorized_token(&app.token(), &req.headers)
 }
 
 /// Does the request carry the Bearer token (compared in constant time)?
@@ -485,7 +496,7 @@ async fn entry(State(app): State<Arc<App>>, req: axum::extract::Request) -> Axum
     // read only what some handler may use; a larger declared body is refused by the handler without being read
     let cap = app.max_bytes.max(BODY_LIMIT);
     // an unauthenticated request gets nothing read: it is answered 401 (or 404) without its body
-    let open = target == "/healthz" || authorized_token(&app.token, &parts.headers);
+    let open = target == "/healthz" || authorized_token(&app.token(), &parts.headers);
     let body = if open && declared > 0 && declared <= cap { read(body, declared).await } else { Vec::new() };
     let request = Request { method: parts.method, target, headers: parts.headers, body };
     let app2 = app.clone();

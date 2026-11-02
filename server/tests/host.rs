@@ -112,6 +112,51 @@ fn a_token_is_made_once_and_other_settings_are_kept() {
 }
 
 #[test]
+fn a_replaced_token_is_new_kept_private_and_the_old_file_is_backed_up() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = Paths::under(dir.path());
+    let old = host::ensure_token(&paths).unwrap();
+    let file = host::ingest_env(&paths);
+    let text = std::fs::read_to_string(&file).unwrap();
+    std::fs::write(&file, format!("# mine\nINGEST_PORT=9001\n{text}")).unwrap();
+
+    let new = host::replace_token(&paths).unwrap();
+    assert_ne!(new, old);
+    assert!(new.len() == old.len() && new.chars().all(|c| c.is_ascii_hexdigit()), "same strength: {new}");
+    assert_eq!(host::ensure_token(&paths).unwrap(), new, "the file holds the new one");
+    let text = std::fs::read_to_string(&file).unwrap();
+    assert!(text.contains("# mine\nINGEST_PORT=9001\n") && !text.contains(&old), "{text}");
+    let bak = host::token_backup(&paths);
+    assert_eq!(bak, paths.conf.join("ingest.env.bak-token"));
+    assert!(std::fs::read_to_string(&bak).unwrap().contains(&format!("INGEST_TOKEN={old}")));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for f in [&file, &bak] {
+            assert_eq!(std::fs::metadata(f).unwrap().permissions().mode() & 0o777, 0o600, "{}", f.display());
+        }
+    }
+    assert!(host::replace_token(&Paths::under(&dir.path().join("none"))).is_err(), "no ingest.env: nothing made");
+}
+
+#[test]
+fn a_running_server_takes_a_new_token_and_refuses_the_old_one_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let settings =
+        IngestSettings::from_map(&map(&[("INGEST_TOKEN", "0123456789abcdef"), ("INGEST_PORT", "0")])).unwrap();
+    let app = Arc::new(Models::default().app(Paths::under(dir.path()), &settings));
+    let running = host::start(rt.handle(), app.clone(), settings.port, &["127.0.0.1".parse().unwrap()]);
+    let todos = format!("http://{}/todos", running.listening()[0]);
+    let call = |t: &str| ureq::get(&todos).header("Authorization", format!("Bearer {t}")).call().map(|r| r.status());
+    assert_eq!(call("0123456789abcdef").unwrap(), 200);
+    app.set_token("fedcba9876543210fedcba");
+    assert_eq!(call("0123456789abcdef").unwrap_err().to_string(), "http status: 401", "the old token stops working");
+    assert_eq!(call("fedcba9876543210fedcba").unwrap(), 200);
+    running.stop();
+}
+
+#[test]
 fn tailnet_addresses_are_the_cgnat_range_and_the_tailscale_ula() {
     let ip = |s: &str| s.parse::<IpAddr>().unwrap();
     assert!(host::is_tailnet_ip(ip("100.101.171.95")));
