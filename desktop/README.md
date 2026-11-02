@@ -19,7 +19,7 @@ Omni 데스크톱 클라이언트(`dev` 브랜치의 `pc_activity`)를 읽고 �
 ## 구조
 - `core/` 순수 로직과 전송: `segments`(표본 → 구간), `spool`, `sender`(전송·파일 업로더 `ServerUploader`), `intake`(감시 폴더 엔진), `agent`(루프 한 번), `config`. OS 호출이 없어 어디서나 테스트한다.
 - `agent/` OS 쪽: `platform/windows.rs`(앞 창·프로세스·마지막 입력, `windows-sys`), 명령줄 `life-agent`. 수집 루프 `run::run_until(stop)`은 CLI와 데스크톱 앱이 함께 쓴다.
-- `shell/` 데스크톱 앱(Tauri): 비서 화면(대화·할일·서랍·말하기)과 설정 화면을 **앱에 번들**해 띄우고, 백그라운드로 수집 루프를 돌리며, 트레이(열기·채팅 열기·설정·종료)를 둔다. 서랍을 이 PC에 두면 서버도 돌린다(아래 "서랍을 어디에 두나"). 화면은 Tauri webview로 그리지만 서버에서 당겨오지 않는다("웹 클라이언트"가 아니다) — 서버 주소·토큰은 앱 설정(`server_config` 커맨드)에서 받아 서버 API를 직접 호출한다. `ui/index.html`=비서, `ui/settings.html`=설정, `ui/welcome.html`=처음 설정 안내(#69). 메일·일정·주소록 양식은 `ui/sources.js` 하나를 설정과 안내가 함께 쓴다.
+- `shell/` 데스크톱 앱(Tauri): 비서 화면(대화·할일·서랍·말하기)과 설정 화면을 **앱에 번들**해 띄우고, 백그라운드로 수집 루프를 돌리며, 트레이(열기·채팅 열기·설정·종료)를 둔다. 서랍을 이 PC에 두면 서버도 돌린다(아래 "서랍을 어디에 두나"). 화면은 Tauri webview로 그리지만 서버에서 당겨오지 않는다("웹 클라이언트"가 아니다) — 서버 주소·토큰은 앱 설정(`server_config` 커맨드)에서 받아 서버 API를 직접 호출한다. 화면의 출처(`tauri://localhost`, Windows는 `http://tauri.localhost`)와 서버(`127.0.0.1` 등)가 달라 webview는 CORS로 묻는데, 서버는 이 두 출처에만 허용으로 답한다(브라우저에 열린 다른 웹 페이지는 답을 읽지 못한다). `ui/index.html`=비서, `ui/settings.html`=설정, `ui/welcome.html`=처음 설정 안내(#69). 메일·일정·주소록 양식은 `ui/sources.js` 하나를 설정과 안내가 함께 쓴다.
 
 배포하는 것은 둘이다 — **`life-desktop`**(보통 사용자는 이것만: 대화 + 백그라운드 수집 + 트레이)와 **`life-agent`**(설정·진단·감시 폴더를 터미널에서 다루는 명령줄). 데스크톱 앱이 백그라운드 수집을 하므로 별도 데몬은 두지 않는다. 데스크톱 앱과 `life-agent run`을 동시에 돌리지 않는다(둘 다 수집한다).
 

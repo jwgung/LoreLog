@@ -485,6 +485,13 @@ pub fn router(app: Arc<App>) -> Router {
 
 async fn entry(State(app): State<Arc<App>>, req: axum::extract::Request) -> AxumResponse {
     let (parts, body) = req.into_parts();
+    let origin = app_origin(&parts.headers);
+    // the desktop app asks before a request with the token (CORS preflight); only its own screens are answered
+    if parts.method == Method::OPTIONS
+        && let Some(o) = origin
+    {
+        return preflight(o);
+    }
     let target =
         parts.uri.path_and_query().map(|p| p.as_str().to_string()).unwrap_or_else(|| parts.uri.path().to_string());
     let declared = parts
@@ -503,7 +510,40 @@ async fn entry(State(app): State<Arc<App>>, req: axum::extract::Request) -> Axum
     let reply = tokio::task::spawn_blocking(move || handle(&app2, &request))
         .await
         .unwrap_or_else(|_| Reply::new(500, json!({"error": "internal error"})));
-    respond(reply)
+    let mut resp = respond(reply);
+    if let Some(o) = origin {
+        allow_origin(resp.headers_mut(), o);
+    }
+    resp
+}
+
+/// Where the desktop app's bundled screens come from: `tauri://localhost` (Linux, macOS) and
+/// `http://tauri.localhost` (Windows). They call this server on 127.0.0.1 with the token, which the webview treats
+/// as cross-origin. No other origin is allowed, so a web page open in a browser cannot read these answers.
+const APP_ORIGINS: [&str; 2] = ["tauri://localhost", "http://tauri.localhost"];
+
+/// The headers the app's requests carry (the file upload sends its name, hash, type and time in headers).
+const APP_HEADERS: &str =
+    "authorization, content-type, x-file-sha256, x-file-name, x-file-mime, x-file-ts, x-file-sighting";
+
+fn app_origin(headers: &HeaderMap) -> Option<&'static str> {
+    let o = headers.get(header::ORIGIN)?.to_str().ok()?;
+    APP_ORIGINS.into_iter().find(|a| *a == o)
+}
+
+fn allow_origin(headers: &mut HeaderMap, origin: &'static str) {
+    headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, header::HeaderValue::from_static(origin));
+    headers.insert(header::VARY, header::HeaderValue::from_static("Origin"));
+}
+
+fn preflight(origin: &'static str) -> AxumResponse {
+    let mut resp = StatusCode::NO_CONTENT.into_response();
+    let h = resp.headers_mut();
+    allow_origin(h, origin);
+    h.insert(header::ACCESS_CONTROL_ALLOW_METHODS, header::HeaderValue::from_static("GET, POST"));
+    h.insert(header::ACCESS_CONTROL_ALLOW_HEADERS, header::HeaderValue::from_static(APP_HEADERS));
+    h.insert(header::ACCESS_CONTROL_MAX_AGE, header::HeaderValue::from_static("600"));
+    resp
 }
 
 async fn read(body: Body, limit: usize) -> Vec<u8> {
