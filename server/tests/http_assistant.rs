@@ -144,6 +144,17 @@ fn a_chat_answer_carries_the_records_it_quoted_and_older_answers_stay_as_they_we
         (200, json!({"reply": "네, 확인했어요."})),
         "nothing looked up: no sources"
     );
+    // opened again later, the answer still shows what it quoted; an answer that quoted nothing has no `sources`
+    let (status, hist) = s.get("/diary/2026-02-05/chat");
+    assert_eq!(status, 200);
+    let m = hist["messages"].as_array().unwrap();
+    assert_eq!(m.len(), 4, "{m:?}");
+    assert_eq!(
+        m[1],
+        json!({"role": "assistant", "text": "네, 확인했어요.", "sources": [{"day": "2026-03-05", "kind": "보낸 메일",
+               "title": "배관 교체 견적", "ref": "Mail/2026/q3.md"}]})
+    );
+    assert_eq!(m[3], json!({"role": "assistant", "text": "네, 확인했어요."}));
 }
 
 #[test]

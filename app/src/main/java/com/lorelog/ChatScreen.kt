@@ -137,7 +137,7 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
                 restored.add(Msg.Mine(l.text))
                 pendingFix = l.wrong?.let { Msg.Fixed(it, l.text) }
             } else {
-                restored.add(Msg.Assistant(l.text))
+                restored.add(Msg.Assistant(l.text, l.sources))
                 pendingFix?.let { restored.add(it); pendingFix = null }
             }
         }

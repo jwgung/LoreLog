@@ -164,7 +164,10 @@ async function loadChat() {
   // the structure question not answered yet (#63), shown once: the day's question then waits
   const ask = typeof draft.ask === "string" && draft.ask && localStorage.getItem(ASK_SHOWN) !== draft.ask ? draft.ask : "";
   if (!hist.length && draft.question && !ask) bubble("assistant", draft.question);
-  for (const m of hist) bubble(m.role, m.text, m.wrong);
+  for (const m of hist) {
+    const b = bubble(m.role, m.text, m.wrong);
+    if (m.role === "assistant") sourcesLine(b, m.sources);   // what an answer quoted, kept with it
+  }
   if (ask) {
     bubble("assistant", ask);
     localStorage.setItem(ASK_SHOWN, ask);

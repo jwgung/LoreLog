@@ -138,7 +138,8 @@ object DiaryClient {
         }
     }
 
-    data class ChatLine(val role: String, val text: String, val wrong: String?)
+    /** [sources]: 답이 인용한 기록. 다시 열어도 답 아래에 보인다. 예전 서버는 보내지 않는다(빈 목록). */
+    data class ChatLine(val role: String, val text: String, val wrong: String?, val sources: List<Source> = emptyList())
 
     /** 오늘 서버에 남은 대화(사용자 말, 비서 답, 정정). 앱을 다시 열어도 이어서 보이게 한다. 실패하면 빈 목록. */
     suspend fun fetchChat(context: Context, day: String): List<ChatLine> = withContext(Dispatchers.IO) {
@@ -149,7 +150,7 @@ object DiaryClient {
             val arr = JSONObject(conn.inputStream.bufferedReader().readText()).getJSONArray("messages")
             (0 until arr.length()).map {
                 val o = arr.getJSONObject(it)
-                ChatLine(o.getString("role"), o.getString("text"), if (o.has("wrong")) o.getString("wrong") else null)
+                ChatLine(o.getString("role"), o.getString("text"), if (o.has("wrong")) o.getString("wrong") else null, sources(o.optJSONArray("sources")))
             }
         } catch (e: Exception) { emptyList() } finally { conn?.disconnect() }
     }
