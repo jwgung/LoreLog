@@ -77,11 +77,23 @@ class LogStore(context: Context, password: ByteArray) {
     }
 
     /** 보관 오디오가 붙은 음성 행 중 조건에 맞는 (id, 파일명). [maxId] 이하 또는 ts < [beforeMs]. */
-    fun voiceAudioToDrop(maxId: Long, beforeMs: Long): List<Pair<Long, String>> {
-        val out = ArrayList<Pair<Long, String>>()
-        db.query(TABLE_VOICE, arrayOf("id", "audio"), "audio IS NOT NULL AND (id <= ? OR ts < ?)",
-            arrayOf(maxId.toString(), beforeMs.toString()), null, null, "id ASC").use { c ->
-            while (c.moveToNext()) out.add(c.getLong(0) to c.getString(1))
+    /** 보관 오디오가 있는 음성 행: (id, 녹음 시각, 파일명). */
+    fun voiceWithAudio(): List<Triple<Long, Long, String>> {
+        val out = ArrayList<Triple<Long, Long, String>>()
+        db.query(TABLE_VOICE, arrayOf("id", "ts", "audio"), "audio IS NOT NULL", null, null, null, "id ASC").use { c ->
+            while (c.moveToNext()) out.add(Triple(c.getLong(0), c.getLong(1), c.getString(2)))
+        }
+        return out
+    }
+
+    /** [fromMs] 이후에 끝나는 대화 전부(보관 오디오를 지울지 정할 때). */
+    fun conversationsSince(fromMs: Long): List<Conversation> {
+        val out = ArrayList<Conversation>()
+        db.query(TABLE_CONV, arrayOf("id", "start_ms", "end_ms", "participants", "source", "status", "context"),
+            "end_ms >= ?", arrayOf(fromMs.toString()), null, null, "start_ms ASC").use { c ->
+            while (c.moveToNext()) {
+                out.add(Conversation(c.getLong(0), c.getLong(1), c.getLong(2), c.getString(3), c.getString(4), c.getString(5), c.getString(6)))
+            }
         }
         return out
     }

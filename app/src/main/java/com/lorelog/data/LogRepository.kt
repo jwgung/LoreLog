@@ -2,6 +2,7 @@ package com.lorelog.data
 
 import android.content.Context
 import com.lorelog.audio.VoiceAudio
+import com.lorelog.audio.VoiceRetention
 import com.lorelog.net.EndpointConfig
 import com.lorelog.net.HttpSink
 import kotlinx.coroutines.CoroutineScope
@@ -31,6 +32,8 @@ object LogRepository {
     private const val CONV_GAP_MS = 5 * 60 * 1000L
 
     private lateinit var store: LogStore
+    /** 앱 컨텍스트. 대화에 답한 뒤 그 음성의 보관 오디오를 지울 때 쓴다. */
+    private lateinit var app: Context
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _voiceSegments = MutableStateFlow<List<VoiceSegment>>(emptyList())
@@ -95,7 +98,8 @@ object LogRepository {
     val status: StateFlow<String> = _status.asStateFlow()
 
     fun init(context: Context) {
-        store = LogStore(context.applicationContext, DbKey.get(context))
+        app = context.applicationContext
+        store = LogStore(app, DbKey.get(context))
         scope.launch {
             _voiceSegments.value = store.recentVoice(KEEP)
             _appEvents.value = store.recentApp(KEEP)
@@ -125,20 +129,21 @@ object LogRepository {
     fun setPendingVoice(list: List<PendingAudio>) { _pendingVoice.value = list }
 
     /**
-     * 보관 오디오 정리. (1) 내보낸 음성(폴더·HTTP 커서 중 큰 쪽 이하 id)과 (2) 7일 넘은 음성의 오디오 파일을
-     * 지우고 행의 참조를 비운다. 텍스트 행은 그대로. 지운 파일 수 반환.
+     * 보관 오디오 정리([VoiceRetention]): 그 음성이 든 대화가 답을 받았거나 7일이 넘은 오디오 파일을 지우고 행의
+     * 참조를 비운다. 서랍으로 보냈는지는 보지 않는다(대화 확인 때 들어 보도록). 텍스트 행은 그대로. 지운 파일 수 반환.
      */
     suspend fun pruneVoiceAudio(context: Context): Int = withContext(Dispatchers.IO) {
         if (!::store.isInitialized) return@withContext 0
-        val voiceTable = store.tables().first()
-        val exportedId = maxOf(
-            context.getSharedPreferences("export_state", Context.MODE_PRIVATE).getLong("last_$voiceTable", 0L),
-            context.getSharedPreferences("http_state", Context.MODE_PRIVATE).getLong("last_$voiceTable", 0L),
-        )
-        val cutoff = System.currentTimeMillis() - VoiceAudio.RETENTION_MS
-        val rows = store.voiceAudioToDrop(exportedId, cutoff)
+        val now = System.currentTimeMillis()
+        val kept = store.voiceWithAudio()
+        val drop = VoiceRetention.toDrop(
+            kept.map { it.first to it.second },
+            store.conversationsSince(now - VoiceAudio.RETENTION_MS),
+            now,
+        ).toSet()
+        val rows = kept.filter { it.first in drop }
         var deleted = 0
-        rows.forEach { (_, name) -> if (VoiceAudio.file(context, name).delete()) deleted++ }
+        rows.forEach { if (VoiceAudio.file(context, it.third).delete()) deleted++ }
         store.clearVoiceAudio(rows.map { it.first })
         VoiceAudio.deleteUnreferenced(context, store.referencedVoiceAudio())
         if (rows.isNotEmpty()) _voiceSegments.value = store.recentVoice(KEEP)
@@ -375,6 +380,7 @@ object LogRepository {
         scope.launch {
             store.tagConversation(id, participants)
             _conversations.value = store.recentConversation(KEEP)
+            pruneVoiceAudio(app) // 답했으니 이 대화를 위해 남겨 둔 오디오는 지운다
         }
     }
 
@@ -383,6 +389,7 @@ object LogRepository {
         scope.launch {
             store.skipConversation(id)
             _conversations.value = store.recentConversation(KEEP)
+            pruneVoiceAudio(app) // 답했으니 이 대화를 위해 남겨 둔 오디오는 지운다
         }
     }
 
@@ -391,6 +398,7 @@ object LogRepository {
         scope.launch {
             store.ambientConversation(id)
             _conversations.value = store.recentConversation(KEEP)
+            pruneVoiceAudio(app) // 답했으니 이 대화를 위해 남겨 둔 오디오는 지운다
         }
     }
 
