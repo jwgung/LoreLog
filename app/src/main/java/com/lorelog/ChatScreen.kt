@@ -95,7 +95,7 @@ private sealed class Msg {
  * 틀린 문장을 눌러 고친다. 보내면 저장되고 저장 버튼은 없다. 가만히 두면 정리는 맞는 것으로 본다.
  */
 @Composable
-internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: () -> Unit, onSchedule: () -> Unit) {
+internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: () -> Unit, onSchedule: () -> Unit, onConnect: () -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val running by LoggerService.isRunning.collectAsStateWithLifecycle()
@@ -150,7 +150,7 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
     fun startListening() {
         notice = ""
         if (!Dictation.available(context)) {
-            notice = "말로 남기려면 받아 적을 서랍이 필요해요. 서랍 → 수집·연동 설정 → 서랍 연결에서 주소를 넣어 주세요. 말은 서랍 밖으로 나가지 않아요."
+            notice = "말로 남기려면 받아 적을 서랍이 필요해요. 톱니바퀴(수집·연동 설정) → 서랍 연결에서 주소를 넣어 주세요. 말은 서랍 밖으로 나가지 않아요."
             return
         }
         scope.launch {
@@ -223,7 +223,7 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
             Column {
                 Text("오늘", color = Text0, fontSize = 18.sp)
                 Text(
-                    if (running) "● 기록 중" else "○ 멈춤",
+                    if (running) "● 기록 중" else "○ 멈춤 · 눌러서 기록 시작",
                     color = Sub, fontSize = 12.sp,
                     modifier = Modifier.clickable { onCollect() }.padding(vertical = 6.dp),
                 )
@@ -254,6 +254,14 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
             when (val d = draft) {
                 null -> {}
                 DiaryClient.Draft.Generating -> AssistantBubble("오늘 하루를 정리하고 있어요…")
+                // 처음 설치한 상태: 오류가 아니라 연결 안내를 보여준다
+                DiaryClient.Draft.NotConnected -> {
+                    AssistantBubble(
+                        "아직 서랍과 연결되지 않았어요. 기록은 이 기기에 쌓아 두고, 서랍에 연결되면 오늘 하루를 정리해 드릴게요. " +
+                            "데스크톱 앱의 '처음 설정' ④에서 연결 코드를 복사해 오세요.",
+                    )
+                    Button(onClick = onConnect) { Text("서랍 연결하기") }
+                }
                 is DiaryClient.Draft.Error -> {
                     AssistantBubble(d.message)
                     OutlinedButton(onClick = { reload++ }) { Text("다시 시도", color = Sub) }
