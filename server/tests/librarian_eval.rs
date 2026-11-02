@@ -134,7 +134,7 @@ fn a_question_about_several_matters_is_found_only_when_all_of_them_are_and_at_th
 #[test]
 fn records_that_disagree_are_found_only_when_each_record_is_shown_not_only_its_thread() {
     let (_d, p, lib) = setup();
-    // a1 and a2 are one thread (the librarian shows one mail of it); b1 and b2 are two matters
+    // a1 and a2 are one matter (a thread) (the librarian shows one mail of it); b1 and b2 are two matters
     let cs = cases(
         &p,
         "[[case]]\nkind = \"conflict\"\nq = \"포트 포워딩\"\nrecords = [\"a1.md@x\", \"a2.md@x\"]\n\n[[case]]\nkind = \"conflict\"\nq = \"영희\"\nrecords = [\"b1.md@x\", \"B2.md@x\"]\n",

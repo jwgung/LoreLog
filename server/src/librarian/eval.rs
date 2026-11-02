@@ -14,7 +14,7 @@
 //!                                          `items` (words of a line: a title) is in the section, at the line of the last
 //!                                          (the model only; the user's words name no period)
 //!   conflict   "기록끼리 다른 건"          records that say different things (#92): found when every one of them is shown
-//!                                          (a hit's own mail, not just its thread: a thread is one hit), at the rank of the last
+//!                                          (a hit's own mail, not just its matter: a matter is one hit), at the rank of the last
 //!   pending    (the same, before #61)       not scored: kept to see what is asked
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -196,8 +196,8 @@ fn rank_all(lib: &Librarian, hits: &[serde_json::Value], targets: &HashSet<Strin
     Some(last)
 }
 
-/// Where every record is shown: the rank of the last of them, or None when one is not a hit's own mail. A thread is
-/// one hit and shows one of its mails, so a record folded behind another of its thread is not shown (#92).
+/// Where every record is shown: the rank of the last of them, or None when one is not a hit's own mail. A matter (a thread,
+/// or mails joined to it) is one hit and shows one of its mails, so a record folded behind another is not shown (#92).
 fn shown_all(lib: &Librarian, hits: &[serde_json::Value], records: &[String]) -> Option<usize> {
     let mut last = 0;
     for r in records {
