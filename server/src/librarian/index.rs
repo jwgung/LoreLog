@@ -1009,7 +1009,7 @@ impl Librarian {
     }
 
     /// [`Self::hit`], its `others` kept to what the search that found it kept (`bound`).
-    fn hit_within(&self, n: i64, case: Option<&str>, q: &str, bound: Bound) -> anyhow::Result<Value> {
+    pub(crate) fn hit_within(&self, n: i64, case: Option<&str>, q: &str, bound: Bound) -> anyhow::Result<Value> {
         let (source, kind, day, mut title, text, mut file, mid): (
             String,
             String,

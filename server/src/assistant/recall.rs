@@ -102,7 +102,7 @@ fn others(h: &Value) -> String {
         let s = |k: &str| o.get(k).map(|v| super::util::pystr(Some(v))).unwrap_or_default();
         let body: String = one(s("snippet")).chars().take(MAX_SNIPPET).collect();
         let title: String = one(s("title")).chars().take(MAX_OTHER_TITLE).collect();
-        format!("\n  ~ 같은 건의 다른 기록 {} {title}: {body}", s("day"))
+        format!("\n  ~ 같은 건의 다른 기록 {} {title}: {body}", one(s("day")))
     };
     let mut out: String = all.map(line).collect();
     if let Some(more) = h.get("others_more").and_then(Value::as_u64).filter(|m| *m > 0) {

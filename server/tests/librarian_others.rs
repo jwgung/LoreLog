@@ -188,3 +188,37 @@ fn a_record_whose_copy_is_shown_counts_as_shown() {
     let out = eval::run(&mut lib, None, &p.vault, &cs, 8).unwrap();
     assert_eq!(eval::summary(&out)[&Kind::Conflict].raw, (1, 1), "the copy says what its twin says");
 }
+
+#[test]
+fn a_record_left_out_of_the_others_is_not_shown() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = Paths::under(dir.path());
+    let long = "가".repeat(100);
+    for i in 0..6 {
+        let refs = if i == 0 { "[]".to_string() } else { format!("[<t{}.md@x>]", i - 1) };
+        mail(
+            &p,
+            &format!("t{i}.md"),
+            "일정 조율",
+            &format!("일정 조율 {i} {long}"),
+            &format!("2026-04-0{}", i + 1),
+            &refs,
+        );
+    }
+    let mut lib = open(&p);
+    let hits = lib.search("일정 조율", 8, None).unwrap();
+    let shown = refs_of(&hits[0]);
+    assert_eq!(shown.len(), 4);
+    let kept = shown[0].rsplit('/').next().unwrap().to_string();
+    let left_out = (0..6).map(|i| format!("t{i}.md")).find(|f| !shown.iter().any(|r| r.ends_with(f))).unwrap();
+    let f = p.data.join("c.toml");
+    fs::create_dir_all(&p.data).unwrap();
+    fs::write(
+        &f,
+        format!("[[case]]\nkind = \"conflict\"\nq = \"일정 조율\"\nrecords = [\"{left_out}@x\", \"{kept}@x\"]\n"),
+    )
+    .unwrap();
+    let cs = eval::load(&f).unwrap();
+    let out = eval::run(&mut lib, None, &p.vault, &cs, 8).unwrap();
+    assert!(out[0].raw_rank.is_none(), "a mail beyond the others is not shown");
+}
