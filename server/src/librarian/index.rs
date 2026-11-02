@@ -988,9 +988,9 @@ impl Librarian {
         Ok(out)
     }
 
-    /// One hit as the assistant gets it: `{source, kind, day, title, snippet, ref, count, first, last, latest, others}` (`others`: the matter's
-    /// other mails, up to [`MAX_OTHERS`], when it has any; `latest`:
-    /// the title of the matter's last record, when it has more than one). A file that came with a mail is shown as that
+    /// One hit as the assistant gets it: `{source, kind, day, title, snippet, ref, count, first, last, latest,
+    /// others}` (`latest`: the title of the matter's last record, when it has more than one; `others`: the matter's
+    /// other mails, up to [`MAX_OTHERS`], when it has any). A file that came with a mail is shown as that
     /// mail's (its title and where it is), the file named: what the user knows is the mail.
     pub(crate) fn hit(&self, n: i64, case: Option<&str>, q: &str) -> anyhow::Result<Value> {
         let (source, kind, day, mut title, text, mut file, mid): (
