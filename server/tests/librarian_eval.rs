@@ -131,6 +131,30 @@ fn a_question_about_several_matters_is_found_only_when_all_of_them_are_and_at_th
     assert!(eval::load(&f).unwrap_err().to_string().contains("threads"));
 }
 
+#[test]
+fn records_that_disagree_are_found_only_when_each_record_is_shown_not_only_its_thread() {
+    let (_d, p, lib) = setup();
+    // a1 and a2 are one matter (a thread) (the librarian shows one mail of it); b1 and b2 are two matters
+    let cs = cases(
+        &p,
+        "[[case]]\nkind = \"conflict\"\nq = \"포트 포워딩\"\nrecords = [\"a1.md@x\", \"a2.md@x\"]\n\n[[case]]\nkind = \"conflict\"\nq = \"영희\"\nrecords = [\"b1.md@x\", \"B2.md@x\"]\n",
+    );
+    let mut lib = lib;
+    let out = eval::run(&mut lib, None, &p.vault, &cs, 8).unwrap();
+    assert_eq!(out[0].raw_rank, None, "one mail of the thread is shown, the other is folded away: a miss");
+    assert_eq!(out[1].raw_rank, Some(2), "both shown: counted at the rank of the later one");
+    assert_eq!(eval::summary(&out)[&Kind::Conflict].raw, (1, 2));
+    let unknown = cases(&p, "[[case]]\nkind = \"conflict\"\nq = \"영희\"\nrecords = [\"b1.md@x\", \"nope@x\"]\n");
+    let err = eval::run(&mut lib, None, &p.vault, &unknown, 8).unwrap_err().to_string();
+    assert!(
+        err.contains("not in the index") && !err.contains("nope"),
+        "a broken case is an error, naming no id: {err}"
+    );
+    let f = p.data.join("bad.toml");
+    fs::write(&f, "[[case]]\nkind = \"conflict\"\nq = \"뭐지\"\nrecords = [\"a1.md@x\"]\n").unwrap();
+    assert!(eval::load(&f).unwrap_err().to_string().contains("records"));
+}
+
 /// Names the period of a question about what hangs in one (#61).
 struct PeriodPicker;
 impl Model for PeriodPicker {

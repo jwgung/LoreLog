@@ -13,6 +13,8 @@
 //!   period     "이번 달에 뭐가 걸려 있지"   what hangs in a period (#61), asked on a fixed `day`: found when every one of the
 //!                                          `items` (words of a line: a title) is in the section, at the line of the last
 //!                                          (the model only; the user's words name no period)
+//!   conflict   "기록끼리 다른 건"          records that say different things (#92): found when every one of them is shown
+//!                                          (a hit's own mail, not just its matter: a matter is one hit), at the rank of the last
 //!   pending    (the same, before #61)       not scored: kept to see what is asked
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -35,6 +37,8 @@ pub enum Kind {
     Graph,
     /// what hangs in a period, asked on a fixed day (#61)
     Period,
+    /// records that disagree: every one must be shown (#92)
+    Conflict,
     Pending,
 }
 
@@ -46,6 +50,7 @@ impl Kind {
             Kind::Precedent => "전에 어떻게 했지",
             Kind::Graph => "여러 건을 따라가는 질문",
             Kind::Period => "이번 달에 뭐가 걸려 있지",
+            Kind::Conflict => "기록끼리 다른 건",
             Kind::Pending => "이번 달에 뭐가 걸려 있지 (채점 안 함)",
         }
     }
@@ -62,6 +67,8 @@ pub struct Case {
     pub person: Option<String>,
     /// graph: the threads of every matter it is about
     pub threads: Option<Vec<String>>,
+    /// conflict: the mails that disagree (their message ids, as `mail_id`), two or more
+    pub records: Option<Vec<String>>,
     /// period: the day it is asked on (`YYYY-MM-DD`)
     pub day: Option<String>,
     /// period: what its section must hold, a title (or words of its line) each
@@ -88,6 +95,7 @@ pub fn load(path: &Path) -> anyhow::Result<Vec<Case>> {
             Kind::Status | Kind::Precedent if c.thread.is_none() => Some("thread"),
             Kind::Person if c.person.is_none() => Some("person"),
             Kind::Graph if c.threads.as_ref().is_none_or(|t| t.is_empty()) => Some("threads"),
+            Kind::Conflict if c.records.as_ref().is_none_or(|r| r.len() < 2) => Some("records"),
             Kind::Period
                 if c.day.as_deref().is_none_or(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").is_err()) =>
             {
@@ -188,6 +196,17 @@ fn rank_all(lib: &Librarian, hits: &[serde_json::Value], targets: &HashSet<Strin
     Some(last)
 }
 
+/// Where every record is shown: the rank of the last of them, or None when one is not a hit's own mail. A matter (a thread,
+/// or mails joined to it) is one hit and shows one of its mails, so a record folded behind another is not shown (#92).
+fn shown_all(lib: &Librarian, hits: &[serde_json::Value], records: &[String]) -> Option<usize> {
+    let mut last = 0;
+    for r in records {
+        let file = lib.file_of_mail(r)?;
+        last = last.max(hits.iter().position(|h| h["ref"].as_str() == Some(file.as_str()))? + 1);
+    }
+    Some(last)
+}
+
 /// The words the model picked as shown: `@person`, `#organization`, `^thing`, `~period`, then the words.
 fn shown(p: &recall::Picked) -> Vec<String> {
     p.people
@@ -219,7 +238,11 @@ pub fn run(
     k: usize,
 ) -> anyhow::Result<Vec<Result1>> {
     let mut out = Vec::new();
-    for c in cases {
+    for (i, c) in cases.iter().enumerate() {
+        // a record the index does not hold is a broken case, not a miss: it would pass for "not shown"
+        if c.kind == Kind::Conflict && c.records.iter().flatten().any(|r| lib.file_of_mail(r).is_none()) {
+            anyhow::bail!("case {} (Conflict): a record is not in the index", i + 1);
+        }
         let addr = c.person.as_ref().map(|a| a.trim().to_lowercase());
         let targets: HashSet<String> = match (c.kind, &c.thread, &addr) {
             (Kind::Person, _, Some(a)) => person_threads(lib, vault, a),
@@ -231,6 +254,7 @@ pub fn run(
         let score = |lib: &Librarian, hits: &[serde_json::Value]| match c.kind {
             Kind::Pending | Kind::Period => None,
             Kind::Graph => rank_all(lib, hits, &targets),
+            Kind::Conflict => shown_all(lib, hits, c.records.as_deref().unwrap_or(&[])),
             _ => rank(lib, hits, &targets),
         };
         let raw_rank = score(lib, &hits);

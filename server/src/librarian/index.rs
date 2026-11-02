@@ -1226,6 +1226,16 @@ impl Librarian {
             .collect()
     }
 
+    /// The file of the mail with this message id (any case, with or without `<>`); None when no such mail is indexed.
+    pub fn file_of_mail(&self, mid: &str) -> Option<String> {
+        let mid = mid.trim().trim_matches(['<', '>']).to_lowercase();
+        self.db
+            .query_row("select file from docs where mid = ? and source = 'mail' order by n limit 1", [mid], |r| {
+                r.get(0)
+            })
+            .ok()
+    }
+
     /// The thread an indexed file belongs to (a mail's `mail:<id>`); None for a file not indexed or not in a thread.
     pub fn thread_of(&self, file: &str) -> Option<String> {
         self.db
