@@ -134,16 +134,16 @@ fn a_question_about_several_matters_is_found_only_when_all_of_them_are_and_at_th
 #[test]
 fn records_that_disagree_are_found_only_when_each_record_is_shown_not_only_its_thread() {
     let (_d, p, lib) = setup();
-    // a1 and a2 are one matter (a thread) (the librarian shows one mail of it); b1 and b2 are two matters
+    // a1 and a2 are one matter (a thread) (one mail is the hit, the other its `others`); b1 and b2 are two matters
     let cs = cases(
         &p,
         "[[case]]\nkind = \"conflict\"\nq = \"포트 포워딩\"\nrecords = [\"a1.md@x\", \"a2.md@x\"]\n\n[[case]]\nkind = \"conflict\"\nq = \"영희\"\nrecords = [\"b1.md@x\", \"B2.md@x\"]\n",
     );
     let mut lib = lib;
     let out = eval::run(&mut lib, None, &p.vault, &cs, 8).unwrap();
-    assert_eq!(out[0].raw_rank, None, "one mail of the thread is shown, the other is folded away: a miss");
+    assert_eq!(out[0].raw_rank, Some(1), "the other mail of the thread comes with the hit in its `others`: shown");
     assert_eq!(out[1].raw_rank, Some(2), "both shown: counted at the rank of the later one");
-    assert_eq!(eval::summary(&out)[&Kind::Conflict].raw, (1, 2));
+    assert_eq!(eval::summary(&out)[&Kind::Conflict].raw, (2, 2));
     let unknown = cases(&p, "[[case]]\nkind = \"conflict\"\nq = \"영희\"\nrecords = [\"b1.md@x\", \"nope@x\"]\n");
     let err = eval::run(&mut lib, None, &p.vault, &unknown, 8).unwrap_err().to_string();
     assert!(

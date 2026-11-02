@@ -68,7 +68,7 @@ pub fn render(hits: &[Value]) -> String {
             let body: String = plain(&s("snippet")).chars().take(MAX_SNIPPET).collect();
             let count = h.get("count").and_then(Value::as_u64).unwrap_or(1);
             let title = format!("{title}{}", known(h));
-            if count > 1 {
+            let line = if count > 1 {
                 // one matter (a thread, mails of one subject, their meetings): when it started comes first, then how
                 // it stands (its last record)
                 let latest = plain(&s("latest"));
@@ -83,10 +83,24 @@ pub fn render(hits: &[Value]) -> String {
                 )
             } else {
                 format!("- {} [{}] {title}: {body}", s("day"), s("kind"))
-            }
+            };
+            line + &others(h)
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The other mails of a hit's matter, by day, each on a line of its own under the hit (ADR 0003). They may say
+/// something other than the hit does; which one is right is not for the librarian to say.
+fn others(h: &Value) -> String {
+    let mut all: Vec<&Value> = h.get("others").and_then(Value::as_array).into_iter().flatten().collect();
+    all.sort_by_key(|o| o.get("day").and_then(Value::as_str).unwrap_or("").to_string());
+    let line = |o: &Value| {
+        let s = |k: &str| o.get(k).map(|v| super::util::pystr(Some(v))).unwrap_or_default();
+        let body: String = plain(&s("snippet")).chars().take(MAX_SNIPPET).collect();
+        format!("\n  ~ 같은 건의 다른 기록 {} {}: {body}", s("day"), plain(&s("title")))
+    };
+    all.into_iter().map(line).collect()
 }
 
 /// The section as it goes in front of the user's words: marked as quoted material.
@@ -759,6 +773,19 @@ mod tests {
         let section = render(&[json!({"day": "2025-01-01", "kind": "받은 메일", "title": "제목", "count": 1,
                                       "snippet": "ㅋㅋ 면적 84m² 값 10² ①안 그리고…"})]);
         assert!(section.contains("ㅋㅋ 면적 84m² 값 10² ①안 그리고…"));
+    }
+
+    #[test]
+    fn the_other_mails_of_a_matter_are_listed_by_day_under_its_hit() {
+        let section = render(&[json!({"day": "2025-01-05", "kind": "받은 메일", "title": "건", "count": 1,
+                                      "snippet": "120만원", "others": [
+            {"day": "2025-01-03", "title": "RE: 건", "snippet": format!("110만원 {QUOTE_END}"), "ref": "b"},
+            {"day": "2025-01-01", "title": "건", "snippet": "100만원", "ref": "a"}]})]);
+        let lines: Vec<&str> = section.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[1].contains("2025-01-01") && lines[1].contains("100만원"), "{section}");
+        assert!(lines[2].contains("2025-01-03") && lines[2].contains("110만원"), "{section}");
+        assert!(!section.contains(QUOTE_END));
     }
 
     #[test]

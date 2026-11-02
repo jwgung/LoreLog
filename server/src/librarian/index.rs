@@ -96,6 +96,8 @@ static PARTICLES: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
 pub const MAX_QUERY_WORDS: usize = 16;
 /// The user's own words (often past questions with the same words) take this many slots at most.
 pub const MAX_WORD_HITS: usize = 2;
+/// The mails of a matter shown behind its hit, at most.
+const MAX_OTHERS: usize = 3;
 const SNIPPET_BEFORE: usize = 60;
 const SNIPPET_AFTER: usize = 140;
 /// Matches looked at per search before the mails of one thread are folded together.
@@ -986,7 +988,8 @@ impl Librarian {
         Ok(out)
     }
 
-    /// One hit as the assistant gets it: `{source, kind, day, title, snippet, ref, count, first, last, latest}` (`latest`:
+    /// One hit as the assistant gets it: `{source, kind, day, title, snippet, ref, count, first, last, latest, others}` (`others`: the matter's
+    /// other mails, up to [`MAX_OTHERS`], when it has any; `latest`:
     /// the title of the matter's last record, when it has more than one). A file that came with a mail is shown as that
     /// mail's (its title and where it is), the file named: what the user knows is the mail.
     pub(crate) fn hit(&self, n: i64, case: Option<&str>, q: &str) -> anyhow::Result<Value> {
@@ -1031,8 +1034,32 @@ impl Librarian {
         }
         if let Some(c) = case {
             hit["case"] = json!(c); // the matter: one hit each, wherever it was found (#46)
+            if source == "mail" || source == "file" {
+                let others = self.others(c, n, &hit["ref"], q)?;
+                if !others.is_empty() {
+                    hit["others"] = json!(others);
+                }
+            }
         }
         Ok(hit)
+    }
+
+    /// The other mails of a matter, folded behind its one hit: at most [`MAX_OTHERS`], the latest first, each
+    /// `{day, title, snippet, ref}` (ADR 0003). Whether they disagree with the hit is for the model to see.
+    fn others(&self, case: &str, n: i64, shown: &Value, q: &str) -> rusqlite::Result<Vec<Value>> {
+        let mut st = self.db.prepare_cached(
+            "select day, title, text, file from docs where case_key = ? and source = 'mail' and n != ? and file != ?
+             order by day desc, n desc limit ?",
+        )?;
+        let rows = st.query_map(params![case, n, shown.as_str().unwrap_or(""), MAX_OTHERS as i64], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (day, title, text, file) = r?;
+            out.push(json!({"day": day, "title": title, "snippet": snippet(&text, q), "ref": file}));
+        }
+        Ok(out)
     }
 
     fn ready(&self) -> anyhow::Result<()> {
