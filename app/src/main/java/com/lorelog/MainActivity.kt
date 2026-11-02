@@ -73,6 +73,7 @@ import java.io.File
 import com.lorelog.collect.CollectorPrefs
 import com.lorelog.data.TimelineItem
 import com.lorelog.net.ConnectCode
+import com.lorelog.net.ConnectionCheck
 import com.lorelog.net.EndpointConfig
 import com.lorelog.net.UpdateChecker
 import com.lorelog.work.PushPrefs
@@ -120,7 +121,7 @@ class MainActivity : ComponentActivity() {
                         screen = if (screen == AppScreen.DRAWER || screen == AppScreen.TODOS || screen == AppScreen.SCHEDULE) AppScreen.CHAT else AppScreen.DRAWER
                     }
                     when (screen) {
-                        AppScreen.CHAT -> ChatScreen(onDrawer = { screen = AppScreen.DRAWER }, onCollect = { screen = AppScreen.COLLECT }, onTodos = { screen = AppScreen.TODOS }, onSchedule = { screen = AppScreen.SCHEDULE })
+                        AppScreen.CHAT -> ChatScreen(onDrawer = { screen = AppScreen.DRAWER }, onCollect = { screen = AppScreen.COLLECT }, onTodos = { screen = AppScreen.TODOS }, onSchedule = { screen = AppScreen.SCHEDULE }, onConnect = { screen = AppScreen.SERVER })
                         AppScreen.TODOS -> TodosScreen(onBack = { screen = AppScreen.CHAT })
                         // 일정을 누르면 그 일정·건 질문을 입력란에 넣고 대화로 간다(비서 알림의 EXTRA_ASK 와 같은 길)
                         AppScreen.SCHEDULE -> ScheduleScreen(onBack = { screen = AppScreen.CHAT }, onAsk = { q ->
@@ -222,6 +223,12 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
     }
     var showToken by remember { mutableStateOf(false) }
     var connectCode by remember { mutableStateOf("") }
+    // 서랍 연결 화면에서 저장한 뒤 결과(저장됨 → 연결 확인 결과)를 그 자리에 보여준다
+    var serverNote by remember { mutableStateOf("") }
+    fun savedThenCheck(saved: String) {
+        serverNote = "$saved 서랍에 닿는지 확인하는 중…"
+        coroutineScope.launch { serverNote = "$saved " + ConnectionCheck.run(context).message }
+    }
     var wifiOnly by remember { mutableStateOf(PushPrefs.wifiOnly(context)) }
     var update by remember { mutableStateOf<UpdateChecker.Result?>(null) }
     var checking by remember { mutableStateOf(false) }
@@ -287,7 +294,7 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
         }
         if (page == null) {
         Text(
-            if (running) "기록 중 — 이 기기에만 저장됩니다" else "멈춤",
+            if (running) "기록 중 — 이 기기에만 저장됩니다" else "멈춤 — 아래 '기록 시작'을 눌러야 기록이 쌓입니다",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -589,9 +596,9 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
                     endpointToken = r.token
                     EndpointConfig.set(context, r.url, r.token)
                     connectCode = ""
-                    LogRepository.setStatus("연결 코드로 서랍 주소와 토큰을 넣고 저장했습니다")
+                    savedThenCheck("연결 코드로 주소와 토큰을 저장했어요.")
                 }
-                is ConnectCode.Parsed.Bad -> LogRepository.setStatus(r.reason)
+                is ConnectCode.Parsed.Bad -> serverNote = "⚠ " + r.reason
             }
         }) { Text("코드로 채우고 저장") }
         Text("또는 직접 넣기", style = MaterialTheme.typography.labelMedium)
@@ -621,24 +628,32 @@ private fun HomeScreen(onBack: () -> Unit, initialPage: String? = null) {
             OutlinedButton(onClick = {
                 val problem = ConnectCode.manualProblem(endpointUrl)
                 if (problem != null) {
-                    LogRepository.setStatus(problem)
+                    serverNote = "⚠ $problem"
                 } else {
                     EndpointConfig.set(context, endpointUrl, endpointToken)
-                    LogRepository.setStatus("엔드포인트 저장됨")
+                    savedThenCheck("저장했어요.")
                 }
             }) { Text("저장") }
             OutlinedButton(onClick = {
                 coroutineScope.launch {
                     val n = LogRepository.pushToHttp(context, userAsked = true)
-                    LogRepository.setStatus(
-                        when (n) {
-                            -1 -> "엔드포인트 미설정"
-                            -2 -> "전송 실패"
-                            else -> "전송됨: ${n}건"
-                        },
-                    )
+                    serverNote = when (n) {
+                        -1 -> "⚠ 서랍 주소가 없어요. 먼저 주소를 넣고 저장하세요."
+                        -2 -> when (val c = ConnectionCheck.run(context)) {
+                            ConnectionCheck.Result.Connected -> "⚠ 서랍에는 닿지만 보내기가 실패했어요. 잠시 뒤 다시 눌러 주세요."
+                            else -> "⚠ 보내지 못했어요. " + c.message.removePrefix("⚠ ")
+                        }
+                        else -> "✓ ${n}건을 서랍으로 보냈어요."
+                    }
                 }
             }) { Text("지금 전송") }
+        }
+        if (serverNote.isNotEmpty()) {
+            Text(
+                serverNote,
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (serverNote.startsWith("⚠")) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+            )
         }
         Row(
             modifier = Modifier.fillMaxWidth(),

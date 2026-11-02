@@ -13,6 +13,8 @@ object DiaryClient {
     sealed class Draft {
         data class Ready(val summary: List<String>, val question: String, val corrections: String, val reflection: String) : Draft()
         data object Generating : Draft()
+        /** 서랍 주소를 아직 넣지 않았다. 오류가 아니라 처음 상태이므로 연결 안내를 보여준다. */
+        data object NotConnected : Draft()
         data class Error(val message: String) : Draft()
     }
 
@@ -36,7 +38,7 @@ object DiaryClient {
         var conn: HttpURLConnection? = null
         try {
             conn = open(context, "/diary/$day" + if (refresh) "?refresh=1" else "", "GET")
-                ?: return@withContext Draft.Error("서랍 주소가 설정되지 않았습니다(설정 → 서랍 연결).")
+                ?: return@withContext Draft.NotConnected
             when (val code = conn.responseCode) {
                 200 -> {
                     val o = JSONObject(conn.inputStream.bufferedReader().readText())

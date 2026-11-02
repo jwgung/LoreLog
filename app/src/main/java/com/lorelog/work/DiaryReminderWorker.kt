@@ -72,7 +72,7 @@ class DiaryReminderWorker(context: Context, params: WorkerParameters) : Coroutin
             repeat(60) {
                 when (val d = DiaryClient.fetchDraft(context, day)) {
                     is DiaryClient.Draft.Ready -> return d
-                    is DiaryClient.Draft.Error -> return null
+                    is DiaryClient.Draft.Error, DiaryClient.Draft.NotConnected -> return null
                     DiaryClient.Draft.Generating -> delay(3_000)
                 }
             }
