@@ -240,11 +240,27 @@ pub struct Candidate {
     pub subject: String,
 }
 
-/// What a name found: the records with them, or the people to ask about.
+/// What a question found: the records, or what to ask about.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Named {
     Hits(Vec<Value>),
-    Ask(Vec<Candidate>),
+    Ask(Asked),
+}
+
+/// What to ask the user to choose among: people of one name, or matters (#93).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Asked {
+    People(Vec<Candidate>),
+    Matters(Vec<Matter>),
+}
+
+impl Asked {
+    fn render(&self) -> String {
+        match self {
+            Asked::People(c) => render_candidates(c),
+            Asked::Matters(m) => render_matters(m),
+        }
+    }
 }
 
 pub fn render_candidates(cands: &[Candidate]) -> String {
@@ -266,9 +282,93 @@ pub fn render_candidates(cands: &[Candidate]) -> String {
 
 /// The candidates of a section that asks back (None for any other section): the lines the user answers.
 pub fn asked_candidates(section: &str) -> Option<String> {
-    let mut lines = section.lines().skip_while(|l| *l != NAMESAKES);
+    let mut lines = section.lines().skip_while(|l| *l != NAMESAKES && *l != MATTERS);
     lines.next()?;
     Some(lines.take_while(|l| l.starts_with(CANDIDATE)).collect::<Vec<_>>().join("\n"))
+}
+
+// ---------- matters (#93, ADR 0004) ----------
+
+/// The first line of the section when the question is about one matter and the librarian found several to compare.
+pub const MATTERS: &str =
+    "- (물은 것에 맞는 건이 여럿이라 어느 건인지 모른다. 아래 후보 가운데 어느 건인지 한 번만 되묻는다)";
+/// The first line of the section when the turn before asked back and the user chose none: not asked again.
+pub const ASSUMED: &str = "- (한 번 되물었는데 사용자가 고르지 않았다. 다시 묻지 말고 가장 유력한 아래 기록으로 답하고, 그렇게 가정했다고 한 마디 밝힌다)";
+/// a second matter with at least this share of the first one's records: which one is meant is not known. The same rule
+/// as the namesakes' ([`NAMESAKE_SHARE`]); this value is a start, to be set by the eval (the questions that should be
+/// asked back, ADR 0004).
+pub const MATTER_SHARE: f64 = 0.2;
+
+/// A matter the user may have meant: what tells them apart.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Matter {
+    /// the librarian's key of the matter (`case:<n>`): the user's choice is read back by it
+    pub case: String,
+    pub title: String,
+    /// the day it started
+    pub first: String,
+    /// how it stands, when the graph knows (empty otherwise)
+    pub state: String,
+}
+
+pub fn render_matters(matters: &[Matter]) -> String {
+    let one = |s: &str| plain(s).split_whitespace().collect::<Vec<_>>().join(" ");
+    let lines = matters.iter().map(|m| {
+        let mut parts = vec![
+            format!("\"{}\"", one(&m.title).chars().take(80).collect::<String>()),
+            format!("{} 시작", one(&m.first)),
+        ];
+        if !m.state.is_empty() {
+            parts.push(format!("상태 {}", one(&m.state)));
+        }
+        format!("{CANDIDATE}{} <{}>", parts.join(" · "), one(&m.case))
+    });
+    std::iter::once(MATTERS.to_string()).chain(lines).collect::<Vec<_>>().join("\n")
+}
+
+/// The key of a matter written in place of one (`<case:12>`, `case:12`): the one the user chose.
+fn chosen_matter(said: &str) -> Option<String> {
+    let inner = said.trim().trim_start_matches('<').trim_end_matches('>').trim();
+    let n = inner.strip_prefix("case:")?;
+    (!n.is_empty() && n.len() <= 18 && n.bytes().all(|b| b.is_ascii_digit())).then(|| inner.to_string())
+}
+
+/// How a matter stands, in a word (the stage by the user's name for it, then the record's word: as [`known`]).
+fn state_label(hit: &Value) -> String {
+    let Some(st) = hit.get("state").filter(|v| v.is_object()) else { return String::new() };
+    let s = |k: &str| st.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
+    match s("group") {
+        g if g.is_empty() => s("label"),
+        g => format!("{g}({})", s("label")),
+    }
+}
+
+/// A matter as a candidate; how it stands asked of the graph when the hit does not say.
+fn as_matter(lib: &mut dyn Index, hit: &Value, day: &str) -> anyhow::Result<Matter> {
+    let s = |k: &str| hit.get(k).map(|v| super::util::pystr(Some(v))).unwrap_or_default();
+    let case = s("case");
+    let mut state = state_label(hit);
+    if state.is_empty()
+        && let Some(h) = lib.matter(&case, "", day)?
+    {
+        state = state_label(&h);
+    }
+    let first = if s("first").is_empty() { s("day") } else { s("first") };
+    Ok(Matter { case, title: s("title"), first, state })
+}
+
+/// The matters to ask about when the hits are several of comparable size (the most records first), None when one
+/// stands out or there is only one.
+fn several_matters(lib: &mut dyn Index, hits: &[Value], day: &str) -> anyhow::Result<Option<Vec<Matter>>> {
+    let mut seen = HashSet::new();
+    let mut ms: Vec<&Value> =
+        hits.iter().filter(|h| h.get("case").and_then(Value::as_str).is_some_and(|c| seen.insert(c))).collect();
+    let count = |h: &Value| h.get("count").and_then(Value::as_u64).unwrap_or(1) as f64;
+    ms.sort_by(|a, b| count(b).total_cmp(&count(a))); // stable: the librarian's order among the same size
+    if ms.len() < 2 || count(ms[1]) < count(ms[0]) * MATTER_SHARE {
+        return Ok(None);
+    }
+    ms.into_iter().take(MAX_CANDIDATES).map(|h| as_matter(lib, h, day)).collect::<anyhow::Result<_>>().map(Some)
 }
 
 /// An address written in place of a name (`<a@b.com>`, `김영희 <a@b.com>`, `tel:0101234`): the one the user chose.
@@ -329,8 +429,10 @@ pub const WORDS_SYSTEM: &str = r#"사용자의 말에서 지난 기록을 찾아
 - 처음 보는 낱말이라도 "~ 관련 건", "~랑 한 일", "~ 쪽 건", "~에서 온 거"처럼 지난 기록을 묻는 말에 붙어 있으면 회사나 제품의 이름으로 보고 search 를 true 로 한다(예: "누리온 관련 건 뭐 있었지?" → orgs 와 words 에 "누리온").
 - 기분이나 상태만 말하거나, 인사나 맞장구면 search 를 false 로 한다.
 - 정해진 기간에 걸려 있는 일(해야 할 일, 일정, 마감, 답할 것)을 모아 묻으면("이번 달에 뭐가 걸려 있지", "다음 주에 뭐 있어", "요즘 밀린 거 뭐야") search 를 true 로 하고 period 에 this_week, next_week, this_month, next_month, recent(요즘) 가운데 하나를 넣는다. 날짜는 계산하지 않는다. 그 기간 안에서 특정 사람·회사·일만 물으면 그 이름도 함께 넣는다. "요즘", "최근"이 붙어도 사람·회사와 있었던 일이나 지난 일이 어떻게 됐는지 묻는 말("요즘 OO 님이랑 뭐 있었지", "최근 OO 건 어떻게 됐어")에는 period 를 빈 문자열로 둔다. 걸려 있는 일·해야 할 일·일정을 묻지 않으면 period 는 빈 문자열이다.
-- [앞 대화]가 있으면 비서가 같은 이름의 사람 가운데 누구인지 되물은 것이다. 사용자의 답이 후보 하나를 가리키면(순서, 회사, 날짜, 제목으로) search 를 true 로 하고 그 후보의 <주소>를 꺾쇠까지 그대로 people 에 넣는다. words 에는 처음 물은 말의 주제 낱말을 다시 넣는다. 답이 후보를 가리키지 않으면 사용자의 답만 보고 고른다.
-JSON 으로만 답한다: {"search": true 또는 false, "people": ["이름", ...], "words": ["낱말", ...], "orgs": [], "things": [], "roles": [], "states": [], "absent": [], "open_requests": false, "period": ""}"#;
+- [앞 대화]가 있으면 비서가 같은 이름의 사람 가운데 누구인지, 또는 맞는 건 가운데 어느 건인지 되물은 것이다. 사용자의 답이 후보 하나를 가리키면(순서, 회사, 날짜, 제목으로) search 를 true 로 하고, 사람 후보면 그 후보의 <주소>를 꺾쇠까지 그대로 people 에, 건 후보면 그 후보의 <case:번호>를 꺾쇠까지 그대로 matter 에 넣는다. words 에는 처음 물은 말의 주제 낱말을 다시 넣는다. 답이 후보를 가리키지 않으면 처음 물은 말로 고른다.
+- 사용자가 특정한 한 건이 어떻게 됐는지, 언제였는지를 물으면("~ 건 어떻게 됐지", "그 견적 언제 보냈더라") one 을 true 로 한다. 여러 건이나 목록("~랑 하는 건들", "뭐 있었지"), 사람과 있었던 일 전체, 기간에 걸린 일을 물으면 false 다.
+- "그거", "그 건", "아까 그거"처럼 앞에서 말한 것을 가리키면 [최근 대화]에서 그것이 무엇인지 찾아 그 낱말을 고른다. [최근 대화]는 그럴 때만 쓰고, 다른 말에는 쓰지 않는다. [최근 대화]로도 무엇인지 모르면 unclear 를 true 로 한다.
+JSON 으로만 답한다: {"search": true 또는 false, "people": ["이름", ...], "words": ["낱말", ...], "orgs": [], "things": [], "roles": [], "states": [], "absent": [], "open_requests": false, "period": "", "one": false, "unclear": false, "matter": ""}"#;
 
 pub const LIMIT: usize = 8;
 pub const MAX_WORDS: usize = 10;
@@ -357,6 +459,12 @@ pub struct Picked {
     pub open_requests: bool,
     /// what hangs in a period is asked (#61): only its name; the days are counted from the day asked
     pub period: Option<super::period::Period>,
+    /// the question is about one matter (#93): several of comparable size are asked back
+    pub one: bool,
+    /// it points at something ("그거") that neither it nor the turns before name: the latest matters are asked back
+    pub unclear: bool,
+    /// the matter the user chose among the candidates of the turn before (`case:<n>`)
+    pub matter: Option<String>,
 }
 
 impl Picked {
@@ -390,8 +498,24 @@ pub fn search_words(model: &dyn crate::llm::Model, message: &str) -> Option<Vec<
 /// pick: the user's words. With no people, there is always a word (the message itself if the model gave none).
 /// `before`: the turn that asked back (the question, the reply and its candidates), when the message answers it.
 pub fn pick(model: &dyn crate::llm::Model, message: &str, before: Option<&str>) -> Option<Picked> {
+    pick_in(model, message, before, &[])
+}
+
+/// how many of the user's lines before are shown to the picker, for "그거" to be read by (#93)
+pub const RECENT_LINES: usize = 3;
+
+/// [`pick`], with the user's lines before this message (the last [`RECENT_LINES`]) for what "그거" points at.
+pub fn pick_in(
+    model: &dyn crate::llm::Model,
+    message: &str,
+    before: Option<&str>,
+    recent: &[String],
+) -> Option<Picked> {
+    let recent: Vec<String> =
+        recent[recent.len().saturating_sub(RECENT_LINES)..].iter().map(|l| format!("- {}", plain(l))).collect();
     let said = match before {
         Some(b) => format!("[앞 대화]\n{}\n\n[사용자의 답]\n{message}", plain(b)),
+        None if !recent.is_empty() => format!("[최근 대화]\n{}\n\n[사용자의 말]\n{message}", recent.join("\n")),
         None => message.to_string(),
     };
     let messages = [
@@ -418,6 +542,7 @@ pub fn pick(model: &dyn crate::llm::Model, message: &str, before: Option<&str>) 
             .unwrap_or_default()
     };
     let (people, words) = (list("people"), list("words"));
+    let yes = |k: &str| matches!(d.get(k), Some(Value::Bool(true))) || d.get(k).and_then(Value::as_str) == Some("true");
     let mut p = Picked {
         people,
         words,
@@ -426,9 +551,11 @@ pub fn pick(model: &dyn crate::llm::Model, message: &str, before: Option<&str>) 
         roles: list("roles"),
         states: list("states"),
         absent: list("absent"),
-        open_requests: matches!(d.get("open_requests"), Some(Value::Bool(true)))
-            || d.get("open_requests").and_then(Value::as_str) == Some("true"),
+        open_requests: yes("open_requests"),
         period: d.get("period").and_then(Value::as_str).and_then(super::period::Period::from_name),
+        one: yes("one"),
+        unclear: yes("unclear"),
+        matter: d.get("matter").and_then(Value::as_str).and_then(chosen_matter),
     };
     // "요즘 OO 님이랑 뭐 있었지", "요즘 지원사업 공고 뭐 있었지" ask about records, not what hangs: a small model
     // takes 요즘 for a period. "요즘 밀린 거" names nothing.
@@ -437,7 +564,7 @@ pub fn pick(model: &dyn crate::llm::Model, message: &str, before: Option<&str>) 
     {
         p.period = None;
     }
-    if p.words.is_empty() && p.people.is_empty() && p.graph().is_empty() && p.period.is_none() {
+    if p.words.is_empty() && p.people.is_empty() && p.graph().is_empty() && p.period.is_none() && !p.unclear {
         p.words = vec![message.to_string()];
     }
     Some(p)
@@ -454,6 +581,15 @@ pub trait Index {
     }
     /// The matters the graph finds for what was picked (#46), as hits; none when it asks nothing of the graph.
     fn with_graph(&mut self, _p: &Picked, _day: &str, _limit: usize) -> anyhow::Result<Vec<Value>> {
+        Ok(Vec::new())
+    }
+    /// One matter (`case:<n>`) as a hit, by its latest record up to `day`, with how it stands (#93); None when no
+    /// record of it is there.
+    fn matter(&mut self, _case: &str, _q: &str, _day: &str) -> anyhow::Result<Option<Value>> {
+        Ok(None)
+    }
+    /// The matters the user took part in with the latest records up to `day`, the latest first, up to `n` (#93).
+    fn recent_matters(&mut self, _day: &str, _n: usize) -> anyhow::Result<Vec<Value>> {
         Ok(Vec::new())
     }
     /// What hangs in these days, asked on `today` (#61).
@@ -516,6 +652,33 @@ fn merged(graph: Vec<Value>, words: Vec<Value>, limit: usize) -> Vec<Value> {
 /// Look up what was picked: by person when a name is someone in the records, else by the words (the names counted
 /// as words then, so "OO 건" still finds the records that name them).
 pub fn lookup(lib: &mut dyn Index, p: &Picked, limit: usize, day: &str, said: &[String]) -> anyhow::Result<Named> {
+    // the matter the user chose: answered at once
+    if let Some(case) = &p.matter
+        && let Some(hit) = lib.matter(case, &p.words.join(" "), day)?
+    {
+        return Ok(Named::Hits(vec![hit]));
+    }
+    // "그거" the turns before did not name: the latest matters are the candidates
+    if p.unclear {
+        let recent = lib.recent_matters(day, MAX_CANDIDATES)?;
+        if !recent.is_empty() {
+            let ms = recent.iter().map(|h| as_matter(lib, h, day)).collect::<anyhow::Result<_>>()?;
+            return Ok(Named::Ask(Asked::Matters(ms)));
+        }
+    }
+    let named = found(lib, p, limit, day, said)?;
+    // a question about one matter that finds several of comparable size: which one is asked back (#93)
+    if p.one
+        && let Named::Hits(h) = &named
+        && let Some(ms) = several_matters(lib, h, day)?
+    {
+        return Ok(Named::Ask(Asked::Matters(ms)));
+    }
+    Ok(named)
+}
+
+/// What the words, the names and the graph find.
+fn found(lib: &mut dyn Index, p: &Picked, limit: usize, day: &str, said: &[String]) -> anyhow::Result<Named> {
     // the graph, when the question asks it something (a graph not there yet, or broken, is no answer: the words are)
     // (a name taken for a person or a word may be an organization: the graph is asked whenever there is a name)
     let graph = if p.graph().is_empty() && p.people.is_empty() && p.words.is_empty() {
@@ -529,7 +692,7 @@ pub fn lookup(lib: &mut dyn Index, p: &Picked, limit: usize, day: &str, said: &[
         return Ok(match named {
             Named::Hits(h) => Named::Hits(merged(graph, h, limit)),
             Named::Ask(_) if !p.roles.is_empty() && !graph.is_empty() => Named::Hits(graph), // the role told who
-            Named::Ask(c) => Named::Ask(c),
+            ask => ask,
         });
     }
     let all: Vec<String> = p.people.iter().chain(&p.orgs).chain(&p.things).chain(&p.words).cloned().collect();
@@ -550,6 +713,43 @@ impl crate::librarian::Librarian {
 }
 
 impl Index for crate::librarian::Librarian {
+    fn matter(&mut self, case: &str, q: &str, day: &str) -> anyhow::Result<Option<Value>> {
+        use rusqlite::OptionalExtension;
+        let n: Option<i64> = self
+            .db
+            .query_row(
+                "select n from docs where case_key = ?1 and day <= ?2 and source != 'file' order by day desc, n desc limit 1",
+                [case, day],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(n) = n else { return Ok(None) };
+        let mut hit = self.hit(n, Some(case), q)?;
+        if let Some((state, earlier)) = self.states(case, day) {
+            hit["state"] = state;
+            if !earlier.is_empty() {
+                hit["earlier"] = Value::Array(earlier);
+            }
+        }
+        Ok(Some(hit))
+    }
+
+    fn recent_matters(&mut self, day: &str, n: usize) -> anyhow::Result<Vec<Value>> {
+        // the ones the user took part in: the newsletters of the day are not what "그거" is
+        let cases: Vec<String> = {
+            let mut st = self.db.prepare(
+                "select case_key from docs where case_key is not null and source != 'file' and day <= ?1
+                 group by case_key having max(involved) = 1 order by max(day) desc limit ?2",
+            )?;
+            st.query_map(rusqlite::params![day, n as i64], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+        };
+        let mut out = Vec::new();
+        for c in cases {
+            out.extend(Index::matter(self, &c, "", day)?);
+        }
+        Ok(out)
+    }
+
     fn hanging(&mut self, span: &super::period::Span, today: &str) -> anyhow::Result<super::period::Gathered> {
         crate::librarian::Librarian::hanging(self, span, today)
     }
@@ -625,7 +825,7 @@ impl Index for crate::librarian::Librarian {
                     subject: field("title"),
                 });
             }
-            return Ok(Some(Named::Ask(cands)));
+            return Ok(Some(Named::Ask(Asked::People(cands))));
         }
         let addrs: Vec<String> = whos.into_iter().flat_map(|w| w.addrs).collect();
         self.with_them(&addrs, q, day, limit).map(|h| Some(Named::Hits(h)))
@@ -658,7 +858,7 @@ fn asked(
     before: Option<&str>,
 ) -> (Option<Recalled>, Option<Vec<String>>, crate::librarian::asks::Found) {
     use crate::librarian::asks::Found;
-    let Some(picked) = pick(model, message, before) else { return (None, None, Found::NotSearched) };
+    let Some(picked) = pick_in(model, message, before, said) else { return (None, None, Found::NotSearched) };
     let words: Vec<String> = picked.people.iter().chain(&picked.words).cloned().collect();
     let mut notes = Vec::new();
     // a period's question is answered by what hangs in it, the others by what the words and the graph find
@@ -681,7 +881,19 @@ fn asked(
         if picked.period.is_some() {
             return period_section(lib.as_mut(), &picked, day).map(Got::Period);
         }
-        lookup(lib.as_mut(), &picked, LIMIT, day, &all).map(Got::Named)
+        let named = lookup(lib.as_mut(), &picked, LIMIT, day, &all)?;
+        // asked back once already (#93): the likeliest candidate is the answer, said to be assumed
+        if let (Named::Ask(asked), Some(_)) = (&named, before) {
+            let mut p = picked.clone();
+            (p.one, p.unclear) = (false, false);
+            match asked {
+                Asked::People(c) => p.people = c.iter().take(1).map(|c| format!("<{}>", c.addr)).collect(),
+                Asked::Matters(m) => p.matter = m.first().map(|m| m.case.clone()),
+            }
+            notes.insert(0, ASSUMED);
+            return lookup(lib.as_mut(), &p, LIMIT, day, &all).map(Got::Named);
+        }
+        Ok(Got::Named(named))
     })();
     match found {
         Ok(got) => {
@@ -695,10 +907,17 @@ fn asked(
                     sources(&hits),
                     Found::Hits(hits.iter().filter_map(|h| h["ref"].as_str().map(str::to_string)).collect()),
                 ),
-                Got::Named(Named::Ask(cands)) => (render_candidates(&cands), Vec::new(), Found::Asked),
+                Got::Named(Named::Ask(asked)) => (asked.render(), Vec::new(), Found::Asked),
             };
-            let section =
-                std::iter::once(body).chain(notes.iter().map(|n| n.to_string())).collect::<Vec<_>>().join("\n");
+            // what was assumed comes before the records it is about; the other notes after
+            let (head, tail): (Vec<&str>, Vec<&str>) = notes.iter().partition(|n| **n == ASSUMED);
+            let section = head
+                .into_iter()
+                .map(str::to_string)
+                .chain(std::iter::once(body))
+                .chain(tail.into_iter().map(str::to_string))
+                .collect::<Vec<_>>()
+                .join("\n");
             (Some(Recalled { section, sources }), Some(words), found)
         }
         Err(e) => {
