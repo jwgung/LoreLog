@@ -75,12 +75,14 @@
   <!-- ④ the phone -->
   <section data-step="3" hidden>
     <h2>④ 폰 연결</h2>
-    <p>폰은 같은 와이파이로, 또는 Tailscale로 이 PC에 기록을 보냅니다. Tailscale은 내 기기끼리만 이어 주는 사설망입니다(무료 개인 요금제). 밖에서도 닿고 오가는 내용이 암호화됩니다.</p>
+    <p>폰은 Tailscale로, 또는 켜 두면 같은 와이파이로 이 PC에 기록을 보냅니다. Tailscale은 내 기기끼리만 이어 주는 사설망입니다(무료 개인 요금제). 밖에서도 닿고 오가는 내용이 암호화됩니다.</p>
     <ul class="plain">
-      <li>같은 와이파이: 폰이 이 PC와 같은 와이파이(공유기)에 있으면 아래 '같은 와이파이' 주소로 닿습니다.</li>
+      <li>같은 와이파이: 아래 '같은 와이파이에서도 받기'를 켜면, 폰이 이 PC와 같은 와이파이(공유기)에 있을 때 '같은 와이파이' 주소로 닿습니다. 꺼 두면(기본) 이 PC는 와이파이에서 받지 않습니다.</li>
       <li>Tailscale: 이 PC와 폰에 설치하고 같은 계정으로 로그인합니다: <button id="openTailscale" class="link">tailscale.com/download</button></li>
       <li>폰에 LoreLog 앱(Releases의 APK)을 설치하고 열면 '서랍 연결'에서 연결 코드를 붙여 넣습니다.</li>
     </ul>
+    <label class="check plain"><input id="sameWifi" type="checkbox" /> 같은 와이파이에서도 받기</label>
+    <p id="sameWifiNote" class="note"></p>
     <label for="devAddr">폰에 넣을 주소</label>
     <div class="row"><select id="devAddr"></select><button id="devRecheck" class="secondary">다시 보기</button></div>
     <p id="devAddrNote" class="note"></p>

@@ -35,6 +35,11 @@ commands:
                     forget those days (YYYY-MM-DD, both included) of a source (mail, calendar, phone, pc, diary,
                     contacts): records, notes, files nothing else names, untaken to-dos. Without --yes it only says
                     what would go. Cannot be undone.
+  token new [--show]
+                    replace the token (INGEST_TOKEN in ingest.env) with a new random one, e.g. when a device with
+                    it was lost. The old file is kept as ingest.env.bak-token (mode 600). The token is not printed
+                    unless --show. Then restart life-ingest and give every phone and PC the new connection code or
+                    token; the old token stops working once life-ingest restarts.
 
 First-time setup:
   life add mail            mail account and folders to collect
@@ -264,6 +269,38 @@ fn status(paths: &Paths) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+// ---------- token ----------
+
+/// A new INGEST_TOKEN for this install. Printed only with `show` (it goes to the terminal, nowhere else).
+fn token_new(paths: &Paths, show: bool) -> ExitCode {
+    let token = match life_server::host::replace_token(paths) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("life: the token was not replaced: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!(
+        "New token written to {} (mode 600); the old file is kept as {}.",
+        life_server::host::ingest_env(paths).display(),
+        life_server::host::token_backup(paths).display()
+    );
+    if show {
+        println!("token: {token}");
+    }
+    println!(
+        "Next:
+  1. restart life-ingest (e.g. systemctl --user restart life-ingest); until then it still takes the old token
+  2. reconnect every phone and PC: a new connection code on the phone, the new token on another PC{}",
+        if show {
+            ""
+        } else {
+            "\n     (not shown here: it is INGEST_TOKEN in the file above; `life token new --show` would print a new one)"
+        }
+    );
+    ExitCode::SUCCESS
+}
+
 fn main() -> ExitCode {
     life_server::logging::to_stderr();
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -413,6 +450,14 @@ fn main() -> ExitCode {
                 }
             }
         }
+        "token" => match &args[1..] {
+            [new] if new == "new" => token_new(&paths, false),
+            [new, show] if new == "new" && show == "--show" => token_new(&paths, true),
+            _ => {
+                eprintln!("usage: life token new [--show]");
+                ExitCode::from(2)
+            }
+        },
         "verify" => match args.get(1) {
             Some(f) => match life_server::export::verify(std::path::Path::new(f)) {
                 Ok(n) => {
