@@ -25,6 +25,7 @@ function show(n) {
   clearTimeout(polling);
   if (step === 3) loadPhone();
   if (step === 4) loadProgress();
+  window.scrollTo(0, 0);   // a new step starts at its title, not where the last one was scrolled to
 }
 
 function finish() {

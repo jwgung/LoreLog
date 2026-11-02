@@ -170,9 +170,10 @@ pub fn chat_answer(
         append_chat(paths, day, "assistant", q)?;
     }
     append_chat(paths, day, "user", &user)?;
-    append_turn(paths, day, "assistant", &reply, asked.as_deref())?;
+    let sources = past.map(|p| p.sources).unwrap_or_default();
+    append_turn(paths, day, "assistant", &reply, asked.as_deref(), &sources)?;
     let changed = answered.map(|a| a.changed).or_else(|| correction.map(|c| c.changed()));
-    Ok(Answer { reply, changed, sources: past.map(|p| p.sources).unwrap_or_default() })
+    Ok(Answer { reply, changed, sources })
 }
 
 /// When the last turn asked back which person was meant: the question, the reply and its candidates, for the words of
@@ -198,11 +199,19 @@ pub fn chat_log(paths: &Paths, day: &str) -> Vec<Map<String, Value>> {
 }
 
 pub fn append_chat(paths: &Paths, day: &str, role: &str, text: &str) -> std::io::Result<()> {
-    append_turn(paths, day, role, text, None)
+    append_turn(paths, day, role, text, None, &[])
 }
 
-/// A turn, and the candidates it asked the user to choose among (kept for the next turn to read the answer by).
-fn append_turn(paths: &Paths, day: &str, role: &str, text: &str, asked: Option<&str>) -> std::io::Result<()> {
+/// A turn, the candidates it asked the user to choose among (kept for the next turn to read the answer by), and the
+/// records the answer quoted (shown again under it when the chat is opened later).
+fn append_turn(
+    paths: &Paths,
+    day: &str,
+    role: &str,
+    text: &str,
+    asked: Option<&str>,
+    sources: &[super::recall::Source],
+) -> std::io::Result<()> {
     let raw = paths.raw().join("diary");
     crate::fsutil::ensure_private_dir(&raw)?;
     let mut rec = json!({"type": "chat", "ts": Local::now().timestamp_millis(), "date": day, "role": role, "text": text,
@@ -210,22 +219,29 @@ fn append_turn(paths: &Paths, day: &str, role: &str, text: &str, asked: Option<&
     if let Some(a) = asked {
         rec["asked"] = json!(a);
     }
+    if !sources.is_empty() {
+        rec["sources"] = json!(sources);
+    }
     append_private(&raw.join(format!("{day}.ndjson")), &format!("{rec}\n"))
 }
 
-/// Today's exchange for the app to show again: `[{role, text, wrong?}]`. A correction is stored with a wrapper line;
-/// it is unwrapped.
+/// Today's exchange for the app to show again: `[{role, text, wrong?, sources?}]`. A correction is stored with a
+/// wrapper line; it is unwrapped. `sources` only on answers that quoted records.
 pub fn chat_history(paths: &Paths, day: &str) -> Vec<Value> {
     chat_log(paths, day)
         .iter()
         .map(|t| {
             let role = pystr(t.get("role"));
             let text = pystr(t.get("text"));
-            match (role == "user").then(|| split_fix(&text)).flatten() {
+            let mut line = match (role == "user").then(|| split_fix(&text)).flatten() {
                 Some((wrong, said, true)) => json!({"role": role, "text": said, "wrong": wrong, "about": "answer"}),
                 Some((wrong, said, false)) => json!({"role": role, "text": said, "wrong": wrong}),
                 None => json!({"role": role, "text": text}),
+            };
+            if let Some(src) = t.get("sources").filter(|v| v.as_array().is_some_and(|a| !a.is_empty())) {
+                line["sources"] = src.clone();
             }
+            line
         })
         .collect()
 }
