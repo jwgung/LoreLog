@@ -4,12 +4,14 @@
 //!                           (data/raw/files/<sha256[:2]>/<sha256>; their names are in raw/mailfile and raw/pcfile)
 //!   data/todos.json         the to-dos
 //!   data/librarian-asks.ndjson  the questions kept to measure the librarian (if any)
+//!   data/cache/graph-<v>/   the model's answers the graph is made of (by record hash): the one cache taken, since
+//!                           asking the model again for every record can take days on a small model
 //!   notes/Mail, Events, Diary   the notes made of them (Markdown)
 //!   settings/diary.json     which messenger senders may feed the diary
 //!   MANIFEST.sha256         the hash of every file above, as `sha256sum -c` reads it
 //!   README.md               this, for whoever opens the zip
 //!
-//! Left out: what can be made again from these (the librarian's index, caches), the run state, and secrets (the
+//! Left out: what can be made again from these quickly (the librarian's index, other caches), the run state, and secrets (the
 //! account passwords and the token live in the config folder, which is not taken). Other notes of the vault (the
 //! user's own) are theirs already and not taken either.
 use std::fs::{self, File};
@@ -31,17 +33,20 @@ This zip is everything LoreLog keeps of your records, in open formats.
 - `data/raw/files/<aa>/<sha256>`: files that went through your mail or folders, under their SHA-256. Their names and
   where they were seen are in `data/raw/mailfile/` and `data/raw/pcfile/`.
 - `data/todos.json`: your to-dos. `data/librarian-asks.ndjson`: questions kept to measure search (if you allowed it).
+- `data/cache/graph-<v>/`: what your model answered about each record, which the relation graph is made of. Put back
+  in place, the graph is rebuilt without asking the model again.
 - `notes/`: the Markdown notes made of your mail, calendars and diary.
 - `settings/diary.json`: which messenger senders may feed the diary.
 - `MANIFEST.sha256`: the hash of every file. Check it with `sha256sum -c MANIFEST.sha256` after unzipping.
 
-Not included: the search index and caches (made again from the above), and your passwords and token.
+Not included: the search index and other caches (made again from the above), and your passwords and token.
 
 # LoreLog 서랍 내보내기
 
 LoreLog가 가진 기록 전부를 열린 형식으로 담았습니다. 위 목록과 같습니다: 원본 기록(NDJSON, 고치지 않음),
-해시로 보관한 파일, 할 일, 노트(Markdown), 설정, 그리고 확인용 해시 목록(`sha256sum -c MANIFEST.sha256`).
-검색 색인과 캐시(다시 만들 수 있는 것), 비밀번호와 토큰은 넣지 않았습니다.
+해시로 보관한 파일, 할 일, 노트(Markdown), 설정, 관계 그래프의 재료인 모델의 답(`data/cache/graph-<v>/`, 제자리에
+두면 모델에게 다시 묻지 않고 그래프를 다시 짓습니다), 그리고 확인용 해시 목록(`sha256sum -c MANIFEST.sha256`).
+검색 색인과 그 밖의 캐시(다시 만들 수 있는 것), 비밀번호와 토큰은 넣지 않았습니다.
 ";
 
 /// The notes folders of the vault that are made of the records (the rest of the vault is the user's own).
@@ -66,6 +71,12 @@ fn contents(paths: &Paths) -> Vec<(PathBuf, String)> {
             out.push((p, format!("data/{f}")));
         }
     }
+    // the graph's model answers of the version in use (kept by record hash; older versions are not read any more)
+    walk(
+        &crate::librarian::graph::cache_dir(paths),
+        &format!("data/cache/graph-{}", crate::librarian::graph::VERSION),
+        &mut out,
+    );
     for d in NOTE_DIRS {
         walk(&paths.vault.join(d), &format!("notes/{d}"), &mut out);
     }
