@@ -1003,12 +1003,8 @@ impl Librarian {
     /// One hit as the assistant gets it: `{source, kind, day, title, snippet, ref, count, first, last, latest,
     /// others}` (`latest`: the title of the matter's last record, when it has more than one; `others`: the matter's
     /// other mails, up to [`MAX_OTHERS`], when it has any). A file that came with a mail is shown as that
-    /// mail's (its title and where it is), the file named: what the user knows is the mail.
-    pub(crate) fn hit(&self, n: i64, case: Option<&str>, q: &str) -> anyhow::Result<Value> {
-        self.hit_within(n, case, q, Bound::default())
-    }
-
-    /// [`Self::hit`], its `others` kept to what the search that found it kept (`bound`).
+    /// mail's (its title and where it is), the file named: what the user knows is the mail. The `others` are kept
+    /// to what the search that found the hit kept (`bound`).
     pub(crate) fn hit_within(&self, n: i64, case: Option<&str>, q: &str, bound: Bound) -> anyhow::Result<Value> {
         let (source, kind, day, mut title, text, mut file, mid): (
             String,
