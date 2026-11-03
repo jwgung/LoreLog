@@ -727,7 +727,9 @@ impl Index for crate::librarian::Librarian {
             )
             .optional()?;
         let Some(n) = n else { return Ok(None) };
-        let mut hit = self.hit(n, Some(case), q)?;
+        // the matter as it stood on the day asked: its `others` stop there too
+        let bound = crate::librarian::index::Bound { not_day: None, until: Some(day) };
+        let mut hit = self.hit_within(n, Some(case), q, bound)?;
         if let Some((state, earlier)) = self.states(case, day) {
             hit["state"] = state;
             if !earlier.is_empty() {
