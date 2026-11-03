@@ -71,7 +71,8 @@ pub fn render(hits: &[Value]) -> String {
             let mut head = String::new();
             let this = h.get("like").and_then(Value::as_str).map(str::to_string);
             if h.get("now") == Some(&Value::Bool(true)) {
-                head += &format!("{NOW_HIT}\n");
+                let guessed = h.get("now_guessed") == Some(&Value::Bool(true));
+                head += &format!("{}\n", if guessed { NOW_GUESSED } else { NOW_HIT });
                 gathered = true;
             } else if this.is_some() && this != like {
                 head +=
@@ -343,6 +344,9 @@ pub const NOW: &str =
     "- (지금 어느 일을 두고 전에 어떻게 했는지 묻는지 모른다. 지금 진행 중인 아래 건을 두고 묻는지 한 번만 되묻는다)";
 /// The line before the matter at hand, when the earlier ones like it follow (#95).
 pub const NOW_HIT: &str = "- (지금 일로 본 건. 그 아래는 이 건과 비슷한 지난 건이다)";
+/// The line before the matter at hand when the question named only a kind of work and the first matter whose
+/// counterparty has earlier matters, among what the words found, was taken for it (#95): a guess, to be said as one.
+pub const NOW_GUESSED: &str = "- (질문에 건이 적혀 있지 않아, 찾은 기록 가운데 거래처가 있는 첫 건을 지금 일로 보았다(추정). 어느 건으로 보았는지 한 줄로 밝힌다. 그 아래는 이 건과 비슷한 지난 건이다)";
 /// The line after the matter at hand when no earlier one is like it.
 pub const NO_PRECEDENT: &str = "- (같은 거래처나 같은 상황의 지난 건은 찾지 못했다. 아래는 물은 낱말로 찾은 기록이다. 비슷한 건을 짐작해 말하지 않는다)";
 /// The line before what else the words found, after the earlier matters.
@@ -712,6 +716,10 @@ pub trait Index {
     ) -> anyhow::Result<Option<crate::librarian::precedent::Precedents>> {
         Ok(None)
     }
+    /// The organization on the other side of a matter up to `day` (#95), if one.
+    fn counterparty(&mut self, _case: &str, _day: &str) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
     /// How a matter went up to `day`: its states, the oldest first (#95).
     fn flow(&mut self, _case: &str, _day: &str) -> anyhow::Result<Vec<Value>> {
         Ok(Vec::new())
@@ -842,16 +850,43 @@ fn precedent(lib: &mut dyn Index, p: &Picked, limit: usize, day: &str, said: &[S
         return Ok(if ms.is_empty() { Named::Hits(Vec::new()) } else { Named::Ask(Asked::Now(ms)) });
     };
     let case_of = |h: &Value| h.get("case").and_then(Value::as_str).map(str::to_string);
-    let Some(at) = hits.iter().position(|h| case_of(h).is_some()) else { return Ok(Named::Hits(hits)) };
+    let Some(mut at) = hits.iter().position(|h| case_of(h).is_some()) else { return Ok(Named::Hits(hits)) };
+    // a kind of work asked about (no matter chosen, no one and nothing named, only words): the first matter among what
+    // the words found whose counterparty has earlier matters is the one at hand, a guess said as one (the user's
+    // choice, ADR 0005). A counterparty with none earlier gathers nothing of its own: the best fit stays.
+    let max = crate::librarian::precedent::MAX_PRECEDENTS;
+    let mut pre = None;
+    let mut guessed = false;
+    if p.matter.is_none() && p.people.is_empty() && p.orgs.is_empty() && p.things.is_empty() {
+        for (i, h) in hits.iter().enumerate() {
+            let Some(c) = case_of(h) else { continue };
+            if lib.counterparty(&c, day)?.is_none() {
+                continue;
+            }
+            if let Some(found) = lib.precedents(&c, day, &q, max)?
+                && matches!(found.like, crate::librarian::precedent::Like::Counterparty(_))
+            {
+                (guessed, at, pre) = (i != at, i, Some(found));
+                break;
+            }
+        }
+    }
     let mut now = hits.remove(at);
     let case = case_of(&now).unwrap_or_default();
     now["now"] = Value::Bool(true);
+    if guessed {
+        now["now_guessed"] = Value::Bool(true);
+    }
     let flow = lib.flow(&case, day)?;
     if !flow.is_empty() {
         now["flow"] = Value::Array(flow);
     }
     let mut out = vec![now];
-    match lib.precedents(&case, day, &q, crate::librarian::precedent::MAX_PRECEDENTS)? {
+    let pre = match pre {
+        Some(found) => Some(found),
+        None => lib.precedents(&case, day, &q, max)?,
+    };
+    match pre {
         Some(pre) => {
             let like = pre.like.label();
             out.extend(pre.hits.into_iter().map(|mut h| {
@@ -958,6 +993,10 @@ impl Index for crate::librarian::Librarian {
 
     fn flow(&mut self, case: &str, day: &str) -> anyhow::Result<Vec<Value>> {
         crate::librarian::Librarian::flow(self, case, day)
+    }
+
+    fn counterparty(&mut self, case: &str, day: &str) -> anyhow::Result<Option<String>> {
+        Ok(crate::librarian::Librarian::counterparty(self, case, day)?.map(|(org, _)| org))
     }
 
     fn open_matters(&mut self, day: &str, n: usize) -> anyhow::Result<Vec<Value>> {

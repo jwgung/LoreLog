@@ -312,3 +312,104 @@ fn the_eval_counts_whether_the_earlier_matters_with_the_same_counterparty_were_g
     assert_eq!((out[0].earlier_shown, out[1].earlier_shown), (Some(true), Some(false)));
     assert_eq!(eval::summary(&out)[&Kind::Precedent].earlier, (1, 2));
 }
+
+/// A question about a kind of work (#95, the user's choice A): it names no matter, no one and nothing of its own,
+/// only words. Among what the words found, the first matter with a counterparty is taken for the matter at hand (a
+/// guess, said as one), and the earlier matters with that counterparty are gathered.
+fn kind_of_work() -> T {
+    let t = T::new();
+    t.mail("x0.md", "2026-01-02", ME, "동료 <kim@mine.co.kr>", "주간 보고", "보고드립니다", None);
+    // the words fit an internal matter best
+    t.mail(
+        "i1.md",
+        "2026-10-25",
+        "동료 <kim@mine.co.kr>",
+        ME,
+        "포트 포워딩 포트 포워딩 정리",
+        "포트 포워딩 포트 포워딩 목록",
+        None,
+    );
+    t.mail(
+        "i2.md",
+        "2026-10-26",
+        ME,
+        "동료 <kim@mine.co.kr>",
+        "포트 포워딩 포트 포워딩 정리",
+        "포트 포워딩 포트 포워딩 확인",
+        Some("i1.md"),
+    );
+    // a client's: the one at hand, and its earlier ones with the same client
+    t.mail("c1.md", "2026-09-01", ALPHA, ME, "포트 포워딩 요청", "포트 포워딩 요청드립니다", None);
+    t.mail("c2.md", "2026-09-02", ME, ALPHA, "포트 포워딩 요청", "적용했습니다", Some("c1.md"));
+    t.quote("e", ALPHA, "알파 방화벽 견적", "2026-05-01");
+    t.quote("f", ALPHA, "알파 서버 견적", "2026-03-01");
+    // another client's matter about it, all after the day asked: not the one at hand
+    t.mail("l1.md", "2026-11-10", "베타 <b@beta.co.kr>", ME, "포트 포워딩 포트 포워딩 요청", "포트 포워딩 요청", None);
+    t
+}
+
+#[test]
+fn a_question_about_a_kind_of_work_takes_the_first_matter_with_a_counterparty_for_the_one_at_hand() {
+    let t = kind_of_work();
+    let mut lib = t.built();
+    let got = hits(&mut lib, &named(&["포트 포워딩"]));
+    assert_eq!(title(&got[0]), "포트 포워딩 요청", "{got:#?}");
+    assert_eq!(got[0]["now_guessed"], true);
+    assert_eq!(earlier(&got), ["알파 방화벽 견적", "알파 서버 견적"], "{got:#?}");
+    let section = recall::render(&got);
+    assert!(section.starts_with(recall::NOW_GUESSED), "said to be a guess: {section}");
+    assert!(section.contains("포트 포워딩 포트 포워딩 정리"), "what else the words found stays: {section}");
+}
+
+#[test]
+fn a_question_about_a_kind_of_work_with_no_matter_with_a_counterparty_falls_back_as_before() {
+    let t = T::new();
+    t.mail("x0.md", "2026-01-02", ME, "동료 <kim@mine.co.kr>", "주간 보고", "보고드립니다", None);
+    t.mail("i1.md", "2026-10-25", "동료 <kim@mine.co.kr>", ME, "포트 포워딩 정리", "포트 포워딩 목록", None);
+    t.mail("i2.md", "2026-09-25", "동료 <kim@mine.co.kr>", ME, "포트 포워딩 변경", "포트 포워딩 변경", None);
+    let mut lib = t.built();
+    let got = hits(&mut lib, &named(&["포트 포워딩"]));
+    assert_eq!(title(&got[0]), "포트 포워딩 정리", "{got:#?}");
+    assert!(got[0].get("now_guessed").is_none());
+    assert_eq!(got[0]["now"], true);
+}
+
+#[test]
+fn a_question_that_names_something_keeps_the_best_fitting_matter_as_the_one_at_hand() {
+    let t = kind_of_work();
+    let mut lib = t.built();
+    let p = Picked { things: vec!["포트 포워딩".into()], ..named(&["포트 포워딩"]) };
+    let got = hits(&mut lib, &p);
+    assert!(got[0].get("now_guessed").is_none(), "{got:#?}");
+    assert_ne!(title(&got[0]), "포트 포워딩 요청", "{got:#?}");
+}
+
+#[test]
+fn a_counterparty_with_no_earlier_matter_does_not_take_the_place_of_the_best_fit() {
+    let t = T::new();
+    t.mail("x0.md", "2026-01-02", ME, "동료 <kim@mine.co.kr>", "주간 보고", "보고드립니다", None);
+    t.mail(
+        "i1.md",
+        "2026-10-25",
+        "동료 <kim@mine.co.kr>",
+        ME,
+        "포트 포워딩 포트 포워딩 정리",
+        "포트 포워딩 포트 포워딩 목록",
+        None,
+    );
+    t.mail(
+        "i2.md",
+        "2026-10-26",
+        ME,
+        "동료 <kim@mine.co.kr>",
+        "포트 포워딩 포트 포워딩 정리",
+        "포트 포워딩 확인",
+        Some("i1.md"),
+    );
+    // a client's matter about it, the only one with that client
+    t.mail("c1.md", "2026-09-01", ALPHA, ME, "포트 포워딩 요청", "포트 포워딩 요청드립니다", None);
+    let mut lib = t.built();
+    let got = hits(&mut lib, &named(&["포트 포워딩"]));
+    assert_eq!(title(&got[0]), "포트 포워딩 포트 포워딩 정리", "{got:#?}");
+    assert!(got[0].get("now_guessed").is_none());
+}
