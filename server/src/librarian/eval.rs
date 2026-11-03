@@ -5,8 +5,9 @@
 //!
 //! Kinds of question and what counts as found in the top `k`:
 //!   status     "그 건 어떻게 됐지"        the thread it is about
-//!   precedent  "전에 어떻게 했지"          the earlier thread it is about; with `earlier`, also whether the earlier
-//!                                          matters like the one at hand (#95) hold every one of those threads
+//!   precedent  "전에 어떻게 했지"          the earlier thread it is about; with `earlier`, also how many of those threads
+//!                                          the earlier matters shown (#95, three at most) hold (found: over min(3, labels))
+//!                                          and how many of the matters shown are one of them (exact)
 //!   person     "이 사람이랑 뭐 있었지"      any of the latest five things with that address up to today: threads of mail
 //!                                          they sent or received (not copied, not mass mail) and events they attended
 //!                                          (read from the notes, not from the index), and how many hits are with them
@@ -17,6 +18,10 @@
 //!   conflict   "기록끼리 다른 건"          records that say different things (#92): found when every one of them is shown
 //!                                          (a hit's own mail, not just its matter: a matter is one hit), at the rank of the last
 //!   pending    (the same, before #61)       not scored: kept to see what is asked
+//!
+//! `expect`: "answer" (the default) is a question to answer straight away; asking back is then counted as needless.
+//! "ask" is a question that fits several matters (`candidates`, two or more, no `thread`): it should be asked back,
+//! scored by how many of those matters the candidates listed hold, over min(3, candidates).
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
@@ -57,11 +62,24 @@ impl Kind {
     }
 }
 
+/// What a question should get: an answer, or the matter asked back (ADR 0006).
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Expect {
+    #[default]
+    Answer,
+    Ask,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Case {
     pub kind: Kind,
     pub q: String,
+    /// "answer" (the default) or "ask": the question fits several matters and should be asked back
+    pub expect: Option<Expect>,
+    /// expect = "ask": the threads of the matters it fits, two or more
+    pub candidates: Option<Vec<String>>,
     /// status, precedent: the thread (as the index names it, `mail:<message id>`)
     pub thread: Option<String>,
     /// precedent: the threads of the earlier matters with the same counterparty it should gather (#95), when known
@@ -94,7 +112,10 @@ pub fn load(path: &Path) -> anyhow::Result<Vec<Case>> {
         anyhow::anyhow!("line {}: {}", line.map(|l| l.to_string()).unwrap_or_else(|| "?".into()), e.message())
     })?;
     for (i, c) in f.cases.iter().enumerate() {
+        let ask = c.expect == Some(Expect::Ask);
         let missing = match c.kind {
+            _ if ask && c.candidates.as_ref().is_none_or(|t| t.len() < 2) => Some("candidates (two or more)"),
+            _ if ask => None,
             Kind::Status | Kind::Precedent if c.thread.is_none() => Some("thread"),
             Kind::Person if c.person.is_none() => Some("person"),
             Kind::Graph if c.threads.as_ref().is_none_or(|t| t.is_empty()) => Some("threads"),
@@ -129,12 +150,60 @@ pub struct Result1 {
     pub asked: bool,
     /// person: (hits with that person, hits) for the user's words
     pub person_share: Option<(usize, usize)>,
-    /// precedent with `earlier`, the model's words: were all of them among the earlier matters gathered (#95)? Asked
-    /// back: not (they come only after the answer).
-    pub earlier_shown: Option<bool>,
+    /// precedent with `earlier`, the model's words: the labels found among the earlier matters shown (#95, ADR 0006).
+    /// Asked back: none shown (they come only after the answer).
+    pub earlier: Option<Earlier>,
+    /// the case expects asking back
+    pub expect_ask: bool,
+    /// the model's words made the assistant ask back which matter is meant (people asked about do not count)
+    pub asked_matters: bool,
+    /// expect = "ask", asked back: the share of the candidates the case names that the list holds, over min(3, them)
+    pub candidate_hit: Option<f64>,
     /// the model's words gathered earlier matters like the one at hand (#95): how many, and whether by the same
     /// counterparty (else by the situation)
     pub gathered: Option<(usize, bool)>,
+}
+
+/// A precedent case's earlier matters, as shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Earlier {
+    /// the labels the case names
+    pub labels: usize,
+    /// of them, held by an earlier matter shown
+    pub found: usize,
+    /// the earlier matters shown
+    pub shown: usize,
+    /// of them, one of the labels
+    pub right: usize,
+}
+
+/// Most earlier matters shown (ADR 0005).
+const SHOWN_AT_MOST: usize = 3;
+
+impl Earlier {
+    /// Labels found over what could be: min(3, labels), the most that is shown.
+    pub fn found_share(&self) -> f64 {
+        self.found.min(SHOWN_AT_MOST) as f64 / self.labels.min(SHOWN_AT_MOST) as f64
+    }
+
+    /// The share of the matters shown that are labels; not defined when none is shown.
+    pub fn exact_share(&self) -> Option<f64> {
+        (self.shown > 0).then(|| self.right as f64 / self.shown as f64)
+    }
+}
+
+/// How many of the labels the earlier matters shown hold, and how many of them are labels.
+fn earlier_shown(lib: &Librarian, like: &[serde_json::Value], labels: &HashSet<String>) -> Earlier {
+    let holds = |h: &serde_json::Value| -> HashSet<String> {
+        h["ref"].as_str().map(|r| lib.case_threads(r)).unwrap_or_default()
+    };
+    let held: Vec<HashSet<String>> = like.iter().map(holds).collect();
+    Earlier {
+        labels: labels.len(),
+        found: labels.iter().filter(|l| held.iter().any(|h| h.contains(*l))).count(),
+        shown: like.len(),
+        right: held.iter().filter(|h| !h.is_disjoint(labels)).count(),
+    }
 }
 
 /// Does this note's header name the address (from, to or cc)?
@@ -291,6 +360,7 @@ pub fn run(
         let targets: HashSet<String> = match (c.kind, &c.thread, &addr) {
             (Kind::Person, _, Some(a)) => person_threads(lib, vault, a),
             (Kind::Graph, _, _) => c.threads.iter().flatten().cloned().collect(),
+            _ if c.expect == Some(Expect::Ask) => c.candidates.iter().flatten().cloned().collect(),
             (_, Some(t), _) => [t.clone()].into(),
             _ => HashSet::new(),
         };
@@ -307,7 +377,10 @@ pub fn run(
             (with, hits.len())
         });
         let mut asked = false;
-        let mut earlier_shown = None;
+        let mut earlier_found = None;
+        let mut asked_matters = false;
+        let mut candidate_hit = None;
+        let ask = c.expect == Some(Expect::Ask);
         let mut gathered = None;
         let earlier: HashSet<String> = c.earlier.iter().flatten().cloned().collect();
         let (model_words, model_rank) = match model {
@@ -340,13 +413,20 @@ pub fn run(
                             if !earlier.is_empty() {
                                 let like: Vec<serde_json::Value> =
                                     h.iter().filter(|h| h.get("like").is_some()).cloned().collect();
-                                earlier_shown = Some(rank_all(lib, &like, &earlier).is_some());
+                                earlier_found = Some(earlier_shown(lib, &like, &earlier));
                             }
                             score(lib, &h)
                         }
                         recall::Named::Ask(a) => {
-                            earlier_shown = (!earlier.is_empty()).then_some(false);
+                            earlier_found = (!earlier.is_empty()).then(|| earlier_shown(lib, &[], &earlier));
                             asked = true;
+                            asked_matters = !matches!(a, recall::Asked::People(_));
+                            if ask && asked_matters {
+                                let listed: Vec<HashSet<String>> =
+                                    a.matters().iter().map(|m| lib.key_threads(&m.case)).collect();
+                                let n = targets.iter().filter(|t| listed.iter().any(|h| h.contains(*t))).count();
+                                candidate_hit = Some(n as f64 / targets.len().min(SHOWN_AT_MOST) as f64);
+                            }
                             in_candidates(lib, &a, c.kind, &targets, addr.as_deref())
                         }
                     };
@@ -362,7 +442,10 @@ pub fn run(
             model_rank,
             person_share,
             asked,
-            earlier_shown,
+            earlier: earlier_found,
+            expect_ask: ask,
+            asked_matters,
+            candidate_hit,
             gathered,
         });
     }
@@ -376,8 +459,82 @@ pub struct Score {
     pub raw: (usize, usize),
     pub model: (usize, usize),
     pub asked: usize,
-    /// precedent: (cases whose earlier matters were all gathered, cases with `earlier`), the model's words (#95)
-    pub earlier: (usize, usize),
+    /// precedent: the earlier matters shown for the cases with `earlier`, the model's words (#95)
+    pub earlier: EarlierScore,
+}
+
+/// The earlier matters over the precedent cases with labels, the model's words.
+#[derive(Debug, Default, PartialEq)]
+pub struct EarlierScore {
+    /// cases with labels
+    pub cases: usize,
+    found_sum: f64,
+    exact_sum: f64,
+    exact_n: usize,
+    /// cases that showed at least one of the labels
+    pub any: usize,
+    /// cases that showed no earlier matter at all (how exact is not defined for them)
+    pub none: usize,
+}
+
+impl EarlierScore {
+    fn add(&mut self, e: &Earlier) {
+        self.cases += 1;
+        self.found_sum += e.found_share();
+        if let Some(x) = e.exact_share() {
+            self.exact_sum += x;
+            self.exact_n += 1;
+        } else {
+            self.none += 1;
+        }
+        self.any += (e.found > 0) as usize;
+    }
+
+    /// Average of labels found; None without a case.
+    pub fn found_avg(&self) -> Option<f64> {
+        (self.cases > 0).then(|| self.found_sum / self.cases as f64)
+    }
+
+    /// Average of how exact what was shown is, over the cases that showed something.
+    pub fn exact_avg(&self) -> Option<f64> {
+        (self.exact_n > 0).then(|| self.exact_sum / self.exact_n as f64)
+    }
+}
+
+/// Asking back, over the cases measured with the model (ADR 0006).
+#[derive(Debug, Default, PartialEq)]
+pub struct AskScore {
+    /// cases that should be asked back: (asked, cases)
+    pub should_ask: (usize, usize),
+    hit_sum: f64,
+    hit_n: usize,
+    /// cases to answer straight away (the default): (asked back, cases)
+    pub should_answer: (usize, usize),
+}
+
+impl AskScore {
+    /// Average of the candidates listed, over the cases asked back as they should.
+    pub fn candidates_avg(&self) -> Option<f64> {
+        (self.hit_n > 0).then(|| self.hit_sum / self.hit_n as f64)
+    }
+}
+
+/// How asking back went: of the cases that should be asked back, and of those to answer straight away (not
+/// period or pending: they are never asked back).
+pub fn ask_summary(results: &[Result1]) -> AskScore {
+    let mut s = AskScore::default();
+    for r in results.iter().filter(|r| r.model_words.is_some() && !matches!(r.kind, Kind::Pending | Kind::Period)) {
+        if r.expect_ask {
+            s.should_ask = (s.should_ask.0 + r.asked_matters as usize, s.should_ask.1 + 1);
+            if let Some(h) = r.candidate_hit {
+                s.hit_sum += h;
+                s.hit_n += 1;
+            }
+        } else {
+            s.should_answer = (s.should_answer.0 + r.asked as usize, s.should_answer.1 + 1);
+        }
+    }
+    s
 }
 
 impl Score {
@@ -390,7 +547,8 @@ impl Score {
 
 pub fn summary(results: &[Result1]) -> BTreeMap<Kind, Score> {
     let mut out: BTreeMap<Kind, Score> = BTreeMap::new();
-    for r in results.iter().filter(|r| r.kind != Kind::Pending) {
+    // a case that expects asking back is no found or miss: it is counted by `ask_summary`
+    for r in results.iter().filter(|r| r.kind != Kind::Pending && !r.expect_ask) {
         let s = out.entry(r.kind).or_default();
         if r.kind != Kind::Period {
             s.raw = (s.raw.0 + r.raw_rank.is_some() as usize, s.raw.1 + 1);
@@ -399,8 +557,8 @@ pub fn summary(results: &[Result1]) -> BTreeMap<Kind, Score> {
             s.model = (s.model.0 + r.model_rank.is_some() as usize, s.model.1 + 1);
             s.asked += r.asked as usize;
         }
-        if let Some(e) = r.earlier_shown {
-            s.earlier = (s.earlier.0 + e as usize, s.earlier.1 + 1);
+        if let Some(e) = &r.earlier {
+            s.earlier.add(e);
         }
     }
     out

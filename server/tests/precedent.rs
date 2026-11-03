@@ -288,10 +288,11 @@ fn the_picker_reads_a_question_about_how_it_was_done_before() {
     assert!(recall::WORDS_SYSTEM.contains("\"precedent\""));
 }
 
-/// The eval (#95): a precedent case may list the threads of the earlier matters with the same counterparty it should
-/// gather; it counts as gathered when every one of them is among the earlier matters shown.
+/// The eval (#95, ADR 0006): a precedent case lists the threads of the earlier matters it should gather. Three are
+/// shown at most, so what is found is the labels shown over min(3, labels); how exact is the share of the shown
+/// earlier matters that are labels.
 #[test]
-fn the_eval_counts_whether_the_earlier_matters_with_the_same_counterparty_were_gathered() {
+fn the_eval_scores_the_earlier_matters_by_how_many_labels_are_found_and_how_exact_what_is_shown() {
     use life_server::librarian::eval::{self, Kind};
     let t = T::new();
     t.quote("p", ALPHA, "알파 펌프 견적", "2026-01-05");
@@ -299,26 +300,80 @@ fn the_eval_counts_whether_the_earlier_matters_with_the_same_counterparty_were_g
     t.quote("s", ALPHA, "알파 센서 견적", "2026-03-05");
     t.quote("b", ALPHA, "알파 배관 견적", "2026-04-05");
     t.quote("n", ALPHA, "알파 설비 견적", "2026-05-05");
+    t.quote("z", "다른 담당 <z@other.co.kr>", "다른 곳 견적", "2026-05-20");
     let mut lib = t.built();
     let thread = |name: &str| lib.thread_of(&t.p.vault.join("Mail/2026").join(name).to_string_lossy()).unwrap();
-    let case = |earlier: &[&str]| {
-        let list: Vec<String> = earlier.iter().map(|e| format!("\"{}\"", thread(e))).collect();
+    let case = |at: &str, q: &str, earlier: Option<&[&str]>| {
+        let list = earlier.map(|e| {
+            let l: Vec<String> = e.iter().map(|e| format!("\"{}\"", thread(e))).collect();
+            format!("earlier = [{}]\n", l.join(", "))
+        });
         format!(
-            "[[case]]\nkind = \"precedent\"\nq = \"설비 견적 전에 어떻게 했지\"\nthread = \"{}\"\nearlier = [{}]\n",
-            thread("n1.md"),
-            list.join(", ")
+            "[[case]]\nkind = \"precedent\"\nq = \"{q}\"\nthread = \"{}\"\n{}",
+            thread(at),
+            list.unwrap_or_default()
         )
     };
     let f = t.p.data.join("recall.toml");
     fs::create_dir_all(f.parent().unwrap()).unwrap();
-    // the latest three are gathered; the oldest is not
-    fs::write(&f, format!("{}{}", case(&["b1.md", "s1.md"]), case(&["b1.md", "p1.md"]))).unwrap();
+    fs::write(
+        &f,
+        format!(
+            "{}{}{}",
+            // four labels; the latest three earlier ones are shown: two of them are labels
+            case("n1.md", "설비 견적 전에 어떻게 했지", Some(&["b1.md", "s1.md", "p1.md", "z1.md"])),
+            // no label: not in this measure
+            case("n1.md", "설비 견적 전에 어떻게 했지 (2)", None),
+            // labels all shown
+            case("n1.md", "설비 견적 전에 어떻게 했지 (3)", Some(&["b1.md", "s1.md", "v1.md"])),
+        ),
+    )
+    .unwrap();
     let cases = eval::load(&f).unwrap();
     let m = Picks(r#"{"search": true, "words": ["설비"], "precedent": true}"#.into());
     let out = eval::run(&mut lib, Some(&m), &t.p.vault, &cases, 8).unwrap();
     assert_eq!(out[0].model_rank, Some(1), "the matter at hand comes first");
-    assert_eq!((out[0].earlier_shown, out[1].earlier_shown), (Some(true), Some(false)));
-    assert_eq!(eval::summary(&out)[&Kind::Precedent].earlier, (1, 2));
+    let e = out[0].earlier.expect("scored");
+    assert_eq!((e.labels, e.found, e.shown, e.right), (4, 2, 3, 2), "{e:?}");
+    assert!(out[1].earlier.is_none(), "no label: left out of this measure");
+    let e = out[2].earlier.expect("scored");
+    assert_eq!((e.labels, e.found, e.shown, e.right), (3, 3, 3, 3), "{e:?}");
+
+    let s = &eval::summary(&out)[&Kind::Precedent].earlier;
+    assert_eq!(s.cases, 2);
+    assert!((s.found_avg().unwrap() - (2.0 / 3.0 + 1.0) / 2.0).abs() < 1e-9, "{s:?}");
+    assert!((s.exact_avg().unwrap() - (2.0 / 3.0 + 1.0) / 2.0).abs() < 1e-9, "{s:?}");
+    assert_eq!((s.any, s.none), (2, 0));
+}
+
+/// A matter with no earlier one shows none: how exact is not defined, it is counted as "none shown" apart.
+#[test]
+fn the_eval_counts_a_case_with_no_earlier_matter_shown_apart_and_leaves_it_out_of_how_exact() {
+    use life_server::librarian::eval::{self, Kind};
+    let t = T::new();
+    t.quote("n", "다른 담당 <z@other.co.kr>", "다른 곳 견적", "2026-05-05");
+    let mut lib = t.built();
+    let thread = |name: &str| lib.thread_of(&t.p.vault.join("Mail/2026").join(name).to_string_lossy()).unwrap();
+    let f = t.p.data.join("recall.toml");
+    fs::create_dir_all(f.parent().unwrap()).unwrap();
+    fs::write(
+        &f,
+        format!(
+            "[[case]]\nkind = \"precedent\"\nq = \"다른 곳 견적 전에 어떻게 했지\"\nthread = \"{}\"\nearlier = [\"{}\"]\n",
+            thread("n1.md"),
+            "mail:<label-not-shown@x>"
+        ),
+    )
+    .unwrap();
+    let cases = eval::load(&f).unwrap();
+    let m = Picks(r#"{"search": true, "words": ["다른 곳"], "precedent": true}"#.into());
+    let out = eval::run(&mut lib, Some(&m), &t.p.vault, &cases, 8).unwrap();
+    let e = out[0].earlier.expect("scored");
+    assert_eq!((e.found, e.shown), (0, 0), "{e:?}");
+    let s = &eval::summary(&out)[&Kind::Precedent].earlier;
+    assert_eq!((s.cases, s.none, s.any), (1, 1, 0));
+    assert_eq!(s.exact_avg(), None, "not defined when nothing is shown");
+    assert_eq!(s.found_avg(), Some(0.0));
 }
 
 /// A question about a kind of work (#95, the user's choice A): it names no matter, no one and nothing of its own,

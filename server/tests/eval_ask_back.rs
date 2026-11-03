@@ -113,3 +113,96 @@ fn without_the_model_no_asking_back_is_shown() {
     let out = eval::run(&mut lib, None, &p.vault, &cs, 8).unwrap();
     assert_eq!(eval::summary(&out)[&Kind::Status].asked_label(), None);
 }
+
+// ---- cases that expect asking back (ADR 0006) ----
+
+fn file(p: &Paths, text: &str) -> std::path::PathBuf {
+    let f = p.data.join("expect.toml");
+    fs::create_dir_all(f.parent().unwrap()).unwrap();
+    fs::write(&f, text).unwrap();
+    f
+}
+
+fn ask_case(candidates: &[String]) -> String {
+    let l: Vec<String> = candidates.iter().map(|c| format!("\"{c}\"")).collect();
+    format!(
+        "[[case]]\nkind = \"status\"\nq = \"견적 건 어떻게 됐지\"\nexpect = \"ask\"\ncandidates = [{}]\n",
+        l.join(", ")
+    )
+}
+
+struct Nothing;
+impl Model for Nothing {
+    fn complete(&self, _: &[Value], _: Ask) -> anyhow::Result<String> {
+        Ok(r#"{"search": false}"#.into())
+    }
+}
+
+#[test]
+fn an_ask_case_is_asked_back_and_scored_by_how_many_of_its_candidates_were_listed() {
+    let (_d, p, mut lib) = built(&[4, 3, 3, 2]);
+    // three listed at most: a, b, c; the fourth matter is not among them
+    let cs = [thread(&lib, &p, "a0.md"), thread(&lib, &p, "d0.md")];
+    let cases = eval::load(&file(&p, &ask_case(&cs))).unwrap();
+    let out = eval::run(&mut lib, Some(&One), &p.vault, &cases, 8).unwrap();
+    assert!(out[0].asked_matters);
+    assert_eq!(out[0].candidate_hit, Some(0.5), "one of two listed, over min(3, 2)");
+    let s = eval::ask_summary(&out);
+    assert_eq!((s.should_ask.0, s.should_ask.1), (1, 1));
+    assert_eq!(s.candidates_avg(), Some(0.5));
+    assert_eq!(s.should_answer, (0, 0));
+    // asking back is no found/miss count of the kind
+    assert!(!eval::summary(&out).contains_key(&Kind::Status));
+}
+
+#[test]
+fn an_ask_case_that_is_answered_is_not_asked_and_has_no_candidate_hit() {
+    let (_d, p, mut lib) = built(&[11, 2]);
+    let cs = [thread(&lib, &p, "a0.md"), thread(&lib, &p, "b0.md")];
+    let cases = eval::load(&file(&p, &ask_case(&cs))).unwrap();
+    let out = eval::run(&mut lib, Some(&One), &p.vault, &cases, 8).unwrap();
+    assert!(!out[0].asked_matters);
+    assert_eq!(out[0].candidate_hit, None);
+    let s = eval::ask_summary(&out);
+    assert_eq!(s.should_ask, (0, 1));
+    assert_eq!(s.candidates_avg(), None);
+    // a model that looks nothing up does not ask either
+    let out = eval::run(&mut lib, Some(&Nothing), &p.vault, &cases, 8).unwrap();
+    assert_eq!(eval::ask_summary(&out).should_ask, (0, 1));
+}
+
+#[test]
+fn a_case_without_expect_that_is_asked_back_counts_as_asked_unnecessarily() {
+    let (_d, p, mut lib) = built(&[4, 3, 3, 2]);
+    let cs = status(&p, &thread(&lib, &p, "b0.md"));
+    let out = eval::run(&mut lib, Some(&One), &p.vault, &cs, 8).unwrap();
+    let s = eval::ask_summary(&out);
+    assert_eq!(s.should_answer, (1, 1));
+    assert_eq!(s.should_ask, (0, 0));
+    // an explicit "answer" is the same
+    let f = file(
+        &p,
+        &format!(
+            "[[case]]\nkind = \"status\"\nq = \"견적 건 어떻게 됐지\"\nexpect = \"answer\"\nthread = \"{}\"\n",
+            thread(&lib, &p, "b0.md")
+        ),
+    );
+    let out = eval::run(&mut lib, Some(&One), &p.vault, &eval::load(&f).unwrap(), 8).unwrap();
+    assert_eq!(eval::ask_summary(&out).should_answer, (1, 1));
+    // the status score is as before
+    assert_eq!(eval::summary(&out)[&Kind::Status].model, (1, 1));
+}
+
+#[test]
+fn an_ask_case_needs_two_or_more_candidates_and_no_thread() {
+    let (_d, p, lib) = built(&[2, 2]);
+    let t = thread(&lib, &p, "a0.md");
+    for text in [
+        ask_case(std::slice::from_ref(&t)),
+        format!("[[case]]\nkind = \"status\"\nq = \"견적 건 어떻게 됐지\"\nexpect = \"ask\"\nthread = \"{t}\"\n"),
+    ] {
+        let e = eval::load(&file(&p, &text)).unwrap_err().to_string();
+        assert!(e.contains("case 1") && e.contains("candidates"), "{e}");
+        assert!(!e.contains("견적"), "the question is not quoted: {e}");
+    }
+}
