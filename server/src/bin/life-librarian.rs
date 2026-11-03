@@ -221,10 +221,10 @@ fn measure(lib: &mut Librarian, paths: &Paths, file: &std::path::Path, k: usize,
         };
         let model =
             if s.model.1 > 0 { format!(", 모델이 고른 검색어 {}", pct(s.model)) } else { String::new() };
-        let asked = if s.asked > 0 {
-            format!(", 되물음 {}회 (후보에 있으면 찾은 것으로 셈)", s.asked)
-        } else {
-            String::new()
+        let asked = match s.asked_label() {
+            Some(a) if s.asked > 0 => format!(", {a} (후보에 있으면 찾은 것으로 셈)"),
+            Some(a) => format!(", {a}"),
+            None => String::new(),
         };
         println!("재현율@{k} {}: 말 그대로 {}{model}{asked}", kind.label(), pct(s.raw));
     }

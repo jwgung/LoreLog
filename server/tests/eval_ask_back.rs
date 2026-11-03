@@ -78,6 +78,7 @@ fn asked_back_with_the_matter_among_the_candidates_is_found_and_counted_as_asked
     let s = eval::summary(&out);
     assert_eq!(s[&Kind::Status].model, (1, 1));
     assert_eq!(s[&Kind::Status].asked, 1);
+    assert_eq!(s[&Kind::Status].asked_label().as_deref(), Some("되물음 1/1"), "out of the questions asked");
 }
 
 #[test]
@@ -102,4 +103,13 @@ fn answered_without_asking_is_ranked_as_before_and_not_counted_as_asked() {
     let s = eval::summary(&out);
     assert_eq!(s[&Kind::Status].model, (1, 1));
     assert_eq!(s[&Kind::Status].asked, 0);
+    assert_eq!(s[&Kind::Status].asked_label().as_deref(), Some("되물음 0/1"), "not asking is shown too");
+}
+
+#[test]
+fn without_the_model_no_asking_back_is_shown() {
+    let (_d, p, mut lib) = built(&[4, 3]);
+    let cs = status(&p, &thread(&lib, &p, "a0.md"));
+    let out = eval::run(&mut lib, None, &p.vault, &cs, 8).unwrap();
+    assert_eq!(eval::summary(&out)[&Kind::Status].asked_label(), None);
 }

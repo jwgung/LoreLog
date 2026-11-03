@@ -340,6 +340,14 @@ pub struct Score {
     pub asked: usize,
 }
 
+impl Score {
+    /// How often the assistant asked back, out of the questions its words were picked for (`되물음 3/15`); None when
+    /// no model was asked (nothing is asked back then). A specific question should not be asked back (#93).
+    pub fn asked_label(&self) -> Option<String> {
+        (self.model.1 > 0).then(|| format!("되물음 {}/{}", self.asked, self.model.1))
+    }
+}
+
 pub fn summary(results: &[Result1]) -> BTreeMap<Kind, Score> {
     let mut out: BTreeMap<Kind, Score> = BTreeMap::new();
     for r in results.iter().filter(|r| r.kind != Kind::Pending) {
