@@ -548,6 +548,8 @@ pub struct Picked {
     pub matter: Option<String>,
     /// how something like it was done before is asked (#95): the earlier matters like the one at hand are gathered
     pub precedent: bool,
+    /// the user's message as said: what is embedded to find the matter by meaning (ADR 0007)
+    pub question: String,
 }
 
 impl Picked {
@@ -629,7 +631,9 @@ pub fn pick_in(
     let picked = model
         .complete(&messages, crate::llm::Ask::new(0.0, 120, true, WORDS_TIMEOUT_S))
         .and_then(|t| crate::llm::parse_json(&t));
-    let Ok(d) = picked else { return Some(Picked { words: vec![message.to_string()], ..Picked::default() }) };
+    let Ok(d) = picked else {
+        return Some(Picked { words: vec![message.to_string()], question: message.to_string(), ..Picked::default() });
+    };
     if !matches!(d.get("search"), Some(Value::Bool(true))) && d.get("search").and_then(Value::as_str) != Some("true") {
         return None;
     }
@@ -666,6 +670,7 @@ pub fn pick_in(
             .and_then(chosen_matter)
             .filter(|m| before.is_some_and(|b| offered(b).contains(m))),
         precedent: yes("precedent"),
+        question: message.to_string(),
     };
     // "요즘 OO 님이랑 뭐 있었지", "요즘 지원사업 공고 뭐 있었지" ask about records, not what hangs: a small model
     // takes 요즘 for a period. "요즘 밀린 거" names nothing.
@@ -691,6 +696,11 @@ pub fn pick_in(
 pub trait Index {
     fn update(&mut self) -> anyhow::Result<crate::librarian::Report>;
     fn search(&mut self, q: &str, limit: usize, day: &str, said: &[String]) -> anyhow::Result<Vec<Value>>;
+    /// The matters nearest in meaning to the question (ADR 0007), as [`Index::search`] gives them, or None when they
+    /// cannot be found that way (no embedding model, no vector yet, the server not answering): the words are searched.
+    fn meaning(&mut self, _question: &str, _limit: usize) -> Option<Vec<Value>> {
+        None
+    }
     /// What was with the people of these names up to `day` (narrowed by `q`), the people to ask about when the name is
     /// more than one and nothing tells them apart, or None when no name is someone in the records.
     fn with_names(&mut self, _names: &[String], _q: &str, _day: &str, _limit: usize) -> anyhow::Result<Option<Named>> {
@@ -925,7 +935,14 @@ fn found(lib: &mut dyn Index, p: &Picked, limit: usize, day: &str, said: &[Strin
         });
     }
     let all: Vec<String> = p.people.iter().chain(&p.orgs).chain(&p.things).chain(&p.words).cloned().collect();
-    let words = if all.is_empty() { Vec::new() } else { lib.search(&all.join(" "), limit, day, said)? };
+    // the matter by meaning when it can be (ADR 0007), else by the words; never the two mixed
+    let words = if all.is_empty() {
+        Vec::new()
+    } else if let Some(hits) = lib.meaning(&p.question, limit) {
+        hits
+    } else {
+        lib.search(&all.join(" "), limit, day, said)?
+    };
     Ok(Named::Hits(merged(graph, words, limit)))
 }
 
@@ -1021,6 +1038,41 @@ impl Index for crate::librarian::Librarian {
 
     fn search(&mut self, q: &str, limit: usize, day: &str, said: &[String]) -> anyhow::Result<Vec<Value>> {
         crate::librarian::Librarian::search(self, q, limit, Some(crate::librarian::Exclude::Words(day, said)))
+    }
+
+    fn meaning(&mut self, question: &str, limit: usize) -> Option<Vec<Value>> {
+        let e = self.embedder.clone()?;
+        if question.trim().is_empty() {
+            return None;
+        }
+        // (the log says why, never the question)
+        let model = e.model();
+        if !self.has_vectors(&model) {
+            log::info!("librarian: no vectors of the embedding model yet; searching by words");
+            return None;
+        }
+        let q = match e.embed(&[format!("{}{question}", crate::librarian::vectors::EMBED_INSTRUCT)]) {
+            Ok(mut v) if v.len() == 1 && !v[0].is_empty() => v.remove(0),
+            Ok(_) => {
+                log::warn!("librarian: embedding answered no vector; searching by words");
+                return None;
+            }
+            Err(err) => {
+                log::warn!(
+                    "librarian: embedding failed ({}); searching by words",
+                    crate::librarian::vectors::why(&err)
+                );
+                return None;
+            }
+        };
+        match self.semantic(&model, &q, limit) {
+            Ok(hits) if !hits.is_empty() => Some(hits),
+            Ok(_) => None,
+            Err(err) => {
+                log::warn!("librarian: search by meaning failed ({}); searching by words", first_word(&err));
+                None
+            }
+        }
     }
 
     fn with_names(&mut self, names: &[String], q: &str, day: &str, limit: usize) -> anyhow::Result<Option<Named>> {
@@ -1220,7 +1272,9 @@ pub fn find_with_sources(
     before: Option<&str>,
 ) -> Option<Recalled> {
     let open = || -> anyhow::Result<Box<dyn Index>> {
-        Ok(Box::new(crate::librarian::Librarian::open(paths, None, LOCK_WAIT)?))
+        let mut lib = crate::librarian::Librarian::open(paths, None, LOCK_WAIT)?;
+        lib.embedder = crate::host::Models::load(paths).embedder(); // none set: by words, as before
+        Ok(Box::new(lib))
     };
     let (section, words, found) = asked(open, model, message, day, said, before);
     crate::librarian::asks::record(paths, day, message, words.as_deref(), &found);
