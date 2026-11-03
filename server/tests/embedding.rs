@@ -359,3 +359,117 @@ fn saving_the_settings_screen_keeps_the_embedding_model() {
     life_server::host::save_models(&p, &screen).unwrap();
     assert_eq!(life_server::host::saved_models(&p).embed_model, "m");
 }
+
+// ---------- the server's answer, over real HTTP ----------
+
+/// A one-request server on a free local port answering `body` as JSON; -> its address as `LIFE_LLM_URL` gives it.
+fn stub(body: String) -> String {
+    use std::io::{BufRead, BufReader, Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let Ok((stream, _)) = listener.accept() else { return };
+        let mut reader = BufReader::new(stream);
+        let mut len = 0;
+        loop {
+            let mut line = String::new();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                break;
+            }
+            if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                len = v.trim().parse().unwrap_or(0);
+            }
+        }
+        let mut sent = vec![0; len];
+        let _ = reader.read_exact(&mut sent);
+        let mut stream = reader.into_inner();
+        let _ = write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+    });
+    format!("http://{addr}/v1")
+}
+
+fn ask_stub(body: &str, n: usize) -> anyhow::Result<Vec<Vec<f32>>> {
+    let e = life_server::llm::HttpEmbedder { url: stub(body.to_string()), model: "m".into() };
+    let texts: Vec<String> = (0..n).map(|i| format!("t{i}")).collect();
+    e.embed(&texts)
+}
+
+#[test]
+fn the_servers_vectors_come_back_in_the_order_of_the_texts() {
+    let ok = r#"{"data": [{"index": 0, "embedding": [1, 0]}, {"index": 1, "embedding": [0, 1]}]}"#;
+    assert_eq!(ask_stub(ok, 2).unwrap(), vec![vec![1.0, 0.0], vec![0.0, 1.0]]);
+    let shuffled = r#"{"data": [{"index": 1, "embedding": [0, 1]}, {"index": 0, "embedding": [1, 0]}]}"#;
+    assert_eq!(ask_stub(shuffled, 2).unwrap(), vec![vec![1.0, 0.0], vec![0.0, 1.0]]);
+}
+
+#[test]
+fn an_answer_that_is_not_one_good_vector_per_text_is_an_error() {
+    let cases = [
+        ("count", r#"{"data": [{"index": 0, "embedding": [1, 0]}]}"#.to_string()),
+        ("empty", r#"{"data": [{"index": 0, "embedding": []}, {"index": 1, "embedding": [1]}]}"#.to_string()),
+        ("no data", r#"{"object": "list"}"#.to_string()),
+        (
+            "not a number",
+            r#"{"data": [{"index": 0, "embedding": [1, "x"]}, {"index": 1, "embedding": [0, 1]}]}"#.to_string(),
+        ),
+        // too large for f32: infinite once it is one
+        (
+            "infinite",
+            r#"{"data": [{"index": 0, "embedding": [1e300, 0]}, {"index": 1, "embedding": [0, 1]}]}"#.to_string(),
+        ),
+        ("too long", {
+            let long = vec!["0.1"; life_server::llm::MAX_DIM + 1].join(",");
+            format!(r#"{{"data": [{{"index": 0, "embedding": [{long}]}}, {{"index": 1, "embedding": [{long}]}}]}}"#)
+        }),
+    ];
+    for (what, body) in cases {
+        assert!(ask_stub(&body, 2).is_err(), "{what}");
+    }
+}
+
+/// A fake answering the same vector for every text.
+struct Fixed(Vec<f32>);
+
+impl Embedder for Fixed {
+    fn model(&self) -> String {
+        "fake".into()
+    }
+    fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|_| self.0.clone()).collect())
+    }
+}
+
+#[test]
+fn vectors_that_are_not_finite_or_too_long_are_not_kept() {
+    let mut t = T::new();
+    t.world();
+    for bad in [vec![f32::NAN, 1.0], vec![f32::INFINITY, 1.0], vec![0.1; life_server::llm::MAX_DIM + 1]] {
+        let r = t.lib.embed_missing(&Fixed(bad)).unwrap();
+        assert_eq!((r.embedded, r.failed), (0, 4));
+    }
+    assert_eq!(t.lib.vector_count("fake"), 0);
+}
+
+#[test]
+fn a_damaged_vector_is_passed_over_and_the_others_are_searched() {
+    let mut t = T::new();
+    t.world();
+    let e = WordsEmbedder::new("fake");
+    t.lib.embed_missing(&e).unwrap();
+    {
+        let db = rusqlite::Connection::open(&t.lib.path).unwrap();
+        db.execute(
+            "update vectors set vec = x'00000000' where hash = (select ehash from docs where title = '출장 보고')",
+            [],
+        )
+        .unwrap();
+    }
+    let hits = t.lib.semantic("fake", &query(&e, "부산 출장 보고"), 8).unwrap();
+    let ts = titles(&hits);
+    assert!(!ts.iter().any(|x| x.contains("출장")), "{ts:?}");
+    assert_eq!(ts.len(), 2, "the mould matter and the meeting");
+}

@@ -88,6 +88,9 @@ pub trait Embedder: Send + Sync {
     fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>>;
 }
 
+/// The longest vector taken from a server (a 4B model gives 2560): longer is an error, not kept.
+pub const MAX_DIM: usize = 8192;
+
 /// How long one embedding request may take.
 pub const EMBED_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -121,8 +124,16 @@ impl Embedder for HttpEmbedder {
                 .as_array()
                 .ok_or_else(|| anyhow::anyhow!("no embedding in the answer"))?
                 .iter()
-                .map(|x| x.as_f64().map(|x| x as f32).ok_or_else(|| anyhow::anyhow!("not a number")))
+                .map(|x| {
+                    x.as_f64()
+                        .map(|x| x as f32)
+                        .filter(|x| x.is_finite())
+                        .ok_or_else(|| anyhow::anyhow!("not a number"))
+                })
                 .collect::<anyhow::Result<_>>()?;
+            if vec.len() > MAX_DIM {
+                anyhow::bail!("a vector longer than {MAX_DIM}");
+            }
             out.push((d["index"].as_u64().unwrap_or(i as u64), vec));
         }
         out.sort_by_key(|(i, _)| *i);

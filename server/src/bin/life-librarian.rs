@@ -31,8 +31,9 @@ Command line of the librarian (사서): keep the index of every record and searc
                          how well the librarian finds what the questions in FILE are about (recall@N, default 8),
                          with the words as asked and with the words the chat model picks (--no-model: only the
                          first). With an embedding model set, the assistant's lookup finds the matter by meaning
-                         (--no-embed: by the words, to compare). FILE holds real names and subjects: keep it outside the repository (e.g.
-                         <data>/eval/recall.toml). Searches the index as it is; nothing is written.
+                         (--no-embed: by the words, to compare). FILE holds real names and subjects: keep it
+                         outside the repository (e.g. <data>/eval/recall.toml). Searches the index as it is;
+                         nothing is written.
 
 The index is a copy at <data>/librarian.sqlite (mode 600). Only records the diary rules allow are indexed:
 messengers the user allowed, voice in conversations the diary counts as the user's. Deleting the file loses nothing.";
@@ -208,7 +209,7 @@ fn embed(lib: &mut Librarian, paths: &Paths) -> ExitCode {
     };
     match lib.embed_missing_with(e.as_ref(), &mut progress) {
         Ok(x) => {
-            println!("{}", sync::embedded_line(&x, t.elapsed().as_secs_f64()).trim_start_matches("; "));
+            println!("{}", sync::embedded_line("", &x, t.elapsed().as_secs_f64()));
             if x.stopped { ExitCode::FAILURE } else { ExitCode::SUCCESS }
         }
         Err(err) if err.downcast_ref::<Outdated>().is_some() => {

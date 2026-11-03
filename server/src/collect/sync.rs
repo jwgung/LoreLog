@@ -501,7 +501,7 @@ pub fn librarian(paths: &Paths, rebuild: bool, out: Out) -> Outcome {
         if let Some(e) = crate::host::Models::load(paths).embedder() {
             let t = Instant::now();
             match lib.embed_missing(e.as_ref()) {
-                Ok(x) => line += &embedded_line(&x, t.elapsed().as_secs_f64()),
+                Ok(x) => line += &embedded_line("; ", &x, t.elapsed().as_secs_f64()),
                 Err(err) => log::warn!("embedding failed: {}", crate::librarian::vectors::why(&err)),
             }
         }
@@ -519,14 +519,14 @@ pub fn librarian(paths: &Paths, rebuild: bool, out: Out) -> Outcome {
     }
 }
 
-/// How an embedding run went, as the librarian's line ends.
-pub fn embedded_line(x: &crate::librarian::vectors::EmbedReport, secs: f64) -> String {
+/// How an embedding run went, after `lead` (what joins it to the line it ends, "" for a line of its own).
+pub fn embedded_line(lead: &str, x: &crate::librarian::vectors::EmbedReport, secs: f64) -> String {
     let failed = if x.failed > 0 {
         format!(", {} failed{}", x.failed, if x.stopped { " (server not answering; the rest next time)" } else { "" })
     } else {
         String::new()
     };
-    format!("; embedded {} ({} already){failed} ({secs:.1}s)", x.embedded, x.skipped)
+    format!("{lead}embedded {} ({} already){failed} ({secs:.1}s)", x.embedded, x.skipped)
 }
 
 // ---------- a whole sync ----------

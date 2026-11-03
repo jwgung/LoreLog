@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 
 use super::index::{Bound, Librarian};
 use super::records::Doc;
-use crate::llm::Embedder;
+use crate::llm::{Embedder, MAX_DIM};
 
 /// Texts sent in one request.
 pub const EMBED_BATCH: usize = 16;
@@ -106,14 +106,37 @@ pub fn why(e: &anyhow::Error) -> String {
     "bad answer".into()
 }
 
+/// A text to embed: its hash and the first document that has it.
+struct Todo {
+    hash: String,
+    n: i64,
+}
+
+/// A document as searched by its vector.
+struct Row {
+    n: i64,
+    case: Option<String>,
+}
+
 /// The vectors of one model and size as searched: one row per document.
 struct Matrix {
     token: Option<String>,
     model: String,
     dim: usize,
-    /// (document, its matter)
-    ids: Vec<(i64, Option<String>)>,
+    ids: Vec<Row>,
     data: Vec<f32>,
+}
+
+/// The server's answer, if it holds one vector per text, all of one size up to [`MAX_DIM`], every value finite.
+fn check_shape(vs: Vec<Vec<f32>>, texts: usize) -> anyhow::Result<Vec<Vec<f32>>> {
+    let dim = vs.first().map(Vec::len).unwrap_or(0);
+    if vs.len() != texts || dim == 0 || dim > MAX_DIM || vs.iter().any(|v| v.len() != dim) {
+        anyhow::bail!("the answer does not hold one vector of one size per text");
+    }
+    if vs.iter().flatten().any(|x| !x.is_finite()) {
+        anyhow::bail!("the answer holds a value that is not a number");
+    }
+    Ok(vs)
 }
 
 /// The vectors last read, per index file.
@@ -155,13 +178,13 @@ impl Librarian {
             Ok(())
         })?;
         // one text per hash (a mail kept twice is embedded once), the oldest documents first
-        let todo: Vec<(String, i64)> = {
+        let todo: Vec<Todo> = {
             let mut st = self.db.prepare(
                 "select ehash, min(n) from docs d where ehash is not null
                  and not exists (select 1 from vectors v where v.model = ?1 and v.hash = d.ehash)
                  group by ehash order by min(n)",
             )?;
-            st.query_map([&model], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+            st.query_map([&model], |r| Ok(Todo { hash: r.get(0)?, n: r.get(1)? }))?.collect::<rusqlite::Result<_>>()?
         };
         let all: i64 =
             self.db.query_row("select count(distinct ehash) from docs where ehash is not null", [], |r| r.get(0))?;
@@ -169,31 +192,15 @@ impl Librarian {
         let mut failures = 0;
         for batch in todo.chunks(EMBED_BATCH) {
             let mut texts = Vec::with_capacity(batch.len());
-            for (_, n) in batch {
+            for t in batch {
                 let (title, text): (String, String) =
                     self.db
-                        .query_row("select title, text from docs where n = ?", [n], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                        .query_row("select title, text from docs where n = ?", [t.n], |r| Ok((r.get(0)?, r.get(1)?)))?;
                 texts.push(embed_text(&title, &text));
             }
-            let answer = e.embed(&texts).and_then(|vs| {
-                let dim = vs.first().map(Vec::len).unwrap_or(0);
-                if vs.len() != texts.len() || dim == 0 || vs.iter().any(|v| v.len() != dim) {
-                    anyhow::bail!("the answer does not hold one vector of one size per text");
-                }
-                Ok(vs)
-            });
-            match answer {
+            match e.embed(&texts).and_then(|vs| check_shape(vs, texts.len())) {
                 Ok(vs) => {
-                    self.in_write(|me| {
-                        let mut st = me.db.prepare_cached(
-                            "insert or replace into vectors(model, hash, dim, vec) values (?, ?, ?, ?)",
-                        )?;
-                        for ((h, _), v) in batch.iter().zip(&vs) {
-                            st.execute(params![model, h, v.len() as i64, to_blob(&unit(v))])?;
-                        }
-                        bump(&me.db)?;
-                        Ok(())
-                    })?;
+                    self.store_batch(&model, batch, &vs)?;
                     report.embedded += batch.len();
                     failures = 0;
                 }
@@ -220,6 +227,19 @@ impl Librarian {
         Ok(report)
     }
 
+    /// Keep a batch's vectors (of unit length), in one write.
+    fn store_batch(&mut self, model: &str, batch: &[Todo], vs: &[Vec<f32>]) -> anyhow::Result<()> {
+        self.in_write(|me| {
+            let mut st =
+                me.db.prepare_cached("insert or replace into vectors(model, hash, dim, vec) values (?, ?, ?, ?)")?;
+            for (t, v) in batch.iter().zip(vs) {
+                st.execute(params![model, t.hash, v.len() as i64, to_blob(&unit(v))])?;
+            }
+            bump(&me.db)?;
+            Ok(())
+        })
+    }
+
     /// The matters whose documents are nearest in meaning to `q` (a question's vector of `model`), one hit per matter
     /// (its nearest document), the nearest first, up to `limit`; each as [`Librarian::search`] gives it, `score` the
     /// dot product of the unit vectors. Nothing when no document has a vector of that model and size.
@@ -242,7 +262,7 @@ impl Librarian {
                 if out.len() >= limit {
                     break;
                 }
-                let (n, case) = &m.ids[i];
+                let Row { n, case } = &m.ids[i];
                 if !seen.insert(case.clone().unwrap_or_else(|| format!("#{n}"))) {
                     continue;
                 }
@@ -279,7 +299,7 @@ impl Librarian {
                 if blob.len() != dim * 4 {
                     continue;
                 }
-                ids.push((r.get::<_, i64>(0)?, r.get::<_, Option<String>>(1)?));
+                ids.push(Row { n: r.get(0)?, case: r.get(1)? });
                 data.extend(from_blob(&blob));
             }
         }
