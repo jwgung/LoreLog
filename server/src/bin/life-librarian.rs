@@ -11,11 +11,14 @@ use life_server::llm::Model;
 use serde_json::Value;
 
 const HELP: &str = "\
-usage: life-librarian {update,rebuild,search,stats,eval,graph} ...
+usage: life-librarian {update,rebuild,search,stats,eval,graph,embed} ...
 
 Command line of the librarian (사서): keep the index of every record and search it.
 
-  update                 index new and changed records, forget removed ones (life sync runs this)
+  update                 index new and changed records, forget removed ones (life sync runs this), then embed the
+                         new ones when an embedding model is set
+  embed                  embed the documents that have no vector yet (LIFE_EMBED_MODEL on the LIFE_LLM_URL server;
+                         update does this too). Prints how many, never what
   rebuild                throw the index away and build it again from the records
   search WORDS... [--limit N]
                          what the librarian finds for these words, across all days
@@ -24,11 +27,13 @@ Command line of the librarian (사서): keep the index of every record and searc
                          puts what they say into the graph: who and what they are about, roles, states, documents
   graph show NODE        a node (org:<domain>, person:<address>, case:<n>, …) with its names and relations, each with
                          the key to correct it by (POST /corrections, ref edge:<key>)
-  eval FILE [--k N] [--no-model]
+  eval FILE [--k N] [--no-model] [--no-embed]
                          how well the librarian finds what the questions in FILE are about (recall@N, default 8),
                          with the words as asked and with the words the chat model picks (--no-model: only the
-                         first). FILE holds real names and subjects: keep it outside the repository (e.g.
-                         <data>/eval/recall.toml). Searches the index as it is; nothing is written.
+                         first). With an embedding model set, the assistant's lookup finds the matter by meaning
+                         (--no-embed: by the words, to compare). FILE holds real names and subjects: keep it
+                         outside the repository (e.g. <data>/eval/recall.toml). Searches the index as it is;
+                         nothing is written.
 
 The index is a copy at <data>/librarian.sqlite (mode 600). Only records the diary rules allow are indexed:
 messengers the user allowed, voice in conversations the diary counts as the user's. Deleting the file loses nothing.";
@@ -37,7 +42,9 @@ const OUTDATED: &str =
     "the index is from another version or not built yet, and is not searched: run `life-librarian update` first";
 
 fn usage(msg: &str) -> ExitCode {
-    eprintln!("usage: life-librarian {{update,rebuild,search,stats,eval,graph}} ...\nlife-librarian: error: {msg}");
+    eprintln!(
+        "usage: life-librarian {{update,rebuild,search,stats,eval,graph,embed}} ...\nlife-librarian: error: {msg}"
+    );
     ExitCode::from(2)
 }
 
@@ -54,7 +61,7 @@ fn main() -> ExitCode {
     let cmd = args[0].as_str();
     let mut words = Vec::new();
     let mut limit = 10usize;
-    let (mut k, mut no_model) = (8usize, false);
+    let (mut k, mut no_model, mut no_embed) = (8usize, false, false);
     let mut rest = args[1..].iter();
     while let Some(a) = rest.next() {
         match a.as_str() {
@@ -67,11 +74,12 @@ fn main() -> ExitCode {
                 _ => return usage("argument --k: invalid int value"),
             },
             "--no-model" if cmd == "eval" => no_model = true,
+            "--no-embed" if cmd == "eval" => no_embed = true,
             _ if cmd == "search" || (cmd == "eval" && words.is_empty()) || cmd == "graph" => words.push(a.clone()),
             other => return usage(&format!("unrecognized arguments: {other}")),
         }
     }
-    if !matches!(cmd, "update" | "rebuild" | "search" | "stats" | "eval" | "graph") {
+    if !matches!(cmd, "update" | "rebuild" | "search" | "stats" | "eval" | "graph" | "embed") {
         return usage(&format!("argument cmd: invalid choice: '{cmd}'"));
     }
     if cmd == "search" && words.is_empty() {
@@ -127,7 +135,13 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if cmd == "embed" {
+        return embed(&mut lib, &paths);
+    }
     if cmd == "eval" {
+        if !no_embed {
+            lib.embedder = Models::load(&paths).embedder();
+        }
         return measure(&mut lib, &paths, std::path::Path::new(&words[0]), k, no_model);
     }
     let result: anyhow::Result<ExitCode> = (|| {
@@ -179,6 +193,36 @@ fn main() -> ExitCode {
     })
 }
 
+/// `embed`: the documents without a vector, embedded; how many, every 20 requests and at the end.
+fn embed(lib: &mut Librarian, paths: &Paths) -> ExitCode {
+    let Some(e) = Models::load(paths).embedder() else {
+        println!("embedding is off: no LIFE_EMBED_MODEL (or no LIFE_LLM_URL) is set");
+        return ExitCode::SUCCESS;
+    };
+    let t = std::time::Instant::now();
+    let mut calls = 0;
+    let mut progress = |done: usize, todo: usize| {
+        calls += 1;
+        if calls % 20 == 0 {
+            eprintln!("{done}/{todo} ({:.0}s)", t.elapsed().as_secs_f64());
+        }
+    };
+    match lib.embed_missing_with(e.as_ref(), &mut progress) {
+        Ok(x) => {
+            println!("{}", sync::embedded_line("", &x, t.elapsed().as_secs_f64()));
+            if x.stopped { ExitCode::FAILURE } else { ExitCode::SUCCESS }
+        }
+        Err(err) if err.downcast_ref::<Outdated>().is_some() => {
+            eprintln!("{OUTDATED}");
+            ExitCode::FAILURE
+        }
+        Err(err) => {
+            eprintln!("life-librarian: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// `eval`: every case on its own line, then recall@k per kind. Exit 1 when the file cannot be used.
 fn measure(lib: &mut Librarian, paths: &Paths, file: &std::path::Path, k: usize, no_model: bool) -> ExitCode {
     let cases = match eval::load(file) {
@@ -201,6 +245,13 @@ fn measure(lib: &mut Librarian, paths: &Paths, file: &std::path::Path, k: usize,
             return ExitCode::FAILURE;
         }
     };
+    // which way the assistant's lookup found the matter (ADR 0007)
+    match &lib.embedder {
+        Some(e) => {
+            println!("임베딩: 사용 ({} 벡터 {}개, 없거나 실패하면 낱말 검색)", e.model(), lib.vector_count(&e.model()))
+        }
+        None => println!("임베딩: 사용 안 함 (낱말 검색)"),
+    }
     let mark = |r: Option<usize>| r.map(|n| format!("O{n:>2}")).unwrap_or_else(|| "X -".into());
     for r in &results {
         let model = match &r.model_words {

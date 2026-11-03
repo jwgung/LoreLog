@@ -9,5 +9,6 @@ pub mod index;
 pub mod precedent;
 pub mod records;
 pub mod structure;
+pub mod vectors;
 
 pub use index::{Exclude, Librarian, Outdated, Report};

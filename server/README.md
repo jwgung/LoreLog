@@ -14,7 +14,7 @@ Rust 라이브러리 crate 하나(`life-server`)와 그 위의 실행 파일들�
 | `life` | 수집 소스 설정·실행(`life add mail`, `life add calendar`, `life add contacts`, `life sync`, `life status`). `contacts`는 CardDAV 주소록(가진 것 다, 사진만 뺌, `src/collect/carddav.rs`). `sync`는 아래 수집기를 차례로 돌리고 마지막에 사서 색인을 갱신한다(`--dry-run`일 때는 갱신하지 않는다). 다른 실행 파일을 띄우지 않고 같은 프로세스에서 `collect::sync`의 함수를 부른다 | `src/bin/life.rs`, `src/collect/sync.rs`, `src/collect/setup.rs` |
 | `life-ingest` | 폰·PC가 보내는 기록 수신, 일기·대화·할 일·받아쓰기 HTTP API | `src/http.rs`, `src/store.rs`, `src/filestore.rs`, `src/jobs.rs` |
 | `life-diary` | 하루 정리, 대화, 할 일, 메신저 허용을 명령줄로 | `src/assistant/` |
-| `life-librarian` | 사서. 모든 날의 기록에 색인을 얹고 찾아 준다(`update`, `rebuild`, `search`, `stats`). 사람 색인(메일 머리말·일정 참석자)으로 사람으로도 찾는다(#22). `eval FILE`은 질문과 나와야 할 기록의 짝으로 재현율@8을 잰다(말 그대로, 비서가 고른 검색어). 평가셋은 실제 이름·제목이 들어 있어 저장소 밖(`<data>/eval/`)에 둔다 | `src/librarian/`, `src/librarian/eval.rs`, `src/assistant/recall.rs` |
+| `life-librarian` | 사서. 모든 날의 기록에 색인을 얹고 찾아 준다(`update`, `rebuild`, `search`, `stats`). 사람 색인(메일 머리말·일정 참석자)으로 사람으로도 찾는다(#22). `embed`는 벡터가 없는 문서를 임베딩한다. `eval FILE`은 질문과 나와야 할 기록의 짝으로 재현율@8을 잰다(말 그대로, 비서가 고른 검색어. 임베딩이 설정돼 있으면 비서 쪽은 임베딩으로 찾고, `--no-embed`로 끈다). 평가셋은 실제 이름·제목이 들어 있어 저장소 밖(`<data>/eval/`)에 둔다 | `src/librarian/`, `src/librarian/eval.rs`, `src/assistant/recall.rs` |
 | `mail-sync`, `calendar-sync` | 메일·일정을 서랍의 `Mail/`, `Events/` 노트로(서버에는 읽기만) | `src/collect/sync.rs`, `src/collect/` |
 | `mail-files` | 보낸·받은 메일의 첨부 원본을 그대로 보관(`raw/files/<앞 2자>/<sha256>` + `raw/mailfile/<날짜>.ndjson`, 줄마다 `direction: sent|received`). 변환·요약 없이, 상대 주소는 복사하지 않는다 | `src/collect/sync.rs`, `src/collect/mailfiles.rs` |
 
@@ -27,6 +27,7 @@ Rust 라이브러리 crate 하나(`life-server`)와 그 위의 실행 파일들�
 - 한국어는 두 글자 단위로 색인해 조사가 붙은 말과 두 글자 단어도 찾는다. 분해된 한글(macOS 첨부 이름)과 전각 글자도 찾는다.
 - 같은 메일 스레드(References·In-Reply-To 헤더 기준)는 한 결과로 묶는다.
 - 사용자가 지난 일을 묻거나 이야기하면 비서가 검색어를 골라 사서에게 묻고, 찾은 기록(오늘 메일 본문 포함, 이미 대화에 들어간 줄은 뺀다)을 사용자의 말 앞에 인용 자료로 붙인다. 대화 기록에는 남기지 않는다. 사용자의 말은 결과 중 최대 2개다. 색인 갱신에 실패하면 이전 색인에서 찾고 최신이 아닐 수 있다고 알린다. 정정할 때와 기분만 말할 때는 묻지 않는다.
+- 임베딩(ADR 0007, 기본은 꺼짐): `LIFE_EMBED_MODEL`(ingest.env 또는 환경변수, 예 `Qwen/Qwen3-Embedding-4B`)을 두면 비서가 질문에 맞는 건을 낱말 대신 임베딩으로 찾는다. 서버는 대화 모델과 같은 `LIFE_LLM_URL`(사용자 자신의 사설망 서버, OpenAI 호환 `POST /embeddings`)이고 다른 곳으로는 보내지 않는다. 메일·첨부·일정의 제목과 본문 앞 1500자를 벡터로 만들어 같은 색인 파일(0600)에 두며, 색인처럼 지우면 사라지고 기록이 지워지면 다음 갱신에서 그 벡터도 지운다. 같은 글이면 다시 만들지 않으므로 색인을 다시 만들어도(스키마 18) 새로 묻지 않는다. `life-librarian update`·`rebuild`(`life sync`의 사서 갱신도 같은 경로)가 갱신 뒤에 새 문서만 임베딩하고, `life-librarian embed`로 따로 돌릴 수 있다(개수만 출력). 모델을 바꾸면 다른 모델의 벡터는 지우고 새로 만든다. 요청이 연속 3번 실패하면 멈추고 나머지는 다음 실행에서 이어 한다(`life-librarian embed`는 이때 실패 종료 코드). 채팅 중에는 새 문서를 임베딩하지 않으므로 다음 sync 전까지 새 메일·첨부·일정은 의미 검색에 잡히지 않는다(벡터가 일부만 있으면 있는 것만 검색한다). 서버가 없거나 응답하지 않거나 아직 벡터가 없으면 지금처럼 낱말로 찾는다(로그에 이유 한 줄, 질문·문서 내용은 남기지 않음). 설정 화면에는 없고 설정 화면 저장은 이 값을 지우지 않는다.
 
 ## 설치
 Rust 툴체인(저장소 루트의 `rust-toolchain.toml`)이 필요하다. `deploy/install.sh`가 release로 빌드해 실행 파일을 `~/.local/lib/life/bin/`에 복사하고 `~/.local/bin/`에서 링크로 가리키게 하며, `deploy/systemd/`의 유닛을 `~/.config/systemd/user/`에 둔다(이전 실행 파일과 바뀌는 유닛은 `~/.local/share/life-install-backup/`에 백업). 복사해서 두므로, 나중에 어느 체크아웃에서 빌드해도 돌고 있는 서비스는 바뀌지 않는다. 바꾸려면 install.sh를 다시 돌린다.

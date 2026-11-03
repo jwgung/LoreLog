@@ -79,6 +79,105 @@ pub fn parse_json(text: &str) -> anyhow::Result<Value> {
     Ok(serde_json::from_str(&text[a..=b])?)
 }
 
+// ---------- embedding (ADR 0007) ----------
+
+pub trait Embedder: Send + Sync {
+    /// The model's name: a vector is compared only with vectors of the same model.
+    fn model(&self) -> String;
+    /// One vector per text, in order.
+    fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>>;
+}
+
+/// The longest vector taken from a server (a 4B model gives 2560): longer is an error, not kept.
+pub const MAX_DIM: usize = 8192;
+
+/// How long one embedding request may take.
+pub const EMBED_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The user's embedding model (`LIFE_EMBED_MODEL`) on the user's model server (`LIFE_LLM_URL`; OpenAI-compatible
+/// `POST {url}/embeddings`). Only that server is asked: there is no built-in one.
+pub struct HttpEmbedder {
+    pub url: String,
+    pub model: String,
+}
+
+impl Embedder for HttpEmbedder {
+    fn model(&self) -> String {
+        self.model.clone()
+    }
+
+    fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+        if texts.is_empty() {
+            return Ok(Vec::new());
+        }
+        if self.url.is_empty() || self.model.is_empty() {
+            anyhow::bail!("임베딩 모델이 설정되지 않았습니다");
+        }
+        let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(EMBED_TIMEOUT)).build().into();
+        let url = format!("{}/embeddings", self.url.trim_end_matches('/'));
+        let v: Value =
+            agent.post(&url).send_json(json!({"model": self.model, "input": texts}))?.body_mut().read_json()?;
+        let data = v["data"].as_array().ok_or_else(|| anyhow::anyhow!("no data in the answer"))?;
+        let mut out: Vec<(u64, Vec<f32>)> = Vec::with_capacity(data.len());
+        for (i, d) in data.iter().enumerate() {
+            let vec: Vec<f32> = d["embedding"]
+                .as_array()
+                .ok_or_else(|| anyhow::anyhow!("no embedding in the answer"))?
+                .iter()
+                .map(|x| {
+                    x.as_f64()
+                        .map(|x| x as f32)
+                        .filter(|x| x.is_finite())
+                        .ok_or_else(|| anyhow::anyhow!("not a number"))
+                })
+                .collect::<anyhow::Result<_>>()?;
+            if vec.len() > MAX_DIM {
+                anyhow::bail!("a vector longer than {MAX_DIM}");
+            }
+            out.push((d["index"].as_u64().unwrap_or(i as u64), vec));
+        }
+        out.sort_by_key(|(i, _)| *i);
+        if out.len() != texts.len() || out.iter().any(|(_, v)| v.is_empty()) {
+            anyhow::bail!("the answer has {} vectors for {} texts", out.len(), texts.len());
+        }
+        Ok(out.into_iter().map(|(_, v)| v).collect())
+    }
+}
+
+/// A fake for tests and trial runs: each word of a text (split at spaces and line breaks) adds one to a place chosen
+/// by its hash, so texts sharing words are near. The same text always gives the same vector.
+pub struct WordsEmbedder {
+    pub model: String,
+    pub dim: usize,
+}
+
+impl WordsEmbedder {
+    pub fn new(model: &str) -> WordsEmbedder {
+        WordsEmbedder { model: model.into(), dim: 256 }
+    }
+}
+
+impl Embedder for WordsEmbedder {
+    fn model(&self) -> String {
+        self.model.clone()
+    }
+
+    fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+        use sha1::Digest;
+        Ok(texts
+            .iter()
+            .map(|t| {
+                let mut v = vec![0f32; self.dim];
+                for w in t.split_whitespace() {
+                    let h = sha1::Sha1::digest(w.as_bytes());
+                    v[u32::from_le_bytes([h[0], h[1], h[2], h[3]]) as usize % self.dim] += 1.0;
+                }
+                v
+            })
+            .collect())
+    }
+}
+
 // ---------- speech ----------
 
 pub trait Speech: Send + Sync {
@@ -161,6 +260,15 @@ mod tests {
         assert_eq!(b["reasoning_effort"], "none");
         assert_eq!(b["response_format"], json!({"type": "json_object"}));
         assert_eq!((b["model"].as_str(), b["max_tokens"].as_u64()), (Some("qwen3:8b"), Some(10)));
+    }
+
+    #[test]
+    fn the_words_fake_is_the_same_for_the_same_text_and_nearer_for_shared_words() {
+        let e = WordsEmbedder::new("fake");
+        let v = e.embed(&["금형 견적".into(), "금형 견적".into(), "금형 단가".into(), "출장 보고".into()]).unwrap();
+        let dot = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>();
+        assert_eq!(v[0], v[1]);
+        assert!(dot(&v[0], &v[2]) > dot(&v[0], &v[3]));
     }
 
     #[test]

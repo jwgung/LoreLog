@@ -122,6 +122,7 @@ fn model_addresses_are_saved_next_to_the_token() {
         chat_model: "qwen".into(),
         asr_url: String::new(),
         asr_model: String::new(),
+        embed_model: String::new(),
     };
     host::save_models(&p, &m).unwrap();
     let env = read_env_file(&host::ingest_env(&p));

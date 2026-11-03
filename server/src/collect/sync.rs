@@ -490,13 +490,22 @@ pub fn librarian(paths: &Paths, rebuild: bool, out: Out) -> Outcome {
         }
         let skipped =
             if r.skipped > 0 { format!(", skipped {} (file names on stderr)", r.skipped) } else { String::new() };
-        Ok(format!(
+        let mut line = format!(
             "indexed {} files, removed {}{skipped}, {} documents ({:.1}s)",
             r.indexed,
             r.removed,
             r.docs,
             t.elapsed().as_secs_f64()
-        ))
+        );
+        // the new documents' vectors (ADR 0007), when an embedding model is set; a failure waits for the next run
+        if let Some(e) = crate::host::Models::load(paths).embedder() {
+            let t = Instant::now();
+            match lib.embed_missing(e.as_ref()) {
+                Ok(x) => line += &embedded_line("; ", &x, t.elapsed().as_secs_f64()),
+                Err(err) => log::warn!("embedding failed: {}", crate::librarian::vectors::why(&err)),
+            }
+        }
+        Ok(line)
     })();
     match result {
         Ok(line) => {
@@ -508,6 +517,16 @@ pub fn librarian(paths: &Paths, rebuild: bool, out: Out) -> Outcome {
             Outcome::Failed
         }
     }
+}
+
+/// How an embedding run went, after `lead` (what joins it to the line it ends, "" for a line of its own).
+pub fn embedded_line(lead: &str, x: &crate::librarian::vectors::EmbedReport, secs: f64) -> String {
+    let failed = if x.failed > 0 {
+        format!(", {} failed{}", x.failed, if x.stopped { " (server not answering; the rest next time)" } else { "" })
+    } else {
+        String::new()
+    };
+    format!("{lead}embedded {} ({} already){failed} ({secs:.1}s)", x.embedded, x.skipped)
 }
 
 // ---------- a whole sync ----------

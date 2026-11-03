@@ -106,7 +106,7 @@ const SNIPPET_AFTER: usize = 140;
 const WINDOW: i64 = 400;
 /// Bump when the tables or what goes in them change: an index of another version is built again. (6 was the last
 /// Python version; the Rust index is built anew once.)
-pub const SCHEMA_VERSION: &str = "17"; // 17: the phone's calendar (#77), 16: a mail the vault holds more than once is indexed once, 15: organizations the user said are one (#47), 14: the graph (#45), 8: who each record is with, 9: the phone's address book (#22), 10: its company (#9), 11: attachments and the mail they came with (#15), 12: one matter beyond a thread (#8), 13: the matters the user took part in
+pub const SCHEMA_VERSION: &str = "18"; // 18: what is embedded of a document (ADR 0007), 17: the phone's calendar (#77), 16: a mail the vault holds more than once is indexed once, 15: organizations the user said are one (#47), 14: the graph (#45), 8: who each record is with, 9: the phone's address book (#22), 10: its company (#9), 11: attachments and the mail they came with (#15), 12: one matter beyond a thread (#8), 13: the matters the user took part in
 
 /// A mail sent to more people than this is a mass mail: not counted as with any one of them.
 pub const MASS_MAIL: i64 = 10;
@@ -123,7 +123,9 @@ const TABLES: &str = "
 create table if not exists meta(key text primary key, value text);
 create table if not exists files(path text primary key, kind text, stamp text, mid text, copy integer not null default 0);
 create index if not exists files_mid on files(mid);
-create table if not exists docs(n integer primary key, file text, source text, kind text, day text, title text, thread text, text text, mid text, case_key text, involved integer, uid text);
+create table if not exists docs(n integer primary key, file text, source text, kind text, day text, title text, thread text, text text, mid text, case_key text, involved integer, uid text, ehash text);
+create index if not exists docs_ehash on docs(ehash);
+create table if not exists vectors(model text, hash text, dim integer, vec blob, primary key (model, hash));
 create index if not exists docs_case on docs(case_key);
 create index if not exists docs_mid on docs(mid);
 create index if not exists docs_file on docs(file);
@@ -367,6 +369,8 @@ pub struct Librarian {
     pub allowed: AllowSource,
     /// Called once after a search made its first hit. A seam: a test lands another update there.
     pub after_first_hit: Option<Box<dyn FnMut() + Send>>,
+    /// The embedding model the assistant's lookups find by meaning with (ADR 0007); None: by words only.
+    pub embedder: Option<std::sync::Arc<dyn crate::llm::Embedder>>,
 }
 
 pub fn default_path(paths: &Paths) -> PathBuf {
@@ -393,8 +397,14 @@ impl Librarian {
         let db = Connection::open(&path)?;
         db.busy_timeout(timeout)?;
         let _: String = db.query_row("pragma journal_mode=wal", [], |r| r.get(0))?;
-        let mut lib =
-            Librarian { path, paths: paths.clone(), db, allowed: Box::new(load_allow), after_first_hit: None };
+        let mut lib = Librarian {
+            path,
+            paths: paths.clone(),
+            db,
+            allowed: Box::new(load_allow),
+            after_first_hit: None,
+            embedder: None,
+        };
         if lib.version().is_none() {
             lib.rebuild_tables(true)?; // a new file. An index of another version is left as it is until update()
         }
@@ -405,11 +415,13 @@ impl Librarian {
         self.meta("schema")
     }
 
-    fn meta(&self, key: &str) -> Option<String> {
+    pub(crate) fn meta(&self, key: &str) -> Option<String> {
         self.db.query_row("select value from meta where key = ?", [key], |r| r.get(0)).optional().ok().flatten()
     }
 
-    /// Drop every table and make them again; the caller holds the write lock.
+    /// Drop every table and make them again; the caller holds the write lock. The vectors stay: they are keyed by the
+    /// text they were made of, so a document indexed again with the same text needs no new one, and the update drops
+    /// those no document has any more ([`super::vectors`]).
     fn make_tables(&self) -> rusqlite::Result<()> {
         for t in [
             "docs",
@@ -473,8 +485,8 @@ impl Librarian {
 
     fn add(&self, path: &str, d: &Doc) -> rusqlite::Result<()> {
         self.db.execute(
-            "insert into docs(file, source, kind, day, title, thread, text, mid, uid) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            params![path, d.source, d.kind, d.day, d.title, d.thread, d.text, d.mid, d.uid],
+            "insert into docs(file, source, kind, day, title, thread, text, mid, uid, ehash) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![path, d.source, d.kind, d.day, d.title, d.thread, d.text, d.mid, d.uid, super::vectors::doc_hash(d)],
         )?;
         let n = self.db.last_insert_rowid();
         self.db.execute(
@@ -879,6 +891,10 @@ impl Librarian {
                 super::graph::restore(&me.db, &super::graph::cache_dir(&me.paths))?; // the model's answers kept
             }
             super::graph::apply_fixes(&me.db, &me.paths)?; // what the user corrected, on every update (cheap)
+            if relink {
+                // (every change of a mail, a file or an event relinks; phone traces and words have no vectors)
+                super::vectors::changed(&me.db)?; // a vector of a record gone goes with it; searches read anew
+            }
             me.db.execute("insert or replace into meta(key, value) values ('policy', ?)", [&policy])?;
             Ok((indexed, skipped, removed.len()))
         })?;
@@ -1118,7 +1134,7 @@ impl Librarian {
             .is_ok_and(|n| n > 0)
     }
 
-    fn ready(&self) -> anyhow::Result<()> {
+    pub(crate) fn ready(&self) -> anyhow::Result<()> {
         if self.version().as_deref() != Some(SCHEMA_VERSION) {
             return Err(
                 Outdated(format!("index version {:?}, expected {SCHEMA_VERSION}: run update", self.version())).into()

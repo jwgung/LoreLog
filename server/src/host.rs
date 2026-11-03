@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::config::{Paths, read_env_file};
 use crate::http::{App, serve};
-use crate::llm::{Http, HttpSpeech};
+use crate::llm::{Http, HttpEmbedder, HttpSpeech};
 
 /// What `life-ingest` reads from ingest.env.
 #[derive(Clone)]
@@ -89,7 +89,8 @@ fn parse_bind(v: &str) -> Result<Vec<IpAddr>, String> {
 }
 
 /// Where the chat and speech models are: `LIFE_LLM_URL`, `LIFE_LLM_MODEL`, `LIFE_ASR_URL`, `LIFE_ASR_MODEL`, in
-/// ingest.env or the environment (the environment wins). An empty value is no setting.
+/// ingest.env or the environment (the environment wins). An empty value is no setting. `LIFE_EMBED_MODEL` names the
+/// embedding model on the chat model's server (ADR 0007); with none, the librarian searches by words only.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Models {
@@ -97,6 +98,7 @@ pub struct Models {
     pub chat_model: String,
     pub asr_url: String,
     pub asr_model: String,
+    pub embed_model: String,
 }
 
 impl Models {
@@ -113,7 +115,16 @@ impl Models {
             chat_model: get("LIFE_LLM_MODEL"),
             asr_url: get("LIFE_ASR_URL"),
             asr_model: get("LIFE_ASR_MODEL"),
+            embed_model: get("LIFE_EMBED_MODEL"),
         }
+    }
+
+    /// The embedding model on the chat model's server, or None when either is not set (embedding is off).
+    pub fn embedder(&self) -> Option<Arc<dyn crate::llm::Embedder>> {
+        if self.embed_model.is_empty() || self.chat_url.is_empty() {
+            return None;
+        }
+        Some(Arc::new(HttpEmbedder { url: self.chat_url.clone(), model: self.embed_model.clone() }))
     }
 
     /// The chat model at these addresses.
@@ -258,6 +269,8 @@ pub fn start(rt: &tokio::runtime::Handle, app: Arc<App>, port: u16, addrs: &[IpA
     Running { stop, listening, failed, broken }
 }
 
+/// What the settings screen edits. `LIFE_EMBED_MODEL` is not among them: the screen does not show it, and saving the
+/// screen must not take it away.
 const MODEL_KEYS: [&str; 4] = ["LIFE_LLM_URL", "LIFE_LLM_MODEL", "LIFE_ASR_URL", "LIFE_ASR_MODEL"];
 
 /// The model addresses written in ingest.env (the environment not counted: this is what the settings screen edits).
