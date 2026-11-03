@@ -376,6 +376,35 @@ fn the_eval_counts_a_case_with_no_earlier_matter_shown_apart_and_leaves_it_out_o
     assert_eq!(s.found_avg(), Some(0.0));
 }
 
+/// A precedent case asked back has shown no earlier matter: nothing found, and none shown (not "exact").
+#[test]
+fn a_precedent_case_asked_back_scores_no_label_found_and_none_shown() {
+    use life_server::librarian::eval::{self, Kind};
+    let t = alpha();
+    let mut lib = t.built();
+    let thread = |name: &str| lib.thread_of(&t.p.vault.join("Mail/2026").join(name).to_string_lossy()).unwrap();
+    let f = t.p.data.join("recall.toml");
+    fs::create_dir_all(f.parent().unwrap()).unwrap();
+    fs::write(
+        &f,
+        format!(
+            "[[case]]\nkind = \"precedent\"\nq = \"이런 경우 전에 어떻게 했지\"\nthread = \"{}\"\nearlier = [\"{}\"]\n",
+            thread("n1.md"),
+            thread("b1.md")
+        ),
+    )
+    .unwrap();
+    let cases = eval::load(&f).unwrap();
+    let m = Picks(NAMES_NOTHING.into());
+    let out = eval::run(&mut lib, Some(&m), &t.p.vault, &cases, 8).unwrap();
+    assert!(out[0].asked);
+    let e = out[0].earlier.expect("scored");
+    assert_eq!((e.found, e.shown), (0, 0), "{e:?}");
+    let s = &eval::summary(&out)[&Kind::Precedent].earlier;
+    assert_eq!((s.cases, s.any, s.none), (1, 0, 1));
+    assert_eq!((s.found_avg(), s.exact_avg()), (Some(0.0), None));
+}
+
 /// A question about a kind of work (#95, the user's choice A): it names no matter, no one and nothing of its own,
 /// only words. Among what the words found, the first matter with a counterparty is taken for the matter at hand (a
 /// guess, said as one), and the earlier matters with that counterparty are gathered.

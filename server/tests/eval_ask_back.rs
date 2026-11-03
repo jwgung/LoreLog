@@ -194,15 +194,74 @@ fn a_case_without_expect_that_is_asked_back_counts_as_asked_unnecessarily() {
 }
 
 #[test]
-fn an_ask_case_needs_two_or_more_candidates_and_no_thread() {
+fn an_ask_case_with_fewer_than_two_candidates_is_refused_naming_the_case_and_the_field() {
     let (_d, p, lib) = built(&[2, 2]);
     let t = thread(&lib, &p, "a0.md");
-    for text in [
-        ask_case(std::slice::from_ref(&t)),
-        format!("[[case]]\nkind = \"status\"\nq = \"견적 건 어떻게 됐지\"\nexpect = \"ask\"\nthread = \"{t}\"\n"),
-    ] {
-        let e = eval::load(&file(&p, &text)).unwrap_err().to_string();
-        assert!(e.contains("case 1") && e.contains("candidates"), "{e}");
-        assert!(!e.contains("견적"), "the question is not quoted: {e}");
+    let e = eval::load(&file(&p, &ask_case(std::slice::from_ref(&t)))).unwrap_err().to_string();
+    assert!(e.contains("case 1") && e.contains("candidates"), "{e}");
+    assert!(!e.contains("견적"), "the question is not quoted: {e}");
+    let none = "[[case]]\nkind = \"status\"\nq = \"견적 건 어떻게 됐지\"\nexpect = \"ask\"\nthread = \"x\"\n";
+    assert!(eval::load(&file(&p, none)).unwrap_err().to_string().contains("candidates"));
+}
+
+#[test]
+fn an_ask_case_that_also_names_a_thread_is_refused() {
+    let (_d, p, lib) = built(&[2, 2]);
+    let (a, b) = (thread(&lib, &p, "a0.md"), thread(&lib, &p, "b0.md"));
+    let text = format!("{}thread = \"{a}\"\n", ask_case(&[a.clone(), b]));
+    let e = eval::load(&file(&p, &text)).unwrap_err().to_string();
+    assert!(e.contains("case 1") && e.contains("thread"), "{e}");
+    assert!(!e.contains("견적"), "the question is not quoted: {e}");
+}
+
+#[test]
+fn the_candidates_hit_are_counted_over_the_most_that_are_listed_when_there_are_more() {
+    let (_d, p, mut lib) = built(&[4, 3, 3, 2]);
+    let cs: Vec<String> = ["a0.md", "b0.md", "c0.md", "d0.md"].iter().map(|n| thread(&lib, &p, n)).collect();
+    let cases = eval::load(&file(&p, &ask_case(&cs))).unwrap();
+    let out = eval::run(&mut lib, Some(&One), &p.vault, &cases, 8).unwrap();
+    assert!(out[0].asked_matters);
+    assert_eq!(out[0].candidate_hit, Some(1.0), "three listed of four, over min(3, 4)");
+}
+
+/// Two people of one name with as many mails each: who is meant is asked back.
+fn namesakes(p: &Paths) {
+    for (who, addr) in [("a", "kim@x.com"), ("b", "kim@y.com")] {
+        for i in 0..2 {
+            let path = p.vault.join("Mail/2026").join(format!("n{who}{i}.md"));
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(
+                path,
+                format!("---\ntype: mail\nmail_id: <n{who}{i}@x>\nmail_source: account/INBOX\ndate: 2026-06-0{}\ntime: 09:00\nfrom: 김영희 <{addr}>\nto: [{ME}]\ncc: []\nsubject: \"안부 {who}{i}\"\nreferences: []\n---\n## Message\n안녕하세요 {i}\n", i + 1),
+            )
+            .unwrap();
+        }
     }
+}
+
+struct Kim;
+impl Model for Kim {
+    fn complete(&self, _: &[Value], _: Ask) -> anyhow::Result<String> {
+        Ok(r#"{"search": true, "people": ["김영희"], "words": []}"#.into())
+    }
+}
+
+#[test]
+fn asking_back_about_people_is_needless_for_a_case_to_answer_and_is_no_asking_for_an_ask_case() {
+    let (_d, p, mut lib) = built(&[2, 2]);
+    namesakes(&p);
+    lib.update(false).unwrap();
+    let (a, b) = (thread(&lib, &p, "a0.md"), thread(&lib, &p, "b0.md"));
+    let answer = eval::load(&file(
+        &p,
+        &format!("[[case]]\nkind = \"status\"\nq = \"영희 님 건 어떻게 됐지\"\nthread = \"{a}\"\n"),
+    ))
+    .unwrap();
+    let out = eval::run(&mut lib, Some(&Kim), &p.vault, &answer, 8).unwrap();
+    assert!(out[0].asked, "the people were asked about");
+    assert_eq!(eval::ask_summary(&out).should_answer, (1, 1));
+    let ask = eval::load(&file(&p, &ask_case(&[a, b]))).unwrap();
+    let out = eval::run(&mut lib, Some(&Kim), &p.vault, &ask, 8).unwrap();
+    assert!(!out[0].asked_matters && out[0].candidate_hit.is_none());
+    assert_eq!(eval::ask_summary(&out).should_ask, (0, 1));
 }

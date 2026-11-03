@@ -6,7 +6,7 @@
 //! Kinds of question and what counts as found in the top `k`:
 //!   status     "그 건 어떻게 됐지"        the thread it is about
 //!   precedent  "전에 어떻게 했지"          the earlier thread it is about; with `earlier`, also how many of those threads
-//!                                          the earlier matters shown (#95, three at most) hold (found: over min(3, labels))
+//!                                          the earlier matters shown (#95, three at most) hold (found: over min(MAX_PRECEDENTS, labels), ADR 0005: three at most)
 //!                                          and how many of the matters shown are one of them (exact)
 //!   person     "이 사람이랑 뭐 있었지"      any of the latest five things with that address up to today: threads of mail
 //!                                          they sent or received (not copied, not mass mail) and events they attended
@@ -21,13 +21,17 @@
 //!
 //! `expect`: "answer" (the default) is a question to answer straight away; asking back is then counted as needless.
 //! "ask" is a question that fits several matters (`candidates`, two or more, no `thread`): it should be asked back,
-//! scored by how many of those matters the candidates listed hold, over min(3, candidates).
+//! scored by how many of those matters the candidates listed hold, over min(MAX_CANDIDATES, candidates) (ADR 0006: three
+//! at most). Asking back about people is counted as needless for an "answer" case, and not as asking for an "ask" one
+//! (people are outside what `expect` can name). Without a model an "ask" case has no score, and period and pending
+//! are left out of the "answer" cases asking back is counted over.
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use serde::Deserialize;
 
 use super::Librarian;
+use super::precedent::MAX_PRECEDENTS;
 use crate::assistant::recall;
 use crate::assistant::util::files_like_nested;
 use crate::llm::Model;
@@ -96,6 +100,13 @@ pub struct Case {
     pub items: Option<Vec<String>>,
 }
 
+impl Case {
+    /// The question fits several matters and should be asked back.
+    pub fn expects_ask(&self) -> bool {
+        self.expect == Some(Expect::Ask)
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct File {
@@ -112,9 +123,10 @@ pub fn load(path: &Path) -> anyhow::Result<Vec<Case>> {
         anyhow::anyhow!("line {}: {}", line.map(|l| l.to_string()).unwrap_or_else(|| "?".into()), e.message())
     })?;
     for (i, c) in f.cases.iter().enumerate() {
-        let ask = c.expect == Some(Expect::Ask);
+        let ask = c.expects_ask();
         let missing = match c.kind {
             _ if ask && c.candidates.as_ref().is_none_or(|t| t.len() < 2) => Some("candidates (two or more)"),
+            _ if ask && c.thread.is_some() => Some("no thread (it names candidates)"),
             _ if ask => None,
             Kind::Status | Kind::Precedent if c.thread.is_none() => Some("thread"),
             Kind::Person if c.person.is_none() => Some("person"),
@@ -146,7 +158,8 @@ pub struct Result1 {
     pub model_words: Option<Vec<String>>,
     pub model_rank: Option<usize>,
     /// the model's words made the assistant ask back which one is meant (#93): `model_rank` is then the place of the
-    /// candidate that holds the record, not of a hit
+    /// candidate that holds the record, not of a hit. People asked about count too: for a case to answer straight away
+    /// any asking back is needless (`asked_matters` is for the cases that should be asked back, matters only)
     pub asked: bool,
     /// person: (hits with that person, hits) for the user's words
     pub person_share: Option<(usize, usize)>,
@@ -157,7 +170,7 @@ pub struct Result1 {
     pub expect_ask: bool,
     /// the model's words made the assistant ask back which matter is meant (people asked about do not count)
     pub asked_matters: bool,
-    /// expect = "ask", asked back: the share of the candidates the case names that the list holds, over min(3, them)
+    /// expect = "ask", asked back: the share of the candidates the case names that the list holds, over min([`recall::MAX_CANDIDATES`], them)
     pub candidate_hit: Option<f64>,
     /// the model's words gathered earlier matters like the one at hand (#95): how many, and whether by the same
     /// counterparty (else by the situation)
@@ -177,13 +190,10 @@ pub struct Earlier {
     pub right: usize,
 }
 
-/// Most earlier matters shown (ADR 0005).
-const SHOWN_AT_MOST: usize = 3;
-
 impl Earlier {
-    /// Labels found over what could be: min(3, labels), the most that is shown.
+    /// Labels found over what could be: min([`MAX_PRECEDENTS`], labels), the most that is shown.
     pub fn found_share(&self) -> f64 {
-        self.found.min(SHOWN_AT_MOST) as f64 / self.labels.min(SHOWN_AT_MOST) as f64
+        self.found.min(MAX_PRECEDENTS) as f64 / self.labels.min(MAX_PRECEDENTS) as f64
     }
 
     /// The share of the matters shown that are labels; not defined when none is shown.
@@ -360,7 +370,7 @@ pub fn run(
         let targets: HashSet<String> = match (c.kind, &c.thread, &addr) {
             (Kind::Person, _, Some(a)) => person_threads(lib, vault, a),
             (Kind::Graph, _, _) => c.threads.iter().flatten().cloned().collect(),
-            _ if c.expect == Some(Expect::Ask) => c.candidates.iter().flatten().cloned().collect(),
+            _ if c.expects_ask() => c.candidates.iter().flatten().cloned().collect(),
             (_, Some(t), _) => [t.clone()].into(),
             _ => HashSet::new(),
         };
@@ -380,7 +390,7 @@ pub fn run(
         let mut earlier_found = None;
         let mut asked_matters = false;
         let mut candidate_hit = None;
-        let ask = c.expect == Some(Expect::Ask);
+        let ask = c.expects_ask();
         let mut gathered = None;
         let earlier: HashSet<String> = c.earlier.iter().flatten().cloned().collect();
         let (model_words, model_rank) = match model {
@@ -425,7 +435,7 @@ pub fn run(
                                 let listed: Vec<HashSet<String>> =
                                     a.matters().iter().map(|m| lib.key_threads(&m.case)).collect();
                                 let n = targets.iter().filter(|t| listed.iter().any(|h| h.contains(*t))).count();
-                                candidate_hit = Some(n as f64 / targets.len().min(SHOWN_AT_MOST) as f64);
+                                candidate_hit = Some(n as f64 / targets.len().min(recall::MAX_CANDIDATES) as f64);
                             }
                             in_candidates(lib, &a, c.kind, &targets, addr.as_deref())
                         }
