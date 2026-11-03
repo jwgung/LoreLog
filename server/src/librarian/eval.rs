@@ -196,13 +196,19 @@ fn rank_all(lib: &Librarian, hits: &[serde_json::Value], targets: &HashSet<Strin
     Some(last)
 }
 
-/// Where every record is shown: the rank of the last of them, or None when one is not a hit's own mail. A matter (a thread,
-/// or mails joined to it) is one hit and shows one of its mails, so a record folded behind another is not shown (#92).
+/// Where every record is shown: the rank of the last of them, or None when one is not shown. A matter (a thread, or mails
+/// joined to it) is one hit with one of its mails and up to a few `others` (ADR 0003); a mail beyond those is not shown.
 fn shown_all(lib: &Librarian, hits: &[serde_json::Value], records: &[String]) -> Option<usize> {
     let mut last = 0;
     for r in records {
         let file = lib.file_of_mail(r)?;
-        last = last.max(hits.iter().position(|h| h["ref"].as_str() == Some(file.as_str()))? + 1);
+        // a mail folded behind a hit of its matter is shown with it, in that hit's `others`
+        // (a copy of it, the same day and text, shown in its place says the same)
+        let is = |r: &serde_json::Value| r.as_str().is_some_and(|r| r == file || lib.same_mail(r, &file));
+        let shows = |h: &serde_json::Value| {
+            is(&h["ref"]) || h["others"].as_array().is_some_and(|o| o.iter().any(|o| is(&o["ref"])))
+        };
+        last = last.max(hits.iter().position(shows)? + 1);
     }
     Some(last)
 }

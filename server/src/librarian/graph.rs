@@ -1327,7 +1327,13 @@ impl Librarian {
         let words: Vec<String> = a.orgs.iter().chain(&a.things).chain(&a.people).chain(&a.roles).cloned().collect();
         let mut out = Vec::new();
         for (_, _, n, c) in ranked.into_iter().take(limit) {
-            let mut h = self.hit(n, Some(&c), &words.join(" "))?;
+            // its others keep to the day asked too: what is later is not a past record
+            let mut h = self.hit_within(
+                n,
+                Some(&c),
+                &words.join(" "),
+                super::index::Bound { not_day: None, until: Some(day) },
+            )?;
             // what the graph knows of the matter, with the words that say it and where it came from: the model's
             // reading is a guess, said as one (#64)
             if let Some((mut last, earlier)) = self.states(&c, day) {

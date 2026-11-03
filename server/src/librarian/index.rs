@@ -96,6 +96,10 @@ static PARTICLES: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
 pub const MAX_QUERY_WORDS: usize = 16;
 /// The user's own words (often past questions with the same words) take this many slots at most.
 pub const MAX_WORD_HITS: usize = 2;
+/// The mails of a matter shown behind its hit, at most.
+const MAX_OTHERS: usize = 3;
+/// How many mails of a matter are looked at to find those [`MAX_OTHERS`] (and to say there are more).
+const MAX_SCANNED: usize = 50;
 const SNIPPET_BEFORE: usize = 60;
 const SNIPPET_AFTER: usize = 140;
 /// Matches looked at per search before the mails of one thread are folded together.
@@ -341,6 +345,15 @@ pub struct Listed {
 pub enum Exclude<'a> {
     Day(&'a str),
     Words(&'a str, &'a [String]),
+}
+
+/// What a hit's `others` leave out, as the search that made the hit left it out of the hits themselves.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Bound<'a> {
+    /// a day left out (the day shown in the prompt another way)
+    pub not_day: Option<&'a str>,
+    /// the last day that counts
+    pub until: Option<&'a str>,
 }
 
 /// Where an update reads the allowed senders from.
@@ -924,6 +937,7 @@ impl Librarian {
         let mut sql =
             "select d.n, d.case_key, d.source from fts join docs d on d.n = fts.rowid where fts match ?".to_string();
         let mut args: Vec<String> = vec![expr.to_string()];
+        let bound = Bound { not_day: if let Some(Exclude::Day(d)) = &exclude { Some(*d) } else { None }, until: None };
         match exclude {
             Some(Exclude::Day(day)) => {
                 sql += " and d.day != ?";
@@ -977,7 +991,7 @@ impl Librarian {
         chosen.extend(spill.into_iter().take(room));
         let mut out = Vec::new();
         for (n, case, _) in chosen {
-            out.push(self.hit(*n, case.as_deref(), q)?);
+            out.push(self.hit_within(*n, case.as_deref(), q, bound)?);
             if let Some(hook) = self.after_first_hit.as_mut() {
                 hook();
                 self.after_first_hit = None;
@@ -986,10 +1000,12 @@ impl Librarian {
         Ok(out)
     }
 
-    /// One hit as the assistant gets it: `{source, kind, day, title, snippet, ref, count, first, last, latest}` (`latest`:
-    /// the title of the matter's last record, when it has more than one). A file that came with a mail is shown as that
-    /// mail's (its title and where it is), the file named: what the user knows is the mail.
-    pub(crate) fn hit(&self, n: i64, case: Option<&str>, q: &str) -> anyhow::Result<Value> {
+    /// One hit as the assistant gets it: `{source, kind, day, title, snippet, ref, count, first, last, latest,
+    /// others}` (`latest`: the title of the matter's last record, when it has more than one; `others`: the matter's
+    /// other mails, up to [`MAX_OTHERS`], when it has any). A file that came with a mail is shown as that
+    /// mail's (its title and where it is), the file named: what the user knows is the mail. The `others` are kept
+    /// to what the search that found the hit kept (`bound`).
+    pub(crate) fn hit_within(&self, n: i64, case: Option<&str>, q: &str, bound: Bound) -> anyhow::Result<Value> {
         let (source, kind, day, mut title, text, mut file, mid): (
             String,
             String,
@@ -1022,7 +1038,8 @@ impl Librarian {
         let count = count.max(1);
         let first = first.filter(|f| !f.is_empty()).unwrap_or_else(|| day.clone());
         let last = last.filter(|f| !f.is_empty()).unwrap_or_else(|| day.clone());
-        let mut hit = json!({"source": source, "kind": kind, "day": day, "title": title, "snippet": snippet(&text, q),
+        let own = snippet(&text, q);
+        let mut hit = json!({"source": source, "kind": kind, "day": day, "title": title, "snippet": own,
                              "ref": file, "count": count, "first": first, "last": last});
         if count > 1
             && let Some(l) = latest
@@ -1031,8 +1048,65 @@ impl Librarian {
         }
         if let Some(c) = case {
             hit["case"] = json!(c); // the matter: one hit each, wherever it was found (#46)
+            if count > 1 && (source == "mail" || source == "file") {
+                let (others, more) = self.others(c, n, (&day, &text), &file, q, bound)?;
+                if !others.is_empty() {
+                    hit["others"] = json!(others);
+                    if more > 0 {
+                        hit["others_more"] = json!(more);
+                    }
+                }
+            }
         }
         Ok(hit)
+    }
+
+    /// The other mails of a matter, folded behind its one hit: at most [`MAX_OTHERS`], the latest first, each
+    /// `{day, title, snippet, ref}` (ADR 0003), and how many more there were. A copy of a mail (the same day, the same
+    /// text, not only the same snippet; the hit's own too) is one. Whether they disagree with the hit is for the model to see.
+    fn others(
+        &self,
+        case: &str,
+        n: i64,
+        own: (&str, &str),
+        shown: &str,
+        q: &str,
+        bound: Bound,
+    ) -> rusqlite::Result<(Vec<Value>, usize)> {
+        let mut st = self.db.prepare_cached(
+            "select day, title, text, file from docs where case_key = ? and source = 'mail' and n != ? and file != ?
+             and (?4 is null or day != ?4) and (?5 is null or day <= ?5) order by day desc, n desc limit ?6",
+        )?;
+        let rows = st.query_map(params![case, n, shown, bound.not_day, bound.until, MAX_SCANNED as i64], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?))
+        })?;
+        let mut seen = HashSet::from([(own.0.to_string(), own.1.to_string())]);
+        let (mut out, mut more) = (Vec::new(), 0);
+        for r in rows {
+            let (day, title, text, file) = r?;
+            let snippet = snippet(&text, q);
+            if !seen.insert((day.clone(), text)) {
+                continue;
+            }
+            if out.len() < MAX_OTHERS {
+                out.push(json!({"day": day, "title": title, "snippet": snippet, "ref": file}));
+            } else {
+                more += 1;
+            }
+        }
+        Ok((out, more))
+    }
+
+    /// Whether two indexed mails are copies of one (the same day, the same text): what one says, the other says.
+    pub(crate) fn same_mail(&self, a: &str, b: &str) -> bool {
+        self.db
+            .query_row(
+                "select count(*) from docs x join docs y on x.day = y.day and x.text = y.text
+                 where x.source = 'mail' and y.source = 'mail' and x.file = ? and y.file = ?",
+                [a, b],
+                |r| r.get::<_, i64>(0),
+            )
+            .is_ok_and(|n| n > 0)
     }
 
     fn ready(&self) -> anyhow::Result<()> {
@@ -1178,6 +1252,7 @@ impl Librarian {
                 st.query_map(params_from_iter(args.iter()), |r| Ok((r.get(0)?, r.get(1)?, r.get(4)?, r.get(5)?)))?
                     .collect::<rusqlite::Result<_>>()?
             };
+            let bound = Bound { not_day: None, until: Some(until) };
             let mut seen = HashSet::new();
             let mut out = Vec::new();
             for (n, case, source, title) in rows {
@@ -1189,7 +1264,7 @@ impl Librarian {
                 if !seen.insert(key) {
                     continue;
                 }
-                out.push(self.hit(n, case.as_deref(), q)?);
+                out.push(self.hit_within(n, case.as_deref(), q, bound)?);
                 if out.len() >= limit {
                     break;
                 }

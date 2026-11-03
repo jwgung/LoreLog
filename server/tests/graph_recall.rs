@@ -412,6 +412,37 @@ fn what_the_graph_read_is_quoted_as_a_guess_with_its_evidence_and_day() {
 }
 
 #[test]
+fn the_others_of_a_matter_found_by_the_graph_stop_at_the_day_asked() {
+    let (t, mut lib) = world();
+    t.mail(
+        "q4.md",
+        "2026-03-20",
+        "고객 <c@client.co.kr>",
+        ME,
+        "RE: 설비 점검 견적",
+        "추가 안내입니다",
+        false,
+        "[<q1.md@x>]",
+    );
+    lib.update(false).unwrap();
+    let hits = match recall::lookup(
+        &mut lib,
+        &Picked { states: vec!["계약".into()], ..Picked::default() },
+        8,
+        "2026-03-12",
+        &[],
+    )
+    .unwrap()
+    {
+        Named::Hits(h) => h,
+        Named::Ask(_) => panic!("asked back"),
+    };
+    let others = hits[0]["others"].as_array().expect("the earlier mail comes along");
+    assert!(others.iter().all(|o| o["day"].as_str().unwrap() <= "2026-03-12"), "{others:?}");
+    assert!(!others.is_empty());
+}
+
+#[test]
 fn the_states_a_matter_went_through_are_quoted_with_its_last() {
     let (_t, mut lib) = world();
     let hits = ask(&mut lib, Picked { states: vec!["계약".into()], ..Picked::default() });
