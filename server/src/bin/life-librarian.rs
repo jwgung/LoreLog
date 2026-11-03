@@ -207,6 +207,7 @@ fn measure(lib: &mut Librarian, paths: &Paths, file: &std::path::Path, k: usize,
             None => String::new(),
             Some(w) if w.is_empty() => "   모델: 찾지 않음".into(),
             Some(w) if r.kind == Kind::Pending => format!("   모델 {w:?}"),
+            Some(w) if r.asked => format!("   모델 되물음 {} {:?}", mark(r.model_rank), w),
             Some(w) => format!("   모델 {} {:?}", mark(r.model_rank), w),
         };
         let share = r.person_share.map(|(a, b)| format!("  (그 사람과 {a}/{b})")).unwrap_or_default();
@@ -220,7 +221,12 @@ fn measure(lib: &mut Librarian, paths: &Paths, file: &std::path::Path, k: usize,
         };
         let model =
             if s.model.1 > 0 { format!(", 모델이 고른 검색어 {}", pct(s.model)) } else { String::new() };
-        println!("재현율@{k} {}: 말 그대로 {}{model}", kind.label(), pct(s.raw));
+        let asked = match s.asked_label() {
+            Some(a) if s.asked > 0 => format!(", {a} (후보에 있으면 찾은 것으로 셈)"),
+            Some(a) => format!(", {a}"),
+            None => String::new(),
+        };
+        println!("재현율@{k} {}: 말 그대로 {}{model}{asked}", kind.label(), pct(s.raw));
     }
     ExitCode::SUCCESS
 }

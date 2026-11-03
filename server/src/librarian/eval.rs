@@ -121,6 +121,9 @@ pub struct Result1 {
     /// the words the model picked; None when no model was asked, empty when it chose not to search
     pub model_words: Option<Vec<String>>,
     pub model_rank: Option<usize>,
+    /// the model's words made the assistant ask back which one is meant (#93): `model_rank` is then the place of the
+    /// candidate that holds the record, not of a hit
+    pub asked: bool,
     /// person: (hits with that person, hits) for the user's words
     pub person_share: Option<(usize, usize)>,
 }
@@ -225,6 +228,28 @@ fn shown(p: &recall::Picked) -> Vec<String> {
         .collect()
 }
 
+/// Where the matter meant is among the candidates asked back (1-based), or None when the user would not find it there:
+/// people of one name are told apart by address, matters by the threads they hold. Several matters (graph): every one.
+fn in_candidates(
+    lib: &Librarian,
+    asked: &recall::Asked,
+    kind: Kind,
+    targets: &HashSet<String>,
+    addr: Option<&str>,
+) -> Option<usize> {
+    let holds: Vec<HashSet<String>> = match asked {
+        recall::Asked::People(cs) => {
+            return cs.iter().position(|c| addr.is_some_and(|a| c.addr.to_lowercase() == a)).map(|i| i + 1);
+        }
+        recall::Asked::Matters(ms) => ms.iter().map(|m| lib.key_threads(&m.case)).collect(),
+    };
+    let place = |t: &String| holds.iter().position(|h| h.contains(t)).map(|i| i + 1);
+    match kind {
+        Kind::Graph => targets.iter().map(place).collect::<Option<Vec<_>>>()?.into_iter().max(),
+        _ => targets.iter().filter_map(place).min(),
+    }
+}
+
 /// The line (1-based) of the last item expected in a period's section, or None when one is not in it.
 fn in_section(section: &str, items: &[String]) -> Option<usize> {
     let lines: Vec<&str> = section.lines().collect();
@@ -268,6 +293,7 @@ pub fn run(
             let with = hits.iter().filter(|h| h["ref"].as_str().is_some_and(|r| involves(r, a))).count();
             (with, hits.len())
         });
+        let mut asked = false;
         let (model_words, model_rank) = match model {
             None => (None, None),
             Some(m) => match recall::pick(m, &c.q, None) {
@@ -288,26 +314,38 @@ pub fn run(
                 Some(p) if p.period.is_some() => (Some(shown(&p)), None),
                 Some(p) => {
                     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-                    // as the chat does today; asking back which one is not finding it
-                    let hits = match recall::lookup(lib, &p, k, &today, &[])? {
-                        recall::Named::Hits(h) => h,
-                        recall::Named::Ask(_) => Vec::new(),
+                    // as the chat does today; asking back is scored by the candidates it lists (#93)
+                    let r = match recall::lookup(lib, &p, k, &today, &[])? {
+                        recall::Named::Hits(h) => score(lib, &h),
+                        recall::Named::Ask(a) => {
+                            asked = true;
+                            in_candidates(lib, &a, c.kind, &targets, addr.as_deref())
+                        }
                     };
-                    let r = score(lib, &hits);
                     (Some(shown(&p)), r)
                 }
             },
         };
-        out.push(Result1 { kind: c.kind, q: c.q.clone(), raw_rank, model_words, model_rank, person_share });
+        out.push(Result1 { kind: c.kind, q: c.q.clone(), raw_rank, model_words, model_rank, person_share, asked });
     }
     Ok(out)
 }
 
 /// Per kind (pending left out; a period is measured with the model's pick only): (found, asked) with the user's words, and with the model's words.
+/// `asked`: how many times the assistant asked back instead of answering (counted apart from found, #93).
 #[derive(Debug, Default, PartialEq)]
 pub struct Score {
     pub raw: (usize, usize),
     pub model: (usize, usize),
+    pub asked: usize,
+}
+
+impl Score {
+    /// How often the assistant asked back, out of the questions its words were picked for (`되물음 3/15`); None when
+    /// no model was asked (nothing is asked back then). A specific question should not be asked back (#93).
+    pub fn asked_label(&self) -> Option<String> {
+        (self.model.1 > 0).then(|| format!("되물음 {}/{}", self.asked, self.model.1))
+    }
 }
 
 pub fn summary(results: &[Result1]) -> BTreeMap<Kind, Score> {
@@ -319,6 +357,7 @@ pub fn summary(results: &[Result1]) -> BTreeMap<Kind, Score> {
         }
         if r.model_words.is_some() {
             s.model = (s.model.0 + r.model_rank.is_some() as usize, s.model.1 + 1);
+            s.asked += r.asked as usize;
         }
     }
     out

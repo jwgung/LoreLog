@@ -887,18 +887,24 @@ impl Librarian {
     }
 
     /// A matter's size (its mails and events; the files that came with them not counted), the days it spans and the
-    /// title of its latest record.
-    fn case_span(&self, case: &str) -> rusqlite::Result<CaseSpan> {
+    /// title of its latest record; up to `until` when given (the matter as it stood on the day asked).
+    fn case_span(&self, case: &str, until: Option<&str>) -> rusqlite::Result<CaseSpan> {
+        let (bound, args): (&str, Vec<&str>) = match until {
+            Some(d) => ("and day <= ?2", vec![case, d]),
+            None => ("", vec![case]), // as it was: all of it
+        };
         let (count, first, last): (i64, Option<String>, Option<String>) = self.db.query_row(
-            "select count(*), min(day), max(day) from docs where case_key = ? and source != 'file'",
-            [case],
+            &format!("select count(*), min(day), max(day) from docs where case_key = ?1 and source != 'file' {bound}"),
+            params_from_iter(&args),
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
         let latest = self
             .db
             .query_row(
-                "select title from docs where case_key = ? and source != 'file' order by day desc, n desc limit 1",
-                [case],
+                &format!(
+                    "select title from docs where case_key = ?1 and source != 'file' {bound} order by day desc, n desc limit 1"
+                ),
+                params_from_iter(&args),
                 |r| r.get(0),
             )
             .optional()?;
@@ -908,7 +914,8 @@ impl Librarian {
     /// Documents matching the words of q, best first. The mails of one thread come back as one hit (its best-matching
     /// mail) with the thread's size and the days it spans; the user's own words take at most [`MAX_WORD_HITS`] slots
     /// unless nothing else is found. The search reads one snapshot of the index.
-    /// -> `[{source, kind, day, title, snippet, ref, count, first, last}]`
+    /// -> `[{source, kind, day, title, snippet, ref, count, first, last, score}]` (`score`: how well the words fit the
+    /// hit's record, as it is ranked; higher is better)
     pub fn search(&mut self, q: &str, limit: usize, exclude: Option<Exclude>) -> anyhow::Result<Vec<Value>> {
         let expr = to_query(q);
         if expr.is_empty() {
@@ -934,8 +941,11 @@ impl Librarian {
 
     fn search_in(&mut self, expr: &str, q: &str, limit: usize, exclude: Option<Exclude>) -> anyhow::Result<Vec<Value>> {
         // a matter (a thread, mails of one subject and their events, the files that came with them) is one hit
-        let mut sql =
-            "select d.n, d.case_key, d.source from fts join docs d on d.n = fts.rowid where fts match ?".to_string();
+        let mut sql = format!(
+            "select d.n, d.case_key, d.source, fts.rank * (case when d.source = 'file' then {FILE_WEIGHT} else 1.0 end)
+                 * (case when d.involved = 1 then {INVOLVED_WEIGHT} else 1.0 end) as score
+             from fts join docs d on d.n = fts.rowid where fts match ?"
+        );
         let mut args: Vec<String> = vec![expr.to_string()];
         let bound = Bound { not_day: if let Some(Exclude::Day(d)) = &exclude { Some(*d) } else { None }, until: None };
         match exclude {
@@ -960,19 +970,16 @@ impl Librarian {
         }
         // a long attachment matches many words: it counts for less than a mail or a message (rank is negative, lower
         // is better)
-        sql += &format!(
-            " order by fts.rank * (case when d.source = 'file' then {FILE_WEIGHT} else 1.0 end)
-                                 * (case when d.involved = 1 then {INVOLVED_WEIGHT} else 1.0 end) limit {WINDOW}"
-        );
-        let rows: Vec<(i64, Option<String>, String)> = {
+        sql += &format!(" order by score limit {WINDOW}");
+        let rows: Vec<(i64, Option<String>, String, f64)> = {
             let mut st = self.db.prepare(&sql)?;
-            st.query_map(params_from_iter(args.iter()), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            st.query_map(params_from_iter(args.iter()), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
                 .collect::<rusqlite::Result<_>>()?
         };
         // matter (or the document itself) -> its best-ranked document, in rank order
         let mut seen = HashSet::new();
-        let best: Vec<&(i64, Option<String>, String)> =
-            rows.iter().filter(|(n, case, _)| seen.insert(case.clone().unwrap_or_else(|| format!("#{n}")))).collect();
+        let best: Vec<&(i64, Option<String>, String, f64)> =
+            rows.iter().filter(|(n, case, ..)| seen.insert(case.clone().unwrap_or_else(|| format!("#{n}")))).collect();
         let (mut chosen, mut spill, mut words) = (Vec::new(), Vec::new(), 0);
         for g in best {
             if chosen.len() >= limit {
@@ -990,8 +997,10 @@ impl Librarian {
         let room = limit.saturating_sub(chosen.len());
         chosen.extend(spill.into_iter().take(room));
         let mut out = Vec::new();
-        for (n, case, _) in chosen {
-            out.push(self.hit_within(*n, case.as_deref(), q, bound)?);
+        for (n, case, _, score) in chosen {
+            let mut hit = self.hit_within(*n, case.as_deref(), q, bound)?;
+            hit["score"] = json!(-score); // how well the words fit it: higher is better (bm25, weighted as ranked)
+            out.push(hit);
             if let Some(hook) = self.after_first_hit.as_mut() {
                 hook();
                 self.after_first_hit = None;
@@ -1032,7 +1041,7 @@ impl Librarian {
             file = mail_file;
         }
         let (count, first, last, latest) = match case {
-            Some(c) => self.case_span(c)?,
+            Some(c) => self.case_span(c, bound.until)?,
             None => (1, None, None, None),
         };
         let count = count.max(1);
@@ -1278,22 +1287,30 @@ impl Librarian {
     /// What the matter of an indexed file holds, as the eval names it: its mails' threads and its events
     /// (`event:<title>`). A file in no matter: its own thread, or its event.
     pub fn case_threads(&self, file: &str) -> HashSet<String> {
-        let rows = |sql: &str| -> Vec<(String, Option<String>, String)> {
-            self.db
-                .prepare(sql)
-                .and_then(|mut st| {
-                    st.query_map([file], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()
-                })
-                .unwrap_or_default()
-        };
-        let mut found = rows(
-            "select source, thread, title from docs where case_key in (select case_key from docs where file = ? and case_key is not null)",
-        );
+        let by_case = "select source, thread, title from docs where case_key in (select case_key from docs where file = ? and case_key is not null)";
+        let mut found = self.thread_rows(by_case, file);
         if found.is_empty() {
-            found = rows("select source, thread, title from docs where file = ?");
+            found = self.thread_rows("select source, thread, title from docs where file = ?", file);
         }
-        found
-            .into_iter()
+        Self::named_threads(found)
+    }
+
+    /// The threads (and events) of a matter, by its key (`case:<n>`).
+    pub fn key_threads(&self, case_key: &str) -> HashSet<String> {
+        Self::named_threads(self.thread_rows("select source, thread, title from docs where case_key = ?", case_key))
+    }
+
+    fn thread_rows(&self, sql: &str, arg: &str) -> Vec<(String, Option<String>, String)> {
+        self.db
+            .prepare(sql)
+            .and_then(|mut st| {
+                st.query_map([arg], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()
+            })
+            .unwrap_or_default()
+    }
+
+    fn named_threads(rows: Vec<(String, Option<String>, String)>) -> HashSet<String> {
+        rows.into_iter()
             .filter_map(|(source, thread, title)| match source.as_str() {
                 "event" => Some(format!("event:{title}")),
                 _ => thread,

@@ -334,7 +334,33 @@ fn the_answer_to_asking_back_is_read_with_the_question_and_its_candidates_and_on
     let reply_prompt = m.last().last().unwrap()["content"].as_str().unwrap().to_string();
     assert!(reply_prompt.contains("다른 회사 영희 둘째") && !reply_prompt.contains("회의록"), "{reply_prompt}");
     chat_reply(&t.p, m.as_ref(), &recall, day, "오늘 좀 피곤하네", None).unwrap();
-    assert_eq!(words_asked(), "오늘 좀 피곤하네", "the turn before did not ask back");
+    let said = words_asked();
+    assert!(
+        !said.contains("[앞 대화]") && said.ends_with("오늘 좀 피곤하네"),
+        "the turn before did not ask back: {said}"
+    );
+}
+
+#[test]
+fn a_namesake_asked_about_once_is_not_asked_again_and_the_likeliest_is_assumed() {
+    use life_server::assistant::chat::chat_reply;
+    let t = namesakes();
+    t.lib();
+    // the answer tells no one apart: the name again
+    let m = common::FakeModel::new(|msgs| {
+        if msgs[0]["content"].as_str().unwrap_or("").starts_with(recall::WORDS_SYSTEM) {
+            return Ok(r#"{"search": true, "people": ["김영희"], "words": []}"#.into());
+        }
+        Ok("어느 분인가요?".into())
+    });
+    let recall = |msg: &str, d: &str, said: &[String], before: Option<&str>| {
+        recall::find_with_sources(&t.p, m.as_ref(), msg, d, said, before)
+    };
+    chat_reply(&t.p, m.as_ref(), &recall, "2026-10-31", "영희 님이랑 뭐 있었지", None).unwrap();
+    chat_reply(&t.p, m.as_ref(), &recall, "2026-10-31", "글쎄요", None).unwrap();
+    let s = m.last().last().unwrap()["content"].as_str().unwrap().to_string();
+    assert!(!s.contains(recall::NAMESAKES) && s.contains(recall::ASSUMED), "{s}");
+    assert!(s.contains("회의록") && !s.contains("다른 회사 영희 둘째"), "the one with the most records: {s}");
 }
 
 #[test]
