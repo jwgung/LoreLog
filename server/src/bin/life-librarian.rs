@@ -216,8 +216,13 @@ fn measure(lib: &mut Librarian, paths: &Paths, file: &std::path::Path, k: usize,
             None => String::new(),
         };
         let share = r.person_share.map(|(a, b)| format!("  (그 사람과 {a}/{b})")).unwrap_or_default();
+        let hit = match (r.expect_ask, r.candidate_hit) {
+            (true, Some(h)) => format!("  (되물어야 함: 되물음 O, 후보 적중 {:.0}%)", h * 100.0),
+            (true, None) => "  (되물어야 함: 되묻지 않음 X)".into(),
+            _ => String::new(),
+        };
         let raw = if matches!(r.kind, Kind::Pending | Kind::Period) { "  · ".into() } else { mark(r.raw_rank) };
-        println!("{raw}  {}{share}{model}{gathered}", r.q);
+        println!("{raw}  {}{share}{model}{gathered}{hit}", r.q);
     }
     println!();
     for (kind, s) in eval::summary(&results) {
@@ -231,9 +236,28 @@ fn measure(lib: &mut Librarian, paths: &Paths, file: &std::path::Path, k: usize,
             Some(a) => format!(", {a}"),
             None => String::new(),
         };
-        let earlier =
-            if s.earlier.1 > 0 { format!(", 같은 거래처 전 건 {}", pct(s.earlier)) } else { String::new() };
-        println!("재현율@{k} {}: 말 그대로 {}{model}{asked}{earlier}", kind.label(), pct(s.raw));
+        println!("재현율@{k} {}: 말 그대로 {}{model}{asked}", kind.label(), pct(s.raw));
+        let e = &s.earlier;
+        if let (Some(found), true) = (e.found_avg(), e.cases > 0) {
+            let share = |x: f64| format!("{:.0}%", x * 100.0);
+            let exact = e.exact_avg().map(share).unwrap_or_else(|| "-".into());
+            println!(
+                "  지난 건: 찾은 정도 평균 {}, 정확한 정도 평균 {} (지난 건을 보인 문항만), 하나라도 보인 문항 {}/{}, 지난 건 없음 {}문항",
+                share(found),
+                exact,
+                e.any,
+                e.cases,
+                e.none
+            );
+        }
+    }
+    if results.iter().any(|r| r.model_words.is_some()) {
+        let a = eval::ask_summary(&results);
+        if a.should_ask.1 > 0 {
+            let hit = a.candidates_avg().map(|x| format!("{:.0}%", x * 100.0)).unwrap_or_else(|| "-".into());
+            println!("되물어야 하는 문항 중 되물음 {}/{} (후보 적중 평균 {hit})", a.should_ask.0, a.should_ask.1);
+        }
+        println!("바로 답해야 하는 문항 중 되물음 {}/{}", a.should_answer.0, a.should_answer.1);
     }
     ExitCode::SUCCESS
 }
