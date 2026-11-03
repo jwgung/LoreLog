@@ -887,18 +887,24 @@ impl Librarian {
     }
 
     /// A matter's size (its mails and events; the files that came with them not counted), the days it spans and the
-    /// title of its latest record.
-    fn case_span(&self, case: &str) -> rusqlite::Result<CaseSpan> {
+    /// title of its latest record; up to `until` when given (the matter as it stood on the day asked).
+    fn case_span(&self, case: &str, until: Option<&str>) -> rusqlite::Result<CaseSpan> {
+        let (bound, args): (&str, Vec<&str>) = match until {
+            Some(d) => ("and day <= ?2", vec![case, d]),
+            None => ("", vec![case]), // as it was: all of it
+        };
         let (count, first, last): (i64, Option<String>, Option<String>) = self.db.query_row(
-            "select count(*), min(day), max(day) from docs where case_key = ? and source != 'file'",
-            [case],
+            &format!("select count(*), min(day), max(day) from docs where case_key = ?1 and source != 'file' {bound}"),
+            params_from_iter(&args),
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
         let latest = self
             .db
             .query_row(
-                "select title from docs where case_key = ? and source != 'file' order by day desc, n desc limit 1",
-                [case],
+                &format!(
+                    "select title from docs where case_key = ?1 and source != 'file' {bound} order by day desc, n desc limit 1"
+                ),
+                params_from_iter(&args),
                 |r| r.get(0),
             )
             .optional()?;
@@ -1035,7 +1041,7 @@ impl Librarian {
             file = mail_file;
         }
         let (count, first, last, latest) = match case {
-            Some(c) => self.case_span(c)?,
+            Some(c) => self.case_span(c, bound.until)?,
             None => (1, None, None, None),
         };
         let count = count.max(1);

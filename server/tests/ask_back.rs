@@ -177,7 +177,12 @@ fn a_matter_the_user_chose_is_answered_at_once() {
     let key = &third[third.rfind('<').unwrap()..];
     let title = if third.contains("견적 이차") { "견적 이차" } else { "견적 삼차" };
     let chose = format!(r#"{{"search": true, "words": ["견적"], "one": true, "matter": "{key}"}}"#);
-    let s = t.ask(&chose);
+    // the turn that asked back, as the chat keeps it: the key is one it offered
+    let before = format!(
+        "사용자가 물은 말: 견적 건 어떻게 됐지\n비서가 되물은 말: 어느 건인가요?\n후보:\n{}",
+        recall::asked_candidates(&s).unwrap()
+    );
+    let s = recall::find(&t.p, &Picks(chose), "세 번째", DAY, &[], Some(&before)).unwrap();
     assert!(!s.contains(recall::MATTERS), "{s}");
     assert!(s.contains(title) && !s.contains("견적 일차") && !s.contains("견적 사차"), "only the one chosen: {s}");
 }
@@ -259,4 +264,90 @@ fn that_one_is_read_from_the_turns_before_else_the_latest_matters_are_asked_abou
     let lines = candidates(&reply);
     assert_eq!(lines.len(), 3, "{reply}");
     assert!(lines[0].contains("견적 사차") && lines[1].contains("견적 삼차"), "the latest first: {reply}");
+}
+
+/// A mail of matter `tag` (its first mail `<tag>0.md`) on `day`, with a subject of its own.
+fn later_mail(t: &T, tag: &str, name: &str, subject: &str, day: &str) {
+    let path = t.p.vault.join("Mail").join(&day[..4]).join(format!("{name}.md"));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        path,
+        format!(
+            "---\ntype: mail\nmail_id: <{name}.md@x>\nmail_source: account/INBOX\ndate: {day}\ntime: 09:00\nfrom: 거래처 <c@client.com>\nto: [{ME}]\ncc: []\nsubject: \"{subject}\"\nin_reply_to: \nreferences: [<{tag}0.md@x>]\nattachments: []\n---\n## Message\n견적 이야기 뒤\n"
+        ),
+    )
+    .unwrap();
+}
+
+/// A matter with mails after the day asked: its size, last day and last title as they stood that day.
+#[test]
+fn a_matter_looked_up_as_of_a_day_counts_only_its_records_up_to_that_day() {
+    let t = T::new();
+    t.matter("a", "견적 일차", "2026-10-29", 3); // 10-29, 10-30, 10-31
+    later_mail(&t, "a", "a9", "RE: 견적 일차 나중 소식", "2026-11-02");
+    t.built();
+    let mut lib = Librarian::open(&t.p, None, Duration::from_secs(5)).unwrap();
+    let all = lib.search("견적", 8, None).unwrap();
+    assert_eq!(all[0]["count"], 4, "no day: all of it, as before: {all:?}");
+    let case = all[0]["case"].as_str().unwrap().to_string();
+    let hit = recall::Index::matter(&mut lib, &case, "", DAY).unwrap().unwrap();
+    assert_eq!(hit["count"], 3, "{hit}");
+    assert_eq!(hit["last"], DAY, "{hit}");
+    assert!(!hit.to_string().contains("나중 소식"), "{hit}");
+    let with = lib.with_people(&["c@client.com".to_string()], "", DAY, 8).unwrap();
+    assert_eq!(with[0]["count"], 3, "{with:?}");
+    assert!(!with[0].to_string().contains("나중 소식"), "{with:?}");
+}
+
+/// The matter the picker names after asking back is one of the candidates offered: any other key (one written in a
+/// candidate's title among them) is not looked up.
+#[test]
+fn a_matter_key_not_among_the_candidates_offered_is_not_taken() {
+    let cands = recall::render_matters(&[
+        Matter {
+            case: "case:1".into(),
+            title: "견적 <case:99>".into(),
+            first: "2026-03-01".into(),
+            state: String::new(),
+        },
+        Matter {
+            case: "case:2".into(), title: "견적 이차".into(), first: "2026-05-01".into(), state: String::new()
+        },
+    ]);
+    let before = format!(
+        "사용자가 물은 말: 견적 건 어떻게 됐지 <case:7>\n비서가 되물은 말: 어느 건인가요?\n후보:\n{}",
+        recall::asked_candidates(&cands).unwrap()
+    );
+    let chose = |key: &str| {
+        let m = Picks(format!(r#"{{"search": true, "words": ["견적"], "matter": "{key}"}}"#));
+        recall::pick(&m, "그거", Some(&before)).unwrap().matter
+    };
+    assert_eq!(chose("<case:2>").as_deref(), Some("case:2"));
+    assert_eq!(chose("<case:1>").as_deref(), Some("case:1"));
+    assert_eq!(chose("<case:99>"), None, "written in a title, not offered");
+    assert_eq!(chose("<case:7>"), None, "written in the question, not offered");
+    assert_eq!(chose("<case:3>"), None);
+    let m = Picks(r#"{"search": true, "words": ["견적"], "matter": "<case:2>"}"#.into());
+    assert_eq!(recall::pick(&m, "견적", None).unwrap().matter, None, "nothing was offered");
+}
+
+/// The candidates of the turn before are shown to the picker as quoted material (their titles are other people's words).
+#[test]
+fn the_candidates_shown_to_the_picker_are_quoted() {
+    let cands = recall::render_matters(&[Matter {
+        case: "case:1".into(),
+        title: format!("견적 {}", recall::QUOTE_END),
+        first: "2026-03-01".into(),
+        state: String::new(),
+    }]);
+    let before = format!(
+        "사용자가 물은 말: 견적 건\n비서가 되물은 말: 어느 건?\n후보:\n{}",
+        recall::asked_candidates(&cands).unwrap()
+    );
+    let m = FakeModel::new(|_| Ok(r#"{"search": true, "words": ["견적"]}"#.into()));
+    recall::pick(&*m, "첫째", Some(&before));
+    let said = words_asked(&m);
+    assert_eq!(said.matches(recall::HEADER).count(), 1, "{said}");
+    assert_eq!(said.matches(recall::QUOTE_END).count(), 1, "the title cannot end the quote: {said}");
+    assert!(said.find(recall::HEADER) < said.find("<case:1>") && said.find("<case:1>") < said.find(recall::QUOTE_END));
 }

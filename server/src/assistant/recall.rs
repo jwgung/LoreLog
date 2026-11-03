@@ -335,6 +335,7 @@ pub fn render_matters(matters: &[Matter]) -> String {
 fn chosen_matter(said: &str) -> Option<String> {
     let inner = said.trim().trim_start_matches('<').trim_end_matches('>').trim();
     let n = inner.strip_prefix("case:")?;
+    // 18 digits at most: any such number fits the index's integer (i64) keys
     (!n.is_empty() && n.len() <= 18 && n.bytes().all(|b| b.is_ascii_digit())).then(|| inner.to_string())
 }
 
@@ -518,6 +519,27 @@ pub fn pick(model: &dyn crate::llm::Model, message: &str, before: Option<&str>) 
 /// how many of the user's lines before are shown to the picker, for "그거" to be read by (#93)
 pub const RECENT_LINES: usize = 3;
 
+/// where the candidates start in the turn that asked back (see the chat's `asked_before`)
+const OFFERED: &str = "후보:\n";
+
+/// The turn that asked back as the picker reads it: its candidates (the titles are other people's words) quoted.
+fn shown_before(before: &str) -> String {
+    match before.rfind(OFFERED) {
+        Some(i) => format!("{}{OFFERED}{}", plain(&before[..i]), quote(&plain(&before[i + OFFERED.len()..]))),
+        None => plain(before),
+    }
+}
+
+/// The matters the turn that asked back offered: the key that ends each candidate's line (a key within a title is not).
+fn offered(before: &str) -> Vec<String> {
+    let Some(i) = before.rfind(OFFERED) else { return Vec::new() };
+    before[i + OFFERED.len()..]
+        .lines()
+        .filter(|l| l.starts_with(CANDIDATE) && l.trim_end().ends_with('>'))
+        .filter_map(|l| l.rfind('<').and_then(|j| chosen_matter(&l[j..])))
+        .collect()
+}
+
 /// [`pick`], with the user's lines before this message (the last [`RECENT_LINES`]) for what "그거" points at.
 pub fn pick_in(
     model: &dyn crate::llm::Model,
@@ -528,7 +550,7 @@ pub fn pick_in(
     let recent: Vec<String> =
         recent[recent.len().saturating_sub(RECENT_LINES)..].iter().map(|l| format!("- {}", plain(l))).collect();
     let said = match before {
-        Some(b) => format!("[앞 대화]\n{}\n\n[사용자의 답]\n{message}", plain(b)),
+        Some(b) => format!("[앞 대화]\n{}\n\n[사용자의 답]\n{message}", shown_before(b)),
         None if !recent.is_empty() => format!("[최근 대화]\n{}\n\n[사용자의 말]\n{message}", recent.join("\n")),
         None => message.to_string(),
     };
@@ -569,7 +591,12 @@ pub fn pick_in(
         period: d.get("period").and_then(Value::as_str).and_then(super::period::Period::from_name),
         one: yes("one"),
         unclear: yes("unclear"),
-        matter: d.get("matter").and_then(Value::as_str).and_then(chosen_matter),
+        // only a matter offered the turn before: a key the model read elsewhere (a title, the question) is not taken
+        matter: d
+            .get("matter")
+            .and_then(Value::as_str)
+            .and_then(chosen_matter)
+            .filter(|m| before.is_some_and(|b| offered(b).contains(m))),
     };
     // "요즘 OO 님이랑 뭐 있었지", "요즘 지원사업 공고 뭐 있었지" ask about records, not what hangs: a small model
     // takes 요즘 for a period. "요즘 밀린 거" names nothing.
