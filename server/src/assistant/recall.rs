@@ -75,8 +75,8 @@ pub fn render(hits: &[Value]) -> String {
                 head += &format!("{}\n", if guessed { NOW_GUESSED } else { NOW_HIT });
                 gathered = true;
             } else if this.is_some() && this != like {
-                head +=
-                    &format!("- ({}, 최근 것부터. 건마다 경과와 근거 메일)\n", plain(this.as_deref().unwrap_or("")));
+                let like = plain(this.as_deref().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ");
+                head += &format!("- ({like}, 최근 것부터. 건마다 경과와 근거 메일)\n");
             } else if this.is_none() && gathered {
                 head += &format!("{OTHER_HITS}\n");
                 gathered = false;
@@ -149,7 +149,10 @@ pub fn quote(section: &str) -> String {
 /// a record is a guess and is marked as one (`추정`), with the record's words that say it and their day; what the
 /// rules took from the mail headers is not.
 fn known(h: &Value) -> String {
-    let s = |v: &Value, k: &str| plain(v.get(k).and_then(Value::as_str).unwrap_or("")).trim().to_string();
+    // on one line: a label the model read from a mail makes no line of its own
+    let s = |v: &Value, k: &str| {
+        plain(v.get(k).and_then(Value::as_str).unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ")
+    };
     let guess = |v: &Value| v.get("origin").and_then(Value::as_str) == Some("model");
     // `label (since, 근거 "…")`
     let said = |v: &Value, label: String| {
@@ -346,7 +349,7 @@ pub const NOW: &str =
 pub const NOW_HIT: &str = "- (지금 일로 본 건. 그 아래는 이 건과 비슷한 지난 건이다)";
 /// The line before the matter at hand when the question named only a kind of work and the first matter whose
 /// counterparty has earlier matters, among what the words found, was taken for it (#95): a guess, to be said as one.
-pub const NOW_GUESSED: &str = "- (질문에 건이 적혀 있지 않아, 찾은 기록 가운데 거래처가 있는 첫 건을 지금 일로 보았다(추정). 어느 건으로 보았는지 한 줄로 밝힌다. 그 아래는 이 건과 비슷한 지난 건이다)";
+pub const NOW_GUESSED: &str = "- (질문에 건이 적혀 있지 않아, 찾은 기록 가운데 거래처가 있고 그 거래처의 지난 건도 있는 첫 건을 지금 일로 보았다(추정). 어느 건으로 보았는지 한 줄로 밝힌다. 그 아래는 이 건과 비슷한 지난 건이다)";
 /// The line after the matter at hand when no earlier one is like it.
 pub const NO_PRECEDENT: &str = "- (같은 거래처나 같은 상황의 지난 건은 찾지 못했다. 아래는 물은 낱말로 찾은 기록이다. 비슷한 건을 짐작해 말하지 않는다)";
 /// The line before what else the words found, after the earlier matters.
@@ -888,9 +891,10 @@ fn precedent(lib: &mut dyn Index, p: &Picked, limit: usize, day: &str, said: &[S
     };
     match pre {
         Some(pre) => {
-            let like = pre.like.label();
+            let (like, kind) = (pre.like.label(), pre.like.kind());
             out.extend(pre.hits.into_iter().map(|mut h| {
                 h["like"] = Value::String(like.clone());
+                h["like_kind"] = Value::String(kind.to_string());
                 h
             }));
         }

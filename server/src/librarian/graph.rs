@@ -1361,9 +1361,10 @@ impl Librarian {
         let roles: Vec<Value> = {
             let mut st = self.db.prepare(
                 "select coalesce(n.name, e.src), e.label, coalesce(e.since, ''), coalesce(e.evidence, ''), coalesce(e.origin, '') from edges e
-                 left join nodes n on n.id = e.src where e.dst = ? and e.rel = 'role' limit 4",
+                 left join nodes n on n.id = e.src where e.dst = ? and e.rel = 'role'
+                 and (e.since is null or e.since = '' or e.since <= ?) limit 4",
             )?;
-            st.query_map([c], |r| {
+            st.query_map(params![c, day], |r| {
                 Ok(json!({"who": r.get::<_, String>(0)?, "label": r.get::<_, String>(1)?,
                           "since": r.get::<_, String>(2)?, "evidence": r.get::<_, String>(3)?,
                           "origin": r.get::<_, String>(4)?}))

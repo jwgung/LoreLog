@@ -15,7 +15,7 @@ use super::Librarian;
 use super::graph::{Structure, domain, mine, own_domains};
 use super::index::{MASS_MAIL, name_key};
 
-/// how many earlier matters are shown side by side (ADR 0005: two or three, the latest)
+/// how many earlier matters are shown side by side (ADR 0005: two or three; the user's own first, then the latest)
 pub const MAX_PRECEDENTS: usize = 3;
 /// how many states of a matter's course are shown, the latest
 pub const MAX_FLOW: usize = 6;
@@ -30,18 +30,36 @@ pub enum Like {
     Situation { state: String, role: String },
 }
 
+/// [`Like::kind`] of the earlier matters with the same counterparty
+pub const BY_COUNTERPARTY: &str = "counterparty";
+/// [`Like::kind`] of the earlier matters in the same situation
+pub const BY_SITUATION: &str = "situation";
+
+/// On one line: a name the records gave (the model may have read it from a mail) makes no line of its own.
+fn one(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 impl Like {
-    /// How it is said in the quoted section.
+    /// What they are gathered by, for a measure to read (the label's words may change).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Like::Counterparty(_) => BY_COUNTERPARTY,
+            Like::Situation { .. } => BY_SITUATION,
+        }
+    }
+
+    /// How it is said in the quoted section, on one line.
     pub fn label(&self) -> String {
         match self {
-            Like::Counterparty(name) => format!("같은 거래처({name})의 지난 건"),
+            Like::Counterparty(name) => format!("같은 거래처({})의 지난 건", one(name)),
             Like::Situation { state, role } => {
                 let mut what = Vec::new();
                 if !state.is_empty() {
-                    what.push(format!("상태 {state}"));
+                    what.push(format!("상태 {}", one(state)));
                 }
                 if !role.is_empty() {
-                    what.push(format!("상대 역할 {role}"));
+                    what.push(format!("상대 역할 {}", one(role)));
                 }
                 format!("거래처가 같은 지난 건이 없어, 같은 상황({})의 지난 건", what.join(", "))
             }
@@ -105,7 +123,7 @@ impl Librarian {
         }
         // the situation: the stage it is in, and the parts of the other side
         let state = self.states(case, day).and_then(|(s, _)| s["label"].as_str().map(str::to_string));
-        let roles = self.their_roles(case)?;
+        let roles = self.their_roles(case, day)?;
         if state.is_none() && roles.is_empty() {
             return Ok(None);
         }
@@ -124,10 +142,12 @@ impl Librarian {
         }
         if !roles.is_empty() {
             let me = mine(&self.db)?;
-            let mut st =
-                self.db.prepare("select src, dst, label from edges where rel = 'role' and dst like 'case:%'")?;
+            let mut st = self.db.prepare(
+                "select src, dst, label from edges where rel = 'role' and dst like 'case:%'
+                 and (since is null or since = '' or since <= ?)",
+            )?;
             let rows: Vec<(String, String, String)> =
-                st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+                st.query_map([day], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
             let by_role: HashSet<String> = rows
                 .into_iter()
                 .filter(|(src, _, l)| !is_me(src, &me) && roles.iter().any(|r| same(l, r)))
@@ -147,11 +167,14 @@ impl Librarian {
     }
 
     /// The parts the other side has in a matter (the labels of its roles not the user's), as the records name them.
-    fn their_roles(&self, case: &str) -> anyhow::Result<Vec<String>> {
+    fn their_roles(&self, case: &str, day: &str) -> anyhow::Result<Vec<String>> {
         let me = mine(&self.db)?;
-        let mut st = self.db.prepare("select src, label from edges where rel = 'role' and dst = ? order by rowid")?;
+        let mut st = self.db.prepare(
+            "select src, label from edges where rel = 'role' and dst = ? and (since is null or since = '' or since <= ?)
+             order by rowid",
+        )?;
         let rows: Vec<(String, String)> =
-            st.query_map([case], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+            st.query_map(params![case, day], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
         let mut out: Vec<String> = Vec::new();
         for (src, label) in rows {
             if !is_me(&src, &me) && !label.trim().is_empty() && !out.contains(&label) {
@@ -229,12 +252,12 @@ impl Librarian {
             .unwrap_or_else(|_| day.to_string());
         let mut out = Vec::new();
         for m in self.under_way(&since, day)? {
-            let mine: i64 = self.db.query_row(
+            let involved: i64 = self.db.query_row(
                 "select coalesce(max(involved), 0) from docs where case_key = ? and day <= ?",
                 params![m.case, day],
                 |r| r.get(0),
             )?;
-            if mine == 1 && !out.contains(&m.case) {
+            if involved == 1 && !out.contains(&m.case) {
                 out.push(m.case);
             }
             if out.len() >= n {

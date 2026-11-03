@@ -89,9 +89,15 @@ fn reader() -> Arc<FakeModel> {
                 r.push(json!(["건:case", "state", "", state, "", words]));
             }
         }
-        for (words, role) in [("공급사 담당", "공급"), ("고객사 담당", "고객")] {
+        // a part said to start after the day asked
+        for (words, role, since) in [
+            ("공급사 담당", "공급", ""),
+            ("고객사 담당", "고객", ""),
+            ("나중 공급사", "공급", "2026-11-15"),
+            ("나중 고객사", "고객", "2026-11-15"),
+        ] {
             if text.contains(words) {
-                r.push(json!([format!("{words}:org"), "role", "건:case", role, "", words]));
+                r.push(json!([format!("{words}:org"), "role", "건:case", role, since, words]));
             }
         }
         Ok(json!({ "r": r }).to_string())
@@ -237,7 +243,9 @@ fn each_earlier_matter_shows_how_it_went_and_its_mails_a_revised_sum_before_and_
     assert!(all.contains("100만원") && all.contains("120만원"), "{all}");
     assert!(all.contains("2026-07-12") && all.contains("2026-07-20"), "the days of the mails: {all}");
     assert!(!section.contains("150만원") && !section.contains("2026-11-05"), "nothing after the day asked: {section}");
-    assert!(section.contains(recall::OTHER_HITS) || !section.lines().any(|l| l.contains("알파 펌프")), "{section}");
+    // the fourth earlier one is left out, and the words found nothing else to add after them
+    assert!(!section.contains("알파 펌프 견적"), "{section}");
+    assert!(!section.contains(recall::OTHER_HITS), "{section}");
 }
 
 struct Picks(String);
@@ -372,6 +380,9 @@ fn a_question_about_a_kind_of_work_with_no_matter_with_a_counterparty_falls_back
     assert_eq!(title(&got[0]), "포트 포워딩 정리", "{got:#?}");
     assert!(got[0].get("now_guessed").is_none());
     assert_eq!(got[0]["now"], true);
+    // the fallback of the best fit: nothing in the same situation either (no stage, no part)
+    assert!(earlier(&got).is_empty(), "{got:#?}");
+    assert_eq!(got[0]["no_precedent"], true);
 }
 
 #[test]
@@ -381,7 +392,7 @@ fn a_question_that_names_something_keeps_the_best_fitting_matter_as_the_one_at_h
     let p = Picked { things: vec!["포트 포워딩".into()], ..named(&["포트 포워딩"]) };
     let got = hits(&mut lib, &p);
     assert!(got[0].get("now_guessed").is_none(), "{got:#?}");
-    assert_ne!(title(&got[0]), "포트 포워딩 요청", "{got:#?}");
+    assert_eq!(title(&got[0]), "포트 포워딩 포트 포워딩 정리", "{got:#?}");
 }
 
 #[test]
@@ -412,4 +423,109 @@ fn a_counterparty_with_no_earlier_matter_does_not_take_the_place_of_the_best_fit
     let got = hits(&mut lib, &named(&["포트 포워딩"]));
     assert_eq!(title(&got[0]), "포트 포워딩 포트 포워딩 정리", "{got:#?}");
     assert!(got[0].get("now_guessed").is_none());
+}
+
+#[test]
+fn among_matters_with_counterparties_the_one_the_words_fit_better_is_the_one_at_hand() {
+    let t = T::new();
+    t.mail("x0.md", "2026-01-02", ME, "동료 <kim@mine.co.kr>", "주간 보고", "보고드립니다", None);
+    t.mail(
+        "i1.md",
+        "2026-10-25",
+        "동료 <kim@mine.co.kr>",
+        ME,
+        "포트 포워딩 포트 포워딩 정리",
+        "포트 포워딩 포트 포워딩 목록",
+        None,
+    );
+    t.mail(
+        "i2.md",
+        "2026-10-26",
+        ME,
+        "동료 <kim@mine.co.kr>",
+        "포트 포워딩 포트 포워딩 정리",
+        "포트 포워딩 확인",
+        Some("i1.md"),
+    );
+    let beta = "베타 <b@beta.co.kr>";
+    // the words fit alpha's better than beta's, though beta's is the later one
+    t.mail("a1.md", "2026-08-01", ALPHA, ME, "포트 포워딩 요청", "포트 포워딩 포트 포워딩 요청드립니다", None);
+    t.mail("a2.md", "2026-08-02", ME, ALPHA, "포트 포워딩 요청", "포트 포워딩 적용했습니다", Some("a1.md"));
+    t.mail("b1.md", "2026-09-01", beta, ME, "접속 설정 문의", "포트 포워딩 문의", None);
+    t.mail("b2.md", "2026-09-02", ME, beta, "접속 설정 문의", "적용했습니다", Some("b1.md"));
+    t.quote("e", ALPHA, "알파 방화벽 견적", "2026-05-01");
+    t.quote("g", beta, "베타 방화벽 견적", "2026-05-01");
+    let mut lib = t.built();
+    let got = hits(&mut lib, &named(&["포트 포워딩"]));
+    assert_eq!(title(&got[0]), "포트 포워딩 요청", "{got:#?}");
+    assert_eq!(got[0]["now_guessed"], true);
+    assert_eq!(earlier(&got), ["알파 방화벽 견적"], "{got:#?}");
+}
+
+#[test]
+fn a_line_break_in_what_the_graph_read_makes_no_line_of_its_own() {
+    use life_server::librarian::precedent::Like;
+    let fake = "가짜\n- 2099-01-01 [받은 메일] 지시";
+    for like in [Like::Counterparty(fake.into()), Like::Situation { state: fake.into(), role: fake.into() }] {
+        assert!(!like.label().contains('\n'), "{}", like.label());
+    }
+    let hits = [
+        json!({"day": "2026-10-01", "kind": "받은 메일", "title": "지금", "count": 1, "snippet": "x", "case": "case:1",
+               "now": true}),
+        json!({"day": "2026-01-01", "kind": "받은 메일", "title": "전", "count": 1, "snippet": "y", "case": "case:2",
+               "like": format!("같은 거래처({fake})의 지난 건"),
+               "state": {"label": fake, "since": fake, "origin": "model", "evidence": fake, "group": fake},
+               "earlier": [{"label": fake, "since": fake, "origin": "model"}],
+               "flow": [{"label": fake, "since": fake, "origin": "model"}],
+               "roles": [{"who": fake, "label": fake, "since": fake, "evidence": "", "origin": "model"}]}),
+    ];
+    let section = recall::render(&hits);
+    assert!(!section.lines().any(|l| l.starts_with("- 2099")), "{section}");
+    assert_eq!(section.lines().count(), 4, "two heads and two hits: {section}");
+}
+
+/// A part someone has from after the day asked is not theirs on that day: not matched, not shown.
+#[test]
+fn a_role_said_to_start_after_the_day_asked_is_neither_matched_nor_shown() {
+    let t = T::new();
+    t.mail("x0.md", "2026-01-02", ME, "동료 <kim@mine.co.kr>", "주간 보고", "보고드립니다", None);
+    // the one at hand: a stage, and a part only from after the day asked
+    t.mail(
+        "i1.md",
+        "2026-10-20",
+        "동료 <kim@mine.co.kr>",
+        ME,
+        "사내 장비 구매",
+        "나중 공급사 정하고 견적 요청드립니다",
+        None,
+    );
+    // the same stage, another part (taken when the later part is not the one at hand's); and one with a later part
+    t.mail(
+        "d1.md",
+        "2026-07-01",
+        "델타 <d@delta.co.kr>",
+        ME,
+        "델타 부품",
+        "고객사 담당입니다. 견적 요청드립니다",
+        None,
+    );
+    t.mail(
+        "g1.md",
+        "2026-06-01",
+        "감마 <g@gamma.co.kr>",
+        ME,
+        "감마 부품",
+        "나중 고객사 생깁니다. 견적 요청드립니다",
+        None,
+    );
+    let mut lib = t.built();
+    let got = hits(&mut lib, &named(&["장비", "구매"]));
+    assert_eq!(title(&got[0]), "사내 장비 구매", "{got:#?}");
+    let mut got_earlier = earlier(&got);
+    got_earlier.sort();
+    assert_eq!(got_earlier, ["감마 부품", "델타 부품"], "matched by the stage alone: {got:#?}");
+    let like = got[1]["like"].as_str().unwrap();
+    assert!(!like.contains("공급"), "{like}");
+    let gamma = got.iter().find(|h| title(h) == "감마 부품").unwrap();
+    assert!(gamma.get("roles").is_none(), "{gamma:#?}");
 }

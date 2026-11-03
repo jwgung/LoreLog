@@ -333,9 +333,9 @@ pub fn run(
                     // as the chat does today; asking back is scored by the candidates it lists (#93)
                     let r = match recall::lookup(lib, &p, k, &today, &[])? {
                         recall::Named::Hits(h) => {
-                            let like: Vec<&str> = h.iter().filter_map(|h| h.get("like")?.as_str()).collect();
+                            let like: Vec<&str> = h.iter().filter_map(|h| h.get("like_kind")?.as_str()).collect();
                             if let Some(first) = like.first() {
-                                gathered = Some((like.len(), first.starts_with("같은 거래처")));
+                                gathered = Some((like.len(), *first == super::precedent::BY_COUNTERPARTY));
                             }
                             if !earlier.is_empty() {
                                 let like: Vec<serde_json::Value> =
