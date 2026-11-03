@@ -111,7 +111,7 @@ impl Librarian {
     }
 
     /// Matters with a record since `since` whose last state up to `today` is not an end.
-    fn under_way(&self, since: &str, today: &str) -> anyhow::Result<Vec<Matter>> {
+    pub(super) fn under_way(&self, since: &str, today: &str) -> anyhow::Result<Vec<Matter>> {
         let groups = Structure::load(&self.paths).groups; // the user's names where given (#63)
         let mut st = self.db.prepare(
             "select case_key from docs where case_key is not null and source != 'file' and day between ? and ?

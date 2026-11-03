@@ -6,6 +6,7 @@ pub mod extract;
 pub mod graph;
 pub mod hanging;
 pub mod index;
+pub mod precedent;
 pub mod records;
 pub mod structure;
 
