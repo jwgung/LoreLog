@@ -5,7 +5,8 @@
 //!
 //! Kinds of question and what counts as found in the top `k`:
 //!   status     "그 건 어떻게 됐지"        the thread it is about
-//!   precedent  "전에 어떻게 했지"          the earlier thread it is about
+//!   precedent  "전에 어떻게 했지"          the earlier thread it is about; with `earlier`, also whether the earlier
+//!                                          matters like the one at hand (#95) hold every one of those threads
 //!   person     "이 사람이랑 뭐 있었지"      any of the latest five things with that address up to today: threads of mail
 //!                                          they sent or received (not copied, not mass mail) and events they attended
 //!                                          (read from the notes, not from the index), and how many hits are with them
@@ -63,6 +64,8 @@ pub struct Case {
     pub q: String,
     /// status, precedent: the thread (as the index names it, `mail:<message id>`)
     pub thread: Option<String>,
+    /// precedent: the threads of the earlier matters with the same counterparty it should gather (#95), when known
+    pub earlier: Option<Vec<String>>,
     /// person: their mail address
     pub person: Option<String>,
     /// graph: the threads of every matter it is about
@@ -126,6 +129,12 @@ pub struct Result1 {
     pub asked: bool,
     /// person: (hits with that person, hits) for the user's words
     pub person_share: Option<(usize, usize)>,
+    /// precedent with `earlier`, the model's words: were all of them among the earlier matters gathered (#95)? Asked
+    /// back: not (they come only after the answer).
+    pub earlier_shown: Option<bool>,
+    /// the model's words gathered earlier matters like the one at hand (#95): how many, and whether by the same
+    /// counterparty (else by the situation)
+    pub gathered: Option<(usize, bool)>,
 }
 
 /// Does this note's header name the address (from, to or cc)?
@@ -216,7 +225,8 @@ fn shown_all(lib: &Librarian, hits: &[serde_json::Value], records: &[String]) ->
     Some(last)
 }
 
-/// The words the model picked as shown: `@person`, `#organization`, `^thing`, `~period`, then the words.
+/// The words the model picked as shown: `@person`, `#organization`, `^thing`, `~period`, `=전에` for a question about
+/// how it was done before (#95), then the words.
 fn shown(p: &recall::Picked) -> Vec<String> {
     p.people
         .iter()
@@ -224,6 +234,7 @@ fn shown(p: &recall::Picked) -> Vec<String> {
         .chain(p.orgs.iter().map(|o| format!("#{o}")))
         .chain(p.things.iter().map(|t| format!("^{t}")))
         .chain(p.period.map(|x| format!("~{}", x.label())))
+        .chain(p.precedent.then(|| "=전에".to_string()))
         .chain(p.words.iter().cloned())
         .collect()
 }
@@ -241,7 +252,9 @@ fn in_candidates(
         recall::Asked::People(cs) => {
             return cs.iter().position(|c| addr.is_some_and(|a| c.addr.to_lowercase() == a)).map(|i| i + 1);
         }
-        recall::Asked::Matters(ms) => ms.iter().map(|m| lib.key_threads(&m.case)).collect(),
+        a @ (recall::Asked::Matters(_) | recall::Asked::Now(_)) => {
+            a.matters().iter().map(|m| lib.key_threads(&m.case)).collect()
+        }
     };
     let place = |t: &String| holds.iter().position(|h| h.contains(t)).map(|i| i + 1);
     match kind {
@@ -294,6 +307,9 @@ pub fn run(
             (with, hits.len())
         });
         let mut asked = false;
+        let mut earlier_shown = None;
+        let mut gathered = None;
+        let earlier: HashSet<String> = c.earlier.iter().flatten().cloned().collect();
         let (model_words, model_rank) = match model {
             None => (None, None),
             Some(m) => match recall::pick(m, &c.q, None) {
@@ -316,8 +332,20 @@ pub fn run(
                     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
                     // as the chat does today; asking back is scored by the candidates it lists (#93)
                     let r = match recall::lookup(lib, &p, k, &today, &[])? {
-                        recall::Named::Hits(h) => score(lib, &h),
+                        recall::Named::Hits(h) => {
+                            let like: Vec<&str> = h.iter().filter_map(|h| h.get("like")?.as_str()).collect();
+                            if let Some(first) = like.first() {
+                                gathered = Some((like.len(), first.starts_with("같은 거래처")));
+                            }
+                            if !earlier.is_empty() {
+                                let like: Vec<serde_json::Value> =
+                                    h.iter().filter(|h| h.get("like").is_some()).cloned().collect();
+                                earlier_shown = Some(rank_all(lib, &like, &earlier).is_some());
+                            }
+                            score(lib, &h)
+                        }
                         recall::Named::Ask(a) => {
+                            earlier_shown = (!earlier.is_empty()).then_some(false);
                             asked = true;
                             in_candidates(lib, &a, c.kind, &targets, addr.as_deref())
                         }
@@ -326,7 +354,17 @@ pub fn run(
                 }
             },
         };
-        out.push(Result1 { kind: c.kind, q: c.q.clone(), raw_rank, model_words, model_rank, person_share, asked });
+        out.push(Result1 {
+            kind: c.kind,
+            q: c.q.clone(),
+            raw_rank,
+            model_words,
+            model_rank,
+            person_share,
+            asked,
+            earlier_shown,
+            gathered,
+        });
     }
     Ok(out)
 }
@@ -338,6 +376,8 @@ pub struct Score {
     pub raw: (usize, usize),
     pub model: (usize, usize),
     pub asked: usize,
+    /// precedent: (cases whose earlier matters were all gathered, cases with `earlier`), the model's words (#95)
+    pub earlier: (usize, usize),
 }
 
 impl Score {
@@ -358,6 +398,9 @@ pub fn summary(results: &[Result1]) -> BTreeMap<Kind, Score> {
         if r.model_words.is_some() {
             s.model = (s.model.0 + r.model_rank.is_some() as usize, s.model.1 + 1);
             s.asked += r.asked as usize;
+        }
+        if let Some(e) = r.earlier_shown {
+            s.earlier = (s.earlier.0 + e as usize, s.earlier.1 + 1);
         }
     }
     out

@@ -210,9 +210,14 @@ fn measure(lib: &mut Librarian, paths: &Paths, file: &std::path::Path, k: usize,
             Some(w) if r.asked => format!("   모델 되물음 {} {:?}", mark(r.model_rank), w),
             Some(w) => format!("   모델 {} {:?}", mark(r.model_rank), w),
         };
+        let gathered = match r.gathered {
+            Some((n, true)) => format!("  (같은 거래처 지난 건 {n})"),
+            Some((n, false)) => format!("  (같은 상황 지난 건 {n})"),
+            None => String::new(),
+        };
         let share = r.person_share.map(|(a, b)| format!("  (그 사람과 {a}/{b})")).unwrap_or_default();
         let raw = if matches!(r.kind, Kind::Pending | Kind::Period) { "  · ".into() } else { mark(r.raw_rank) };
-        println!("{raw}  {}{share}{model}", r.q);
+        println!("{raw}  {}{share}{model}{gathered}", r.q);
     }
     println!();
     for (kind, s) in eval::summary(&results) {
@@ -226,7 +231,9 @@ fn measure(lib: &mut Librarian, paths: &Paths, file: &std::path::Path, k: usize,
             Some(a) => format!(", {a}"),
             None => String::new(),
         };
-        println!("재현율@{k} {}: 말 그대로 {}{model}{asked}", kind.label(), pct(s.raw));
+        let earlier =
+            if s.earlier.1 > 0 { format!(", 같은 거래처 전 건 {}", pct(s.earlier)) } else { String::new() };
+        println!("재현율@{k} {}: 말 그대로 {}{model}{asked}{earlier}", kind.label(), pct(s.raw));
     }
     ExitCode::SUCCESS
 }

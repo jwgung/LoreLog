@@ -146,12 +146,12 @@ pub fn cache_dir(paths: &Paths) -> PathBuf {
     paths.data.join("cache").join(format!("graph-{VERSION}"))
 }
 
-fn domain(addr: &str) -> Option<&str> {
+pub(super) fn domain(addr: &str) -> Option<&str> {
     addr.rsplit_once('@').map(|(_, d)| d).filter(|d| !d.is_empty() && !PUBLIC_MAIL.contains(d))
 }
 
 /// The mail domains of the user's own addresses: their own organization, never the one a name stands for.
-fn own_domains(db: &Connection) -> rusqlite::Result<HashSet<String>> {
+pub(super) fn own_domains(db: &Connection) -> rusqlite::Result<HashSet<String>> {
     Ok(mine(db)?.iter().filter_map(|a| domain(a).map(str::to_string)).collect())
 }
 
@@ -1066,7 +1066,7 @@ impl Librarian {
 
     /// The matters with any of these nodes: the records of an organization's people (by mail domain) and of a person,
     /// and the matters an edge joins them to.
-    fn cases_with(&self, ids: &[String]) -> anyhow::Result<HashSet<String>> {
+    pub(super) fn cases_with(&self, ids: &[String]) -> anyhow::Result<HashSet<String>> {
         let mut out = HashSet::new();
         for id in ids {
             let mut add = |sql: &str, arg: &str| -> anyhow::Result<()> {
@@ -1327,47 +1327,54 @@ impl Librarian {
         let words: Vec<String> = a.orgs.iter().chain(&a.things).chain(&a.people).chain(&a.roles).cloned().collect();
         let mut out = Vec::new();
         for (_, _, n, c) in ranked.into_iter().take(limit) {
-            // its others keep to the day asked too: what is later is not a past record
-            let mut h = self.hit_within(
-                n,
-                Some(&c),
-                &words.join(" "),
-                super::index::Bound { not_day: None, until: Some(day) },
-            )?;
-            // what the graph knows of the matter, with the words that say it and where it came from: the model's
-            // reading is a guess, said as one (#64)
-            if let Some((mut last, earlier)) = self.states(&c, day) {
-                // the stage it is in, by the user's name for it (one the user did not give stays inside)
-                if let Some((g, true)) = last["label"].as_str().and_then(|l| structure.group_of(l)) {
-                    last["group"] = json!(g);
-                }
-                h["state"] = last;
-                if !earlier.is_empty() {
-                    h["earlier"] = json!(earlier);
-                }
-            }
-            let roles: Vec<Value> = {
-                let mut st = self.db.prepare(
-                    "select coalesce(n.name, e.src), e.label, coalesce(e.since, ''), coalesce(e.evidence, ''), coalesce(e.origin, '') from edges e
-                     left join nodes n on n.id = e.src where e.dst = ? and e.rel = 'role' limit 4",
-                )?;
-                st.query_map([&c], |r| {
-                    Ok(json!({"who": r.get::<_, String>(0)?, "label": r.get::<_, String>(1)?,
-                              "since": r.get::<_, String>(2)?, "evidence": r.get::<_, String>(3)?,
-                              "origin": r.get::<_, String>(4)?}))
-                })?
-                .flatten()
-                .collect()
-            };
-            if !roles.is_empty() {
-                h["roles"] = json!(roles);
-            }
+            let mut h = self.known_hit(&c, n, &words.join(" "), day, &structure)?;
             if sure {
                 h["sure"] = json!(true); // the matters of the one asked about: before what the words find
             }
             out.push(h);
         }
         Ok(out)
+    }
+
+    /// A matter as a hit by its record `n`, as it stood on `day` (its others keep to that day too: what is later is not
+    /// a past record), with what the graph knows of it: how it stands and who has what part, with the words that say it
+    /// and where it came from (the model's reading is a guess, said as one: #64).
+    pub(super) fn known_hit(
+        &self,
+        c: &str,
+        n: i64,
+        q: &str,
+        day: &str,
+        structure: &Structure,
+    ) -> anyhow::Result<Value> {
+        let mut h = self.hit_within(n, Some(c), q, super::index::Bound { not_day: None, until: Some(day) })?;
+        if let Some((mut last, earlier)) = self.states(c, day) {
+            // the stage it is in, by the user's name for it (one the user did not give stays inside)
+            if let Some((g, true)) = last["label"].as_str().and_then(|l| structure.group_of(l)) {
+                last["group"] = json!(g);
+            }
+            h["state"] = last;
+            if !earlier.is_empty() {
+                h["earlier"] = json!(earlier);
+            }
+        }
+        let roles: Vec<Value> = {
+            let mut st = self.db.prepare(
+                "select coalesce(n.name, e.src), e.label, coalesce(e.since, ''), coalesce(e.evidence, ''), coalesce(e.origin, '') from edges e
+                 left join nodes n on n.id = e.src where e.dst = ? and e.rel = 'role' limit 4",
+            )?;
+            st.query_map([c], |r| {
+                Ok(json!({"who": r.get::<_, String>(0)?, "label": r.get::<_, String>(1)?,
+                          "since": r.get::<_, String>(2)?, "evidence": r.get::<_, String>(3)?,
+                          "origin": r.get::<_, String>(4)?}))
+            })?
+            .flatten()
+            .collect()
+        };
+        if !roles.is_empty() {
+            h["roles"] = json!(roles);
+        }
+        Ok(h)
     }
 
     /// Did the user send mail in this matter on or after this day?
@@ -1728,7 +1735,7 @@ impl Librarian {
     }
 
     /// The organizations said to be one with these (and these).
-    fn with_same(&self, ids: Vec<String>) -> anyhow::Result<Vec<String>> {
+    pub(super) fn with_same(&self, ids: Vec<String>) -> anyhow::Result<Vec<String>> {
         let mut out = ids.clone();
         for id in &ids {
             let mut st = self.db.prepare("select b from org_same where a = ?")?;
