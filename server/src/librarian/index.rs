@@ -908,7 +908,8 @@ impl Librarian {
     /// Documents matching the words of q, best first. The mails of one thread come back as one hit (its best-matching
     /// mail) with the thread's size and the days it spans; the user's own words take at most [`MAX_WORD_HITS`] slots
     /// unless nothing else is found. The search reads one snapshot of the index.
-    /// -> `[{source, kind, day, title, snippet, ref, count, first, last}]`
+    /// -> `[{source, kind, day, title, snippet, ref, count, first, last, score}]` (`score`: how well the words fit the
+    /// hit's record, as it is ranked; higher is better)
     pub fn search(&mut self, q: &str, limit: usize, exclude: Option<Exclude>) -> anyhow::Result<Vec<Value>> {
         let expr = to_query(q);
         if expr.is_empty() {
@@ -934,8 +935,11 @@ impl Librarian {
 
     fn search_in(&mut self, expr: &str, q: &str, limit: usize, exclude: Option<Exclude>) -> anyhow::Result<Vec<Value>> {
         // a matter (a thread, mails of one subject and their events, the files that came with them) is one hit
-        let mut sql =
-            "select d.n, d.case_key, d.source from fts join docs d on d.n = fts.rowid where fts match ?".to_string();
+        let mut sql = format!(
+            "select d.n, d.case_key, d.source, fts.rank * (case when d.source = 'file' then {FILE_WEIGHT} else 1.0 end)
+                 * (case when d.involved = 1 then {INVOLVED_WEIGHT} else 1.0 end) as score
+             from fts join docs d on d.n = fts.rowid where fts match ?"
+        );
         let mut args: Vec<String> = vec![expr.to_string()];
         let bound = Bound { not_day: if let Some(Exclude::Day(d)) = &exclude { Some(*d) } else { None }, until: None };
         match exclude {
@@ -960,19 +964,16 @@ impl Librarian {
         }
         // a long attachment matches many words: it counts for less than a mail or a message (rank is negative, lower
         // is better)
-        sql += &format!(
-            " order by fts.rank * (case when d.source = 'file' then {FILE_WEIGHT} else 1.0 end)
-                                 * (case when d.involved = 1 then {INVOLVED_WEIGHT} else 1.0 end) limit {WINDOW}"
-        );
-        let rows: Vec<(i64, Option<String>, String)> = {
+        sql += &format!(" order by score limit {WINDOW}");
+        let rows: Vec<(i64, Option<String>, String, f64)> = {
             let mut st = self.db.prepare(&sql)?;
-            st.query_map(params_from_iter(args.iter()), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            st.query_map(params_from_iter(args.iter()), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
                 .collect::<rusqlite::Result<_>>()?
         };
         // matter (or the document itself) -> its best-ranked document, in rank order
         let mut seen = HashSet::new();
-        let best: Vec<&(i64, Option<String>, String)> =
-            rows.iter().filter(|(n, case, _)| seen.insert(case.clone().unwrap_or_else(|| format!("#{n}")))).collect();
+        let best: Vec<&(i64, Option<String>, String, f64)> =
+            rows.iter().filter(|(n, case, ..)| seen.insert(case.clone().unwrap_or_else(|| format!("#{n}")))).collect();
         let (mut chosen, mut spill, mut words) = (Vec::new(), Vec::new(), 0);
         for g in best {
             if chosen.len() >= limit {
@@ -990,8 +991,10 @@ impl Librarian {
         let room = limit.saturating_sub(chosen.len());
         chosen.extend(spill.into_iter().take(room));
         let mut out = Vec::new();
-        for (n, case, _) in chosen {
-            out.push(self.hit_within(*n, case.as_deref(), q, bound)?);
+        for (n, case, _, score) in chosen {
+            let mut hit = self.hit_within(*n, case.as_deref(), q, bound)?;
+            hit["score"] = json!(-score); // how well the words fit it: higher is better (bm25, weighted as ranked)
+            out.push(hit);
             if let Some(hook) = self.after_first_hit.as_mut() {
                 hook();
                 self.after_first_hit = None;

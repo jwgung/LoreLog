@@ -294,10 +294,15 @@ pub const MATTERS: &str =
     "- (물은 것에 맞는 건이 여럿이라 어느 건인지 모른다. 아래 후보 가운데 어느 건인지 한 번만 되묻는다)";
 /// The first line of the section when the turn before asked back and the user chose none: not asked again.
 pub const ASSUMED: &str = "- (한 번 되물었는데 사용자가 고르지 않았다. 다시 묻지 말고 가장 유력한 아래 기록으로 답하고, 그렇게 가정했다고 한 마디 밝힌다)";
-/// a second matter with at least this share of the first one's records: which one is meant is not known. The same rule
-/// as the namesakes' ([`NAMESAKE_SHARE`]); this value is a start, to be set by the eval (the questions that should be
-/// asked back, ADR 0004).
+/// among the matters the words fit about as well ([`MATTER_FIT`]), a second one with at least this share of the first
+/// one's records: which one is meant is not known. The same rule as the namesakes' ([`NAMESAKE_SHARE`]). On its own it
+/// asked back nearly every question of the eval (ADR 0004): the size of the matters found is no sign of doubt.
 pub const MATTER_SHARE: f64 = 0.2;
+/// a matter the question's words fit at least this share as well as the best-fitting one (its best record's bm25, as
+/// the search ranks it): which of them is meant is not known. Below it, the words tell the best one apart and it is
+/// answered. In the eval the matters fit either near the same (0.98 and above: two threads of one subject) or clearly
+/// less (0.93 and below); this sits between (ADR 0004).
+pub const MATTER_FIT: f64 = 0.95;
 
 /// A matter the user may have meant: what tells them apart.
 #[derive(Clone, Debug, PartialEq)]
@@ -357,12 +362,18 @@ fn as_matter(lib: &mut dyn Index, hit: &Value, day: &str) -> anyhow::Result<Matt
     Ok(Matter { case, title: s("title"), first, state })
 }
 
-/// The matters to ask about when the hits are several of comparable size (the most records first), None when one
-/// stands out or there is only one.
+/// The matters to ask about when the words fit several about as well as each other and they are of comparable size
+/// (the most records first), None when one stands out or there is only one. Only what the words found is compared: a
+/// matter the graph alone found, or the records with a person, carry no fit of words, and are answered.
 fn several_matters(lib: &mut dyn Index, hits: &[Value], day: &str) -> anyhow::Result<Option<Vec<Matter>>> {
     let mut seen = HashSet::new();
     let mut ms: Vec<&Value> =
         hits.iter().filter(|h| h.get("case").and_then(Value::as_str).is_some_and(|c| seen.insert(c))).collect();
+    // the matters the words fit about as well as the best one: one they fit far less is not what was meant (a matter
+    // only the graph found has no fit of words and is not compared)
+    let fit = |h: &Value| h.get("score").and_then(Value::as_f64).unwrap_or(0.0);
+    let best = ms.iter().map(|h| fit(h)).fold(0.0, f64::max);
+    ms.retain(|h| best > 0.0 && fit(h) >= best * MATTER_FIT);
     let count = |h: &Value| h.get("count").and_then(Value::as_u64).unwrap_or(1) as f64;
     ms.sort_by(|a, b| count(b).total_cmp(&count(a))); // stable: the librarian's order among the same size
     // a matter of one record is no candidate: the first one stands as it is, the others need more than one record

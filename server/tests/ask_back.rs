@@ -1,6 +1,6 @@
-//! Asking back beyond namesakes (#93, ADR 0004): when the question is about one matter and the librarian finds several
-//! of comparable size, which one is asked back (three at most, one line each: title, start, state when the graph has
-//! one); a matter far bigger than the others is answered; a matter the user chose is answered at once; "그거" is read
+//! Asking back beyond namesakes (#93, ADR 0004): when the question is about one matter and its words fit several
+//! about as well and of comparable size, which one is asked back (three at most, one line each: title, start, state
+//! when the graph has one); a matter the words fit far better, or far bigger than the others, is answered; a matter the user chose is answered at once; "그거" is read
 //! from the turns before, else the latest matters are the candidates; and the assistant asks back only once.
 mod common;
 
@@ -112,6 +112,33 @@ fn a_matter_far_bigger_than_the_others_is_answered_without_asking() {
     t.matter("b", "견적 이차", "2026-05-01", 2); // 2 of 11: below the share
     let s = t.ask(ONE);
     assert!(!s.contains(recall::MATTERS) && s.contains("견적 일차"), "{s}");
+}
+
+/// The question names what tells one matter apart ("누리온"): the words fit it far better than the others, which only
+/// share the common word. A person asked that would not ask back which one.
+#[test]
+fn a_matter_the_words_fit_far_better_than_the_others_is_answered_without_asking() {
+    let t = T::new();
+    t.matter("a", "누리온 견적", "2026-03-01", 3);
+    t.matter("b", "견적 이차", "2026-05-01", 3);
+    t.matter("c", "견적 삼차", "2026-07-01", 3);
+    let s = t.ask(r#"{"search": true, "words": ["누리온", "견적"], "one": true}"#);
+    assert!(!s.contains(recall::MATTERS) && s.contains("누리온 견적"), "{s}");
+}
+
+/// Two matters the words fit as well as each other, and one that only shares the common word: the two are asked
+/// about, the third is no candidate.
+#[test]
+fn only_the_matters_the_words_fit_about_as_well_as_the_best_are_candidates() {
+    let t = T::new();
+    t.matter("a", "누리온 견적 일차", "2026-03-01", 3);
+    t.matter("b", "누리온 견적 이차", "2026-05-01", 3);
+    t.matter("c", "견적 삼차", "2026-07-01", 3);
+    let s = t.ask(r#"{"search": true, "words": ["누리온", "견적"], "one": true}"#);
+    assert!(s.contains(recall::MATTERS), "{s}");
+    let lines = candidates(&s);
+    assert_eq!(lines.len(), 2, "{s}");
+    assert!(!s.contains("견적 삼차"), "{s}");
 }
 
 #[test]
