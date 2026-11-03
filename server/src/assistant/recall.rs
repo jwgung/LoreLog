@@ -63,30 +63,28 @@ pub fn render(hits: &[Value]) -> String {
     if hits.is_empty() {
         return NOT_FOUND.to_string();
     }
-    // "전에 어떻게 했지" (#95): the matter at hand, then the earlier ones like it, then what else the words found
+    // "전에 어떻게 했지" (#95, ADR 0007): what was found (or the matter chosen), the first of it the one gathered by;
+    // then the other matters with its counterparty, under a line that names it
+    let one = |s: &str| plain(s).split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut basis = String::new();
     let mut like: Option<String> = None;
-    let mut gathered = false;
     hits.iter()
         .map(|h| {
             let mut head = String::new();
             let this = h.get("like").and_then(Value::as_str).map(str::to_string);
-            if h.get("now") == Some(&Value::Bool(true)) {
-                let guessed = h.get("now_guessed") == Some(&Value::Bool(true));
-                head += &format!("{}\n", if guessed { NOW_GUESSED } else { NOW_HIT });
-                gathered = true;
+            let flag = |k: &str| h.get(k) == Some(&Value::Bool(true));
+            if flag("now") || flag("top") {
+                head += &format!("{}\n", if flag("now") { NOW_HIT } else { FOUND_HIT });
+                let title = h.get("title").map(|v| super::util::pystr(Some(v))).unwrap_or_default();
+                basis = one(&title).chars().take(MAX_OTHER_TITLE).collect();
             } else if this.is_some() && this != like {
-                let like = plain(this.as_deref().unwrap_or("")).split_whitespace().collect::<Vec<_>>().join(" ");
-                head += &format!("- ({like}, 최근 것부터. 건마다 경과와 근거 메일)\n");
-            } else if this.is_none() && gathered {
-                head += &format!("{OTHER_HITS}\n");
-                gathered = false;
+                let like = one(this.as_deref().unwrap_or(""));
+                head += &format!(
+                    "- ({like}: 위 \"{basis}\" 건의 거래처로 모은 것, 사용자가 참여한 건 먼저 최근 것부터. 건마다 경과와 근거 메일)\n"
+                );
             }
             like = this;
-            let none = if h.get("no_precedent") == Some(&Value::Bool(true)) {
-                format!("\n{NO_PRECEDENT}")
-            } else {
-                String::new()
-            };
+            let none = if flag("no_precedent") { format!("\n{NO_PRECEDENT}") } else { String::new() };
             head + &line(h) + &none
         })
         .collect::<Vec<_>>()
@@ -341,19 +339,19 @@ pub const MATTERS: &str =
     "- (물은 것에 맞는 건이 여럿이라 어느 건인지 모른다. 아래 후보 가운데 어느 건인지 한 번만 되묻는다)";
 /// The first line of the section when the turn before asked back and the user chose none: not asked again.
 pub const ASSUMED: &str = "- (한 번 되물었는데 사용자가 고르지 않았다. 다시 묻지 말고 가장 유력한 아래 기록으로 답하고, 그렇게 가정했다고 한 마디 밝힌다)";
-/// The first line of the section when a question about how it was done before (#95) names no matter: the matter under
-/// way is offered, asked about once (ADR 0005).
+/// The first line of the section when a question about how it was done before (#95) points at the matter at hand or
+/// names nothing: the matter under way is offered, asked about once (ADR 0005·0006).
 pub const NOW: &str =
     "- (지금 어느 일을 두고 전에 어떻게 했는지 묻는지 모른다. 지금 진행 중인 아래 건을 두고 묻는지 한 번만 되묻는다)";
-/// The line before the matter at hand, when the earlier ones like it follow (#95).
-pub const NOW_HIT: &str = "- (지금 일로 본 건. 그 아래는 이 건과 비슷한 지난 건이다)";
-/// The line before the matter at hand when the question named only a kind of work and the first matter whose
-/// counterparty has earlier matters, among what the words found, was taken for it (#95): a guess, to be said as one.
-pub const NOW_GUESSED: &str = "- (질문에 건이 적혀 있지 않아, 찾은 기록 가운데 거래처가 있고 그 거래처의 지난 건도 있는 첫 건을 지금 일로 보았다(추정). 어느 건으로 보았는지 한 줄로 밝힌다. 그 아래는 이 건과 비슷한 지난 건이다)";
-/// The line after the matter at hand when no earlier one is like it.
-pub const NO_PRECEDENT: &str = "- (같은 거래처나 같은 상황의 지난 건은 찾지 못했다. 아래는 물은 낱말로 찾은 기록이다. 비슷한 건을 짐작해 말하지 않는다)";
-/// The line before what else the words found, after the earlier matters.
-pub const OTHER_HITS: &str = "- (그 밖에 물은 낱말로 찾은 기록)";
+/// The line before the matter chosen (or, asked back once, assumed) as the one at hand, when its counterparty's other
+/// matters follow (#95, ADR 0006).
+pub const NOW_HIT: &str =
+    "- (지금 일로 삼은 건. 이 건을 기준으로 삼았다. 답에서 어느 건을 기준으로 삼았는지 한 줄로 밝힌다)";
+/// The line before what a question about how a kind of work was done before found (ADR 0007): the first one is what the
+/// counterparty's other matters are gathered by, said in the answer so that a wrong first one is seen.
+pub const FOUND_HIT: &str = "- (전에 어떻게 했는지 묻는 말에 맞게 찾은 건, 맞는 것부터. 첫 건을 기준으로 삼았다. 답에서 어느 건을 기준으로 삼았는지 한 줄로 밝힌다)";
+/// The line after the matter gathered by when it gathers nothing: no counterparty outside, or none other with it.
+pub const NO_PRECEDENT: &str = "- (기준으로 삼은 위 건에 외부 거래처가 없거나(사내 일 등) 그 거래처의 다른 건이 없어, 같은 거래처의 다른 건은 모으지 않았다. 비슷한 건을 짐작해 말하지 않는다)";
 /// among the matters the words fit about as well ([`MATTER_FIT`]), a second one with at least this share of the first
 /// one's records: which one is meant is not known. The same rule as the namesakes' ([`NAMESAKE_SHARE`]). On its own it
 /// asked back nearly every question of the eval (ADR 0004): the size of the matters found is no sign of doubt.
@@ -512,8 +510,9 @@ pub const WORDS_SYSTEM: &str = r#"사용자의 말에서 지난 기록을 찾아
 - [앞 대화]가 있으면 비서가 같은 이름의 사람 가운데 누구인지, 또는 맞는 건 가운데 어느 건인지 되물은 것이다. 사용자의 답이 후보 하나를 가리키면(순서, 회사, 날짜, 제목으로) search 를 true 로 하고, 사람 후보면 그 후보의 <주소>를 꺾쇠까지 그대로 people 에, 건 후보면 그 후보의 <case:번호>를 꺾쇠까지 그대로 matter 에 넣는다. words 에는 처음 물은 말의 주제 낱말을 다시 넣는다. 답이 후보를 가리키지 않으면 처음 물은 말로 고른다.
 - 사용자가 특정한 한 건이 어떻게 됐는지, 언제였는지를 물으면("~ 건 어떻게 됐지", "그 견적 언제 보냈더라") one 을 true 로 한다. 여러 건이나 목록("~랑 하는 건들", "뭐 있었지"), 사람과 있었던 일 전체, 기간에 걸린 일을 물으면 false 다.
 - 비슷한 일을 전에 어떻게 했는지 물으면("전에 어떻게 했지", "예전에 ~할 때는 어떻게 했었지", "이런 경우 전에 어떻게 했지") precedent 를 true 로 한다. 그 일의 주제·회사 낱말은 위와 같이 고르고, "이런 경우"처럼 주제를 적지 않았으면 words 를 비운다. [앞 대화]에서 처음 물은 말이 그런 말이면 답에서도 precedent 를 true 로 한다.
+- precedent 가 true 일 때, "이런 경우", "이 건", "이거", "그때"처럼 지금 하고 있는 일을 가리키는 말이 있으면 at_hand 를 true 로 한다. 일의 종류를 설명하면("견적 낼 땐 전에 어떻게 했지") false 다. 애매하면 false 로 한다.
 - "그거", "그 건", "아까 그거"처럼 앞에서 말한 것을 가리키면 [최근 대화]에서 그것이 무엇인지 찾아 그 낱말을 고른다. [최근 대화]는 그럴 때만 쓰고, 다른 말에는 쓰지 않는다. [최근 대화]로도 무엇인지 모르면 unclear 를 true 로 한다.
-JSON 으로만 답한다: {"search": true 또는 false, "people": ["이름", ...], "words": ["낱말", ...], "orgs": [], "things": [], "roles": [], "states": [], "absent": [], "open_requests": false, "period": "", "one": false, "unclear": false, "matter": "", "precedent": false}"#;
+JSON 으로만 답한다: {"search": true 또는 false, "people": ["이름", ...], "words": ["낱말", ...], "orgs": [], "things": [], "roles": [], "states": [], "absent": [], "open_requests": false, "period": "", "one": false, "unclear": false, "matter": "", "precedent": false, "at_hand": false}"#;
 
 pub const LIMIT: usize = 8;
 pub const MAX_WORDS: usize = 10;
@@ -546,8 +545,12 @@ pub struct Picked {
     pub unclear: bool,
     /// the matter the user chose among the candidates of the turn before (`case:<n>`)
     pub matter: Option<String>,
-    /// how something like it was done before is asked (#95): the earlier matters like the one at hand are gathered
+    /// how something like it was done before is asked (#95): the matter is found, and the other matters with its
+    /// counterparty gathered (ADR 0007)
     pub precedent: bool,
+    /// such a question points at the matter at hand ("이런 경우", "이 건"; ADR 0006): the one under way is asked back
+    /// and its counterparty's other matters gathered. Otherwise (and when it is not clear) the topic is searched.
+    pub at_hand: bool,
     /// the user's message as said: what is embedded to find the matter by meaning (ADR 0007)
     pub question: String,
 }
@@ -670,6 +673,7 @@ pub fn pick_in(
             .and_then(chosen_matter)
             .filter(|m| before.is_some_and(|b| offered(b).contains(m))),
         precedent: yes("precedent"),
+        at_hand: yes("at_hand"),
         question: message.to_string(),
     };
     // "요즘 OO 님이랑 뭐 있었지", "요즘 지원사업 공고 뭐 있었지" ask about records, not what hangs: a small model
@@ -719,7 +723,8 @@ pub trait Index {
     fn recent_matters(&mut self, _day: &str, _n: usize) -> anyhow::Result<Vec<Value>> {
         Ok(Vec::new())
     }
-    /// The earlier matters like this one up to `day` (#95, ADR 0005), at most `n`; None when nothing is like it.
+    /// The other matters with this one's counterparty up to `day` (#95, ADR 0007), at most `n`; None when it has no
+    /// counterparty or none other.
     fn precedents(
         &mut self,
         _case: &str,
@@ -727,10 +732,6 @@ pub trait Index {
         _q: &str,
         _n: usize,
     ) -> anyhow::Result<Option<crate::librarian::precedent::Precedents>> {
-        Ok(None)
-    }
-    /// The organization on the other side of a matter up to `day` (#95), if one.
-    fn counterparty(&mut self, _case: &str, _day: &str) -> anyhow::Result<Option<String>> {
         Ok(None)
     }
     /// How a matter went up to `day`: its states, the oldest first (#95).
@@ -829,89 +830,88 @@ pub fn lookup(lib: &mut dyn Index, p: &Picked, limit: usize, day: &str, said: &[
     Ok(named)
 }
 
-/// "전에 어떻게 했지" (#95, ADR 0005): the matter at hand, then the earlier ones like it (the same counterparty, else
-/// the same situation; [`crate::librarian::precedent`]), each with how it went and its mails, then what else the words
-/// found, up to `limit`. The matter at hand is the one the user chose, else the one the question names (asked back as
-/// any question about one matter is, #93), else the one under way, asked about once.
+/// "전에 어떻게 했지" (#95, ADR 0006·0007). A question that points at the matter at hand ("이런 경우", "이 건"), or
+/// names nothing, asks about the one under way once, and gathers by the one chosen. A question about a kind of work is
+/// not asked back: the matters its topic fits are found (by meaning when it can be, else by the words; asked back as
+/// any question about one matter is, #93). Either way the first matter is what is gathered by: the other matters with
+/// its counterparty follow ([`crate::librarian::precedent`]), each with how it went and its mails. Nothing else is
+/// taken for the matter at hand, and a first one with no counterparty gathers nothing.
 fn precedent(lib: &mut dyn Index, p: &Picked, limit: usize, day: &str, said: &[String]) -> anyhow::Result<Named> {
     let q = p.words.join(" ");
-    let chosen = match &p.matter {
-        Some(case) => lib.matter(case, &q, day)?,
-        None => None,
-    };
-    let mut hits = if let Some(h) = chosen {
-        vec![h]
-    } else if !(p.people.is_empty() && p.words.is_empty() && p.graph().is_empty()) {
-        match found(lib, p, limit, day, said)? {
-            Named::Hits(h) => {
-                if p.one
-                    && let Some(ms) = several_matters(lib, &h, day)?
-                {
-                    return Ok(Named::Ask(Asked::Matters(ms)));
-                }
-                h
-            }
-            ask => return Ok(ask),
-        }
-    } else {
-        // nothing named: the matter under way (else the latest the user took part in), asked about once
+    if let Some(case) = &p.matter
+        && let Some(h) = lib.matter(case, &q, day)?
+    {
+        return gathered_by(lib, vec![h], "now", limit, day, &q);
+    }
+    let named = !(p.people.is_empty() && p.words.is_empty() && p.graph().is_empty());
+    if p.at_hand || !named {
+        // the matter under way (else the latest the user took part in), asked about once
         let mut now = lib.open_matters(day, 1)?;
         if now.is_empty() {
             now = lib.recent_matters(day, 1)?;
         }
         let ms: Vec<Matter> = now.iter().map(|h| as_matter(lib, h, day)).collect::<anyhow::Result<_>>()?;
-        return Ok(if ms.is_empty() { Named::Hits(Vec::new()) } else { Named::Ask(Asked::Now(ms)) });
-    };
-    let case_of = |h: &Value| h.get("case").and_then(Value::as_str).map(str::to_string);
-    let Some(mut at) = hits.iter().position(|h| case_of(h).is_some()) else { return Ok(Named::Hits(hits)) };
-    // a kind of work asked about (no matter chosen, no one and nothing named, only words): the first matter among what
-    // the words found whose counterparty has earlier matters is the one at hand, a guess said as one (the user's
-    // choice, ADR 0005). A counterparty with none earlier gathers nothing of its own: the best fit stays.
-    let max = crate::librarian::precedent::MAX_PRECEDENTS;
-    let mut pre = None;
-    let mut guessed = false;
-    if p.matter.is_none() && p.people.is_empty() && p.orgs.is_empty() && p.things.is_empty() {
-        for (i, h) in hits.iter().enumerate() {
-            let Some(c) = case_of(h) else { continue };
-            if lib.counterparty(&c, day)?.is_none() {
-                continue;
-            }
-            if let Some(found) = lib.precedents(&c, day, &q, max)?
-                && matches!(found.like, crate::librarian::precedent::Like::Counterparty(_))
-            {
-                (guessed, at, pre) = (i != at, i, Some(found));
-                break;
-            }
+        if !ms.is_empty() {
+            return Ok(Named::Ask(Asked::Now(ms)));
+        }
+        if !named {
+            return Ok(Named::Hits(Vec::new()));
         }
     }
-    let mut now = hits.remove(at);
-    let case = case_of(&now).unwrap_or_default();
-    now["now"] = Value::Bool(true);
-    if guessed {
-        now["now_guessed"] = Value::Bool(true);
-    }
+    let hits = match found(lib, p, limit, day, said)? {
+        Named::Hits(h) => {
+            if p.one
+                && let Some(ms) = several_matters(lib, &h, day)?
+            {
+                return Ok(Named::Ask(Asked::Matters(ms)));
+            }
+            h
+        }
+        ask => return Ok(ask),
+    };
+    gathered_by(lib, hits, "top", limit, day, &q)
+}
+
+/// The first matter of `hits`, marked `mark` (`now`: chosen, `top`: found first), then the rest of `hits`, then the other
+/// matters with its counterparty, up to `limit` (what was found gives way to them at its end).
+fn gathered_by(
+    lib: &mut dyn Index,
+    mut hits: Vec<Value>,
+    mark: &str,
+    limit: usize,
+    day: &str,
+    q: &str,
+) -> anyhow::Result<Named> {
+    let case_of = |h: &Value| h.get("case").and_then(Value::as_str).map(str::to_string);
+    let Some(at) = hits.iter().position(|h| case_of(h).is_some()) else { return Ok(Named::Hits(hits)) };
+    let mut first = hits.remove(at);
+    let case = case_of(&first).unwrap_or_default();
+    first[mark] = Value::Bool(true);
     let flow = lib.flow(&case, day)?;
     if !flow.is_empty() {
-        now["flow"] = Value::Array(flow);
+        first["flow"] = Value::Array(flow);
     }
-    let mut out = vec![now];
-    let pre = match pre {
-        Some(found) => Some(found),
-        None => lib.precedents(&case, day, &q, max)?,
-    };
-    match pre {
+    let others: Vec<Value> = match lib.precedents(&case, day, q, crate::librarian::precedent::MAX_PRECEDENTS)? {
         Some(pre) => {
-            let (like, kind) = (pre.like.label(), pre.like.kind());
-            out.extend(pre.hits.into_iter().map(|mut h| {
-                h["like"] = Value::String(like.clone());
-                h["like_kind"] = Value::String(kind.to_string());
-                h
-            }));
+            let like = pre.like.label();
+            pre.hits
+                .into_iter()
+                .map(|mut h| {
+                    h["like"] = Value::String(like.clone());
+                    h
+                })
+                .collect()
         }
-        None => out[0]["no_precedent"] = Value::Bool(true),
-    }
-    let shown: HashSet<String> = out.iter().filter_map(case_of).collect();
-    out.extend(hits.into_iter().filter(|h| case_of(h).is_none_or(|c| !shown.contains(&c))));
+        None => {
+            first["no_precedent"] = Value::Bool(true);
+            Vec::new()
+        }
+    };
+    let shown: HashSet<String> = others.iter().filter_map(case_of).collect();
+    let room = limit.saturating_sub(1 + others.len());
+    let mut out = vec![first];
+    out.extend(hits.into_iter().filter(|h| case_of(h).is_none_or(|c| !shown.contains(&c))).take(room));
+    out.extend(others);
     out.truncate(limit);
     Ok(Named::Hits(out))
 }
@@ -1014,10 +1014,6 @@ impl Index for crate::librarian::Librarian {
 
     fn flow(&mut self, case: &str, day: &str) -> anyhow::Result<Vec<Value>> {
         crate::librarian::Librarian::flow(self, case, day)
-    }
-
-    fn counterparty(&mut self, case: &str, day: &str) -> anyhow::Result<Option<String>> {
-        Ok(crate::librarian::Librarian::counterparty(self, case, day)?.map(|(org, _)| org))
     }
 
     fn open_matters(&mut self, day: &str, n: usize) -> anyhow::Result<Vec<Value>> {

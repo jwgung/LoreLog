@@ -1,9 +1,10 @@
-//! "전에 어떻게 했지" (#95, ADR 0005): the earlier matters like the one at hand. Like it is, first, with the same
-//! counterparty (the organization of the other side, by its mail domain, as the graph's rules know it); when it has
-//! none, or none earlier, in the same situation: gone through the same stage, and someone with the same part in it on
-//! the other side. No relation is added to the graph for it.
+//! "전에 어떻게 했지" (#95, #101, ADR 0005·0006·0007): the other matters with the counterparty of a matter (the
+//! organization of the other side, by its mail domain, as the graph's rules know it): the user's own first, then the
+//! latest, never by how near they are to the question. A matter among the user's own people has no counterparty and
+//! gathers nothing: no other likeness (the same stage, the same part) stands in for it (ADR 0006). No relation is added
+//! to the graph for it.
 //!
-//! Each earlier matter is a hit as the graph gives it, with how it went (its states with their days, oldest first) and
+//! Each matter gathered is a hit as the graph gives it, with how it went (its states with their days, oldest first) and
 //! the mails it holds (`others`, ADR 0003: a revision and a changed sum are shown both before and after), up to the day
 //! asked.
 use std::collections::{HashMap, HashSet};
@@ -15,25 +16,17 @@ use super::Librarian;
 use super::graph::{Structure, domain, mine, own_domains};
 use super::index::{MASS_MAIL, name_key};
 
-/// how many earlier matters are shown side by side (ADR 0005: two or three; the user's own first, then the latest)
+/// how many other matters are shown side by side (ADR 0005: two or three; the user's own first, then the latest)
 pub const MAX_PRECEDENTS: usize = 3;
 /// how many states of a matter's course are shown, the latest
 pub const MAX_FLOW: usize = 6;
 
-/// What the earlier matters have in common with the one at hand.
+/// What the matters gathered have in common with the one they were gathered by.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Like {
     /// the same organization on the other side, by its name
     Counterparty(String),
-    /// no counterparty, or no earlier matter with it: the same stage and the same part on the other side (either may be
-    /// empty when the matter at hand has none)
-    Situation { state: String, role: String },
 }
-
-/// [`Like::kind`] of the earlier matters with the same counterparty
-pub const BY_COUNTERPARTY: &str = "counterparty";
-/// [`Like::kind`] of the earlier matters in the same situation
-pub const BY_SITUATION: &str = "situation";
 
 /// On one line: a name the records gave (the model may have read it from a mail) makes no line of its own.
 fn one(s: &str) -> String {
@@ -41,33 +34,15 @@ fn one(s: &str) -> String {
 }
 
 impl Like {
-    /// What they are gathered by, for a measure to read (the label's words may change).
-    pub fn kind(&self) -> &'static str {
-        match self {
-            Like::Counterparty(_) => BY_COUNTERPARTY,
-            Like::Situation { .. } => BY_SITUATION,
-        }
-    }
-
     /// How it is said in the quoted section, on one line.
     pub fn label(&self) -> String {
         match self {
-            Like::Counterparty(name) => format!("같은 거래처({})의 지난 건", one(name)),
-            Like::Situation { state, role } => {
-                let mut what = Vec::new();
-                if !state.is_empty() {
-                    what.push(format!("상태 {}", one(state)));
-                }
-                if !role.is_empty() {
-                    what.push(format!("상대 역할 {}", one(role)));
-                }
-                format!("거래처가 같은 지난 건이 없어, 같은 상황({})의 지난 건", what.join(", "))
-            }
+            Like::Counterparty(name) => format!("같은 거래처({})의 다른 건", one(name)),
         }
     }
 }
 
-/// The earlier matters like one, and how they are like it.
+/// The matters gathered by one, and how they are like it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Precedents {
     pub like: Like,
@@ -109,79 +84,15 @@ impl Librarian {
         Ok(Some((org, name)))
     }
 
-    /// The earlier matters like this one up to `day`, at most `n`, the user's own and the latest first; None when
-    /// nothing is like it. `q`: the words asked, for the excerpts.
+    /// The other matters with this one's counterparty up to `day`, at most `n`, the user's own and the latest first;
+    /// None when it has no counterparty or the counterparty no other matter. `q`: the words asked, for the excerpts.
     pub fn precedents(&self, case: &str, day: &str, q: &str, n: usize) -> anyhow::Result<Option<Precedents>> {
+        let Some((org, name)) = self.counterparty(case, day)? else { return Ok(None) };
         let structure = Structure::load(&self.paths);
-        if let Some((org, name)) = self.counterparty(case, day)? {
-            let ids = self.with_same(vec![org])?;
-            let cases = self.cases_with(&ids)?;
-            let hits = self.earlier(cases, case, day, q, n, &structure)?;
-            if !hits.is_empty() {
-                return Ok(Some(Precedents { like: Like::Counterparty(name), hits }));
-            }
-        }
-        // the situation: the stage it is in, and the parts of the other side
-        let state = self.states(case, day).and_then(|(s, _)| s["label"].as_str().map(str::to_string));
-        let roles = self.their_roles(case, day)?;
-        if state.is_none() && roles.is_empty() {
-            return Ok(None);
-        }
-        let same = |a: &str, b: &str| {
-            name_key(a) == name_key(b)
-                || matches!((structure.groups.get(a), structure.groups.get(b)), (Some(x), Some(y)) if name_key(x) == name_key(y))
-        };
-        let mut cases: Option<HashSet<String>> = None;
-        if let Some(s) = &state {
-            let mut st = self
-                .db
-                .prepare("select src, label from edges where rel = 'state' and src like 'case:%' and since <= ?")?;
-            let rows: Vec<(String, String)> =
-                st.query_map([day], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-            cases = Some(rows.into_iter().filter(|(_, l)| same(l, s)).map(|(c, _)| c).collect());
-        }
-        if !roles.is_empty() {
-            let me = mine(&self.db)?;
-            let mut st = self.db.prepare(
-                "select src, dst, label from edges where rel = 'role' and dst like 'case:%'
-                 and (since is null or since = '' or since <= ?)",
-            )?;
-            let rows: Vec<(String, String, String)> =
-                st.query_map([day], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
-            let by_role: HashSet<String> = rows
-                .into_iter()
-                .filter(|(src, _, l)| !is_me(src, &me) && roles.iter().any(|r| same(l, r)))
-                .map(|(_, c, _)| c)
-                .collect();
-            cases = Some(match cases {
-                Some(c) => c.intersection(&by_role).cloned().collect(),
-                None => by_role,
-            });
-        }
-        let hits = self.earlier(cases.unwrap_or_default(), case, day, q, n, &structure)?;
-        if hits.is_empty() {
-            return Ok(None);
-        }
-        let role = roles.first().cloned().unwrap_or_default();
-        Ok(Some(Precedents { like: Like::Situation { state: state.unwrap_or_default(), role }, hits }))
-    }
-
-    /// The parts the other side has in a matter (the labels of its roles not the user's), as the records name them.
-    fn their_roles(&self, case: &str, day: &str) -> anyhow::Result<Vec<String>> {
-        let me = mine(&self.db)?;
-        let mut st = self.db.prepare(
-            "select src, label from edges where rel = 'role' and dst = ? and (since is null or since = '' or since <= ?)
-             order by rowid",
-        )?;
-        let rows: Vec<(String, String)> =
-            st.query_map(params![case, day], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
-        let mut out: Vec<String> = Vec::new();
-        for (src, label) in rows {
-            if !is_me(&src, &me) && !label.trim().is_empty() && !out.contains(&label) {
-                out.push(label);
-            }
-        }
-        Ok(out)
+        let ids = self.with_same(vec![org])?;
+        let cases = self.cases_with(&ids)?;
+        let hits = self.earlier(cases, case, day, q, n, &structure)?;
+        Ok((!hits.is_empty()).then_some(Precedents { like: Like::Counterparty(name), hits }))
     }
 
     /// The matters among `cases` other than `except` with a record up to `day`, as hits with how they went: the user's
@@ -266,8 +177,4 @@ impl Librarian {
         }
         Ok(out)
     }
-}
-
-fn is_me(src: &str, me: &HashSet<String>) -> bool {
-    src.strip_prefix("person:").is_some_and(|a| me.contains(a))
 }
