@@ -1,11 +1,11 @@
 //! "전에 어떻게 했지" (#95, #101, ADR 0006·0007): the matter the question fits best is found (by meaning when it can
-//! be, else by the words); when that first one has a counterparty outside, that counterparty's other matters are gathered
-//! besides it: the user's own first, then the latest, three at most, never by how near they are to the question. A first
-//! one among the user's own people gathers nothing, and nothing is guessed in its place: no other found matter is taken
-//! for the one at hand, no matter in the same situation is gathered. A question that points at the matter at hand
-//! ("이런 경우", "이 건") asks about the one under way once and gathers by the one chosen. What was found and what was
-//! gathered are said apart, with the matter they were gathered by. Each gathered matter comes with how it went and its
-//! mails (a revised sum shown before and after), nothing after the day asked.
+//! be, else by the words), the first one with how it went. No other matter is gathered besides what was found (ADR 0007,
+//! amended 2026-11-04: gathering the counterparty's others showed nothing on the test set), and nothing is guessed in
+//! its place: no other found matter is taken for the one at hand, no matter in the same situation is gathered. A
+//! question that points at the matter at hand ("이런 경우", "이 건") asks about the one under way once.
+//!
+//! The librarian still knows a matter's counterparty and its other matters (the user's own first, then the latest, three
+//! at most), each with how it went and its mails up to the day asked; the assistant does not ask it.
 mod common;
 
 use std::fs;
@@ -17,6 +17,7 @@ use life_server::assistant::recall::{self, Named, Picked};
 use life_server::config::Paths;
 use life_server::librarian::Librarian;
 use life_server::librarian::graph;
+use life_server::librarian::precedent::MAX_PRECEDENTS;
 use life_server::llm::{Ask, Model, WordsEmbedder};
 use serde_json::{Value, json};
 
@@ -138,9 +139,11 @@ fn titles(hits: &[Value]) -> Vec<String> {
     hits.iter().map(title).collect()
 }
 
-/// The counterparty's other matters gathered, in their order.
-fn earlier(hits: &[Value]) -> Vec<String> {
-    hits.iter().filter(|h| h.get("like").is_some()).map(title).collect()
+/// Nothing is gathered besides what was found, and the assistant is told so.
+fn nothing_gathered(got: &[Value]) {
+    assert!(got.iter().all(|h| h.get("like").is_none()), "{got:#?}");
+    let section = recall::render(got);
+    assert_eq!(section.matches(recall::NOT_GATHERED).count(), 1, "{section}");
 }
 
 fn named(words: &[&str]) -> Picked {
@@ -152,19 +155,106 @@ fn nothing_guessed(got: &[Value]) {
     assert!(got.iter().all(|h| h.get("now").is_none() && h.get("now_guessed").is_none()), "{got:#?}");
 }
 
-// ---------- the counterparty of the matter found first ----------
+/// The matter the words find first.
+fn case_found(lib: &mut Librarian, words: &[&str]) -> String {
+    hits(lib, &named(words))[0]["case"].as_str().unwrap().to_string()
+}
+
+/// The other matters with this one's counterparty, as the librarian knows them (titles), or None.
+fn others_with(lib: &Librarian, case: &str) -> Option<Vec<String>> {
+    lib.precedents(case, DAY, "", MAX_PRECEDENTS).unwrap().map(|p| titles(&p.hits))
+}
+
+// ---------- what was found, nothing gathered ----------
 
 #[test]
-fn the_matter_found_first_with_a_counterparty_gathers_its_latest_other_matters_three_at_most() {
+fn the_matter_found_first_is_shown_and_no_other_matter_of_its_counterparty_is_gathered() {
     let t = alpha();
     let mut lib = t.built();
     let got = hits(&mut lib, &named(&["설비"]));
-    assert_eq!(title(&got[0]), "알파 설비 견적", "{got:#?}");
+    assert_eq!(titles(&got), ["알파 설비 견적"], "{got:#?}");
     assert_eq!(got[0]["top"], true, "{got:#?}");
-    assert_eq!(earlier(&got), ["알파 배관 견적", "알파 센서 견적", "알파 밸브 견적"], "{got:#?}");
-    assert!(got[1]["like"].as_str().unwrap().contains("alpha.co.kr"), "{:?}", got[1]["like"]);
-    assert!(!got.iter().any(|h| title(h).contains("후속 발주")), "a matter after the day asked is no other one");
+    nothing_gathered(&got);
     nothing_guessed(&got);
+    let section = recall::render(&got);
+    assert!(section.starts_with(recall::FOUND_HIT), "{section}");
+    assert!(!section.contains("거래처로 모은"), "{section}");
+}
+
+#[test]
+fn a_matter_found_first_with_no_counterparty_gathers_nothing_and_no_other_is_taken_in_its_place() {
+    let t = kind_of_work();
+    let mut lib = t.built();
+    let got = hits(&mut lib, &named(&["포트 포워딩"]));
+    assert_eq!(title(&got[0]), "포트 포워딩 포트 포워딩 정리", "{got:#?}");
+    assert_eq!(got[0]["top"], true);
+    nothing_gathered(&got);
+    assert!(titles(&got).contains(&"포트 포워딩 요청".to_string()), "what else was found stays: {got:#?}");
+    assert!(!titles(&got).iter().any(|t| t.contains("방화벽")), "{got:#?}");
+    nothing_guessed(&got);
+    assert!(recall::render(&got).starts_with(recall::FOUND_HIT));
+}
+
+#[test]
+fn matters_in_the_same_situation_are_not_gathered() {
+    let t = situation();
+    let mut lib = t.built();
+    let got = hits(&mut lib, &named(&["장비", "구매"]));
+    assert_eq!(title(&got[0]), "사내 장비 구매", "{got:#?}");
+    nothing_gathered(&got);
+    assert!(!recall::render(&got).contains("같은 상황"), "{}", recall::render(&got));
+}
+
+#[test]
+fn a_client_s_matter_found_first_shows_what_was_found_and_none_of_the_client_s_others() {
+    let t = T::new();
+    // the words fit the client's first, then an internal one
+    t.mail("c1.md", "2026-10-01", ALPHA, ME, "방화벽 설정 요청", "방화벽 설정 변경 요청드립니다. 방화벽 설정", None);
+    t.mail("c2.md", "2026-10-02", ME, ALPHA, "방화벽 설정 요청", "방화벽 설정 적용했습니다", Some("c1.md"));
+    t.mail("i1.md", "2026-09-01", COLLEAGUE, ME, "방화벽 점검", "방화벽 점검 결과입니다", None);
+    t.quote("e", ALPHA, "알파 펌프 견적", "2026-05-01");
+    t.quote("f", ALPHA, "알파 밸브 견적", "2026-03-01");
+    let mut lib = t.built();
+    let got = hits(&mut lib, &named(&["방화벽", "설정"]));
+    assert_eq!(titles(&got), ["방화벽 설정 요청", "방화벽 점검"], "{got:#?}");
+    nothing_gathered(&got);
+}
+
+#[test]
+fn what_was_found_fills_the_eight() {
+    let t = T::new();
+    // the client's matter the words fit best, and three other matters with the client the words do not find
+    t.mail("c1.md", "2026-10-01", ALPHA, ME, "포트 설정 포트 요청", "포트 포트 포트 포트 설정 요청드립니다", None);
+    t.mail("c2.md", "2026-10-02", ME, ALPHA, "포트 설정 포트 요청", "적용했습니다", Some("c1.md"));
+    t.quote("e", ALPHA, "알파 펌프 견적", "2026-03-01");
+    t.quote("f", ALPHA, "알파 밸브 견적", "2026-05-01");
+    t.quote("g", ALPHA, "알파 센서 견적", "2026-07-01");
+    // seven internal matters the words find too, each less well
+    let subjects = ["가 점검", "나 정리", "다 회의", "라 보고", "마 일정", "바 교육", "사 공지"];
+    for (i, subject) in subjects.iter().enumerate() {
+        let day = format!("2026-0{}-15", i + 1);
+        let body = "포트 하나를 확인했고 그 밖에 여러 내용이 길게 길게 이어집니다 내용 내용 내용";
+        t.mail(&format!("i{i}.md"), &day, COLLEAGUE, ME, subject, body, None);
+    }
+    let mut lib = t.built();
+    let got = hits(&mut lib, &named(&["포트"]));
+    assert_eq!(title(&got[0]), "포트 설정 포트 요청", "{got:#?}");
+    assert_eq!(got.len(), 8, "{:?}", titles(&got));
+    assert!(!titles(&got).iter().any(|t| t.contains("견적")), "{:?}", titles(&got));
+    nothing_gathered(&got);
+}
+
+// ---------- the counterparty's other matters, as the librarian knows them ----------
+
+#[test]
+fn the_librarian_knows_a_counterparty_s_latest_other_matters_three_at_most() {
+    let t = alpha();
+    let mut lib = t.built();
+    let case = case_found(&mut lib, &["설비"]);
+    let pre = lib.precedents(&case, DAY, "", MAX_PRECEDENTS).unwrap().expect("a counterparty");
+    assert_eq!(titles(&pre.hits), ["알파 배관 견적", "알파 센서 견적", "알파 밸브 견적"], "{pre:#?}");
+    assert!(pre.like.label().contains("alpha.co.kr"), "{:?}", pre.like);
+    assert!(!titles(&pre.hits).iter().any(|t| t.contains("후속 발주")), "a matter after the day asked is no other one");
 }
 
 #[test]
@@ -173,9 +263,8 @@ fn as_many_other_matters_as_there_are() {
     t.quote("o", "베타 <b@beta.co.kr>", "베타 모터 견적", "2026-04-01");
     t.quote("n", "베타 <b@beta.co.kr>", "베타 설비 견적", "2026-10-20");
     let mut lib = t.built();
-    let got = hits(&mut lib, &named(&["설비"]));
-    assert_eq!(title(&got[0]), "베타 설비 견적");
-    assert_eq!(earlier(&got), ["베타 모터 견적"], "{got:#?}");
+    let case = case_found(&mut lib, &["설비"]);
+    assert_eq!(others_with(&lib, &case).unwrap(), ["베타 모터 견적"]);
 }
 
 #[test]
@@ -189,9 +278,40 @@ fn the_user_s_own_matters_with_the_counterparty_come_before_later_ones_they_took
     t.mail("u1.md", "2026-09-01", beta, ME, "베타 소식", "새 제품 안내입니다", None);
     t.quote("n", beta, "베타 설비 견적", "2026-10-20");
     let mut lib = t.built();
-    let got = hits(&mut lib, &named(&["설비"]));
-    assert_eq!(title(&got[0]), "베타 설비 견적", "{got:#?}");
-    assert_eq!(earlier(&got), ["베타 센서 견적", "베타 밸브 견적", "베타 펌프 견적"], "{got:#?}");
+    let case = case_found(&mut lib, &["설비"]);
+    assert_eq!(others_with(&lib, &case).unwrap(), ["베타 센서 견적", "베타 밸브 견적", "베타 펌프 견적"]);
+}
+
+#[test]
+fn a_matter_among_the_user_s_own_people_has_no_counterparty_and_no_situation_stands_in_for_it() {
+    let t = kind_of_work();
+    let mut lib = t.built();
+    let case = case_found(&mut lib, &["포트 포워딩"]);
+    assert_eq!(others_with(&lib, &case), None);
+    let t = situation();
+    let mut lib = t.built();
+    let case = case_found(&mut lib, &["장비", "구매"]);
+    assert_eq!(others_with(&lib, &case), None);
+}
+
+#[test]
+fn each_other_matter_shows_how_it_went_and_its_mails_a_revised_sum_before_and_after_nothing_after_the_day() {
+    let t = alpha();
+    let mut lib = t.built();
+    let case = case_found(&mut lib, &["설비"]);
+    let pre = lib.precedents(&case, DAY, "", MAX_PRECEDENTS).unwrap().unwrap();
+    let section = recall::render(&pre.hits);
+    let pipe: Vec<&str> = section.lines().skip_while(|l| !l.contains("알파 배관 견적")).take(4).collect();
+    let line = pipe[0];
+    // how it went, the oldest first, with the days: the revision is a step of it
+    assert!(line.contains("경과: 견적 요청 (2026-07-10) → 견적 발송 (2026-07-12) → 견적 개정 (2026-07-20)"), "{line}");
+    // the mails it holds, the sum before and after the revision: up to the day asked
+    let all = pipe.join("\n");
+    assert!(all.contains("100만원") && all.contains("120만원"), "{all}");
+    assert!(all.contains("2026-07-12") && all.contains("2026-07-20"), "the days of the mails: {all}");
+    assert!(!section.contains("150만원") && !section.contains("2026-11-05"), "nothing after the day asked: {section}");
+    // the fourth other one is left out
+    assert!(!section.contains("알파 펌프 견적"), "{section}");
 }
 
 /// A first one among the user's own people gathers nothing: no other found matter with a counterparty is taken for the
@@ -217,25 +337,8 @@ fn kind_of_work() -> T {
     t
 }
 
-#[test]
-fn a_matter_found_first_with_no_counterparty_gathers_nothing_and_no_other_is_taken_in_its_place() {
-    let t = kind_of_work();
-    let mut lib = t.built();
-    let got = hits(&mut lib, &named(&["포트 포워딩"]));
-    assert_eq!(title(&got[0]), "포트 포워딩 포트 포워딩 정리", "{got:#?}");
-    assert_eq!(got[0]["top"], true);
-    assert!(earlier(&got).is_empty(), "{got:#?}");
-    assert_eq!(got[0]["no_precedent"], true, "{got:#?}");
-    assert!(titles(&got).contains(&"포트 포워딩 요청".to_string()), "what else was found stays: {got:#?}");
-    assert!(!titles(&got).iter().any(|t| t.contains("방화벽")), "{got:#?}");
-    nothing_guessed(&got);
-    let section = recall::render(&got);
-    assert!(section.starts_with(recall::FOUND_HIT), "{section}");
-    assert!(section.contains(recall::NO_PRECEDENT), "{section}");
-}
-
-#[test]
-fn matters_in_the_same_situation_are_not_gathered() {
+/// A matter among the user's own people, and one with another organization in the same stage, the same part.
+fn situation() -> T {
     let t = T::new();
     // among the user's own people: no counterparty; a stage and a part on the other side the graph reads
     t.mail("i1.md", "2026-10-20", COLLEAGUE, ME, "사내 장비 구매", "공급사 담당 확인했고 견적 요청드립니다", None);
@@ -249,102 +352,7 @@ fn matters_in_the_same_situation_are_not_gathered() {
         "공급사 담당입니다. 견적 요청드립니다",
         None,
     );
-    let mut lib = t.built();
-    let got = hits(&mut lib, &named(&["장비", "구매"]));
-    assert_eq!(title(&got[0]), "사내 장비 구매", "{got:#?}");
-    assert!(earlier(&got).is_empty(), "{got:#?}");
-    assert_eq!(got[0]["no_precedent"], true);
-    assert!(!recall::render(&got).contains("같은 상황"), "{}", recall::render(&got));
-}
-
-// ---------- what was found and what was gathered, said apart ----------
-
-#[test]
-fn what_was_found_comes_first_and_the_counterparty_s_other_matters_after_under_the_matter_they_were_gathered_by() {
-    let t = T::new();
-    // the words fit the client's first, then an internal one
-    t.mail("c1.md", "2026-10-01", ALPHA, ME, "방화벽 설정 요청", "방화벽 설정 변경 요청드립니다. 방화벽 설정", None);
-    t.mail("c2.md", "2026-10-02", ME, ALPHA, "방화벽 설정 요청", "방화벽 설정 적용했습니다", Some("c1.md"));
-    t.mail("i1.md", "2026-09-01", COLLEAGUE, ME, "방화벽 점검", "방화벽 점검 결과입니다", None);
-    t.quote("e", ALPHA, "알파 펌프 견적", "2026-05-01");
-    t.quote("f", ALPHA, "알파 밸브 견적", "2026-03-01");
-    let mut lib = t.built();
-    let got = hits(&mut lib, &named(&["방화벽", "설정"]));
-    assert_eq!(titles(&got), ["방화벽 설정 요청", "방화벽 점검", "알파 펌프 견적", "알파 밸브 견적"], "{got:#?}");
-    let section = recall::render(&got);
-    let lines: Vec<&str> = section.lines().collect();
-    assert_eq!(lines[0], recall::FOUND_HIT, "{section}");
-    let head = lines.iter().position(|l| l.contains("같은 거래처(alpha.co.kr)의 다른 건")).expect(&section);
-    assert!(
-        lines[head].contains("방화벽 설정 요청\" 건의 거래처로"),
-        "the matter they were gathered by is named: {section}"
-    );
-    let found = lines.iter().position(|l| l.contains("방화벽 점검")).unwrap();
-    let pump = lines.iter().position(|l| l.contains("알파 펌프 견적")).unwrap();
-    assert!(found < head && head < pump, "{section}");
-}
-
-#[test]
-fn each_gathered_matter_shows_how_it_went_and_its_mails_a_revised_sum_before_and_after_nothing_after_the_day() {
-    let t = alpha();
-    let mut lib = t.built();
-    let section = recall::render(&hits(&mut lib, &named(&["설비"])));
-    assert!(section.starts_with(recall::FOUND_HIT), "{section}");
-    let pipe: Vec<&str> = section.lines().skip_while(|l| !l.contains("알파 배관 견적")).take(4).collect();
-    let line = pipe[0];
-    // how it went, the oldest first, with the days: the revision is a step of it
-    assert!(line.contains("경과: 견적 요청 (2026-07-10) → 견적 발송 (2026-07-12) → 견적 개정 (2026-07-20)"), "{line}");
-    // the mails it holds, the sum before and after the revision: up to the day asked
-    let all = pipe.join("\n");
-    assert!(all.contains("100만원") && all.contains("120만원"), "{all}");
-    assert!(all.contains("2026-07-12") && all.contains("2026-07-20"), "the days of the mails: {all}");
-    assert!(!section.contains("150만원") && !section.contains("2026-11-05"), "nothing after the day asked: {section}");
-    // the fourth other one is left out
-    assert!(!section.contains("알파 펌프 견적"), "{section}");
-}
-
-#[test]
-fn the_counterparty_s_other_matters_keep_their_place_within_eight_and_the_last_found_ones_give_way() {
-    let t = T::new();
-    // the client's matter the words fit best, and three other matters with the client the words do not find
-    t.mail("c1.md", "2026-10-01", ALPHA, ME, "포트 설정 포트 요청", "포트 포트 포트 포트 설정 요청드립니다", None);
-    t.mail("c2.md", "2026-10-02", ME, ALPHA, "포트 설정 포트 요청", "적용했습니다", Some("c1.md"));
-    t.quote("e", ALPHA, "알파 펌프 견적", "2026-03-01");
-    t.quote("f", ALPHA, "알파 밸브 견적", "2026-05-01");
-    t.quote("g", ALPHA, "알파 센서 견적", "2026-07-01");
-    // seven internal matters the words find too, each less well
-    let subjects = ["가 점검", "나 정리", "다 회의", "라 보고", "마 일정", "바 교육", "사 공지"];
-    for (i, subject) in subjects.iter().enumerate() {
-        let day = format!("2026-0{}-15", i + 1);
-        let body = "포트 하나를 확인했고 그 밖에 여러 내용이 길게 길게 이어집니다 내용 내용 내용";
-        t.mail(&format!("i{i}.md"), &day, COLLEAGUE, ME, subject, body, None);
-    }
-    let mut lib = t.built();
-    let got = hits(&mut lib, &named(&["포트"]));
-    assert_eq!(title(&got[0]), "포트 설정 포트 요청", "{got:#?}");
-    assert_eq!(got.len(), 8, "{:?}", titles(&got));
-    assert_eq!(earlier(&got), ["알파 센서 견적", "알파 밸브 견적", "알파 펌프 견적"], "{:?}", titles(&got));
-    let found: Vec<&Value> = got.iter().filter(|h| h.get("like").is_none()).collect();
-    assert_eq!(found.len(), 5, "the top one and four more found: {:?}", titles(&got));
-    assert!(got[5..].iter().all(|h| h.get("like").is_some()), "the gathered ones come last: {:?}", titles(&got));
-}
-
-#[test]
-fn a_matter_both_found_and_gathered_is_shown_once_among_the_gathered() {
-    let t = T::new();
-    t.mail("c1.md", "2026-10-01", ALPHA, ME, "방화벽 설정 요청", "방화벽 설정 방화벽 설정 요청드립니다", None);
-    t.mail("c2.md", "2026-10-02", ME, ALPHA, "방화벽 설정 요청", "방화벽 설정 적용했습니다", Some("c1.md"));
-    // another matter with the client the words find as well
-    t.mail("w1.md", "2026-06-01", ALPHA, ME, "알파 방화벽 교체", "방화벽 교체 견적 요청드립니다", None);
-    t.mail("w2.md", "2026-06-03", ME, ALPHA, "알파 방화벽 교체", "견적서 송부드립니다", Some("w1.md"));
-    t.quote("e", ALPHA, "알파 펌프 견적", "2026-03-01");
-    let mut lib = t.built();
-    let got = hits(&mut lib, &named(&["방화벽"]));
-    assert_eq!(title(&got[0]), "방화벽 설정 요청", "{got:#?}");
-    let shown: Vec<&Value> = got.iter().filter(|h| title(h) == "알파 방화벽 교체").collect();
-    assert_eq!(shown.len(), 1, "{:?}", titles(&got));
-    assert!(shown[0].get("like").is_some(), "shown among the gathered: {:?}", titles(&got));
-    assert_eq!(earlier(&got), ["알파 방화벽 교체", "알파 펌프 견적"], "{:?}", titles(&got));
+    t
 }
 
 // ---------- a question that points at the matter at hand ----------
@@ -359,7 +367,7 @@ impl Model for Picks {
 const NAMES_NOTHING: &str = r#"{"search": true, "words": [], "precedent": true, "unclear": true}"#;
 
 #[test]
-fn a_question_that_names_no_matter_asks_once_about_the_one_under_way_and_gathers_by_the_choice() {
+fn a_question_that_names_no_matter_asks_once_about_the_one_under_way_and_answers_by_the_choice() {
     let t = alpha();
     t.built();
     let q = "이런 경우 전에 어떻게 했지";
@@ -370,16 +378,16 @@ fn a_question_that_names_no_matter_asks_once_about_the_one_under_way_and_gathers
     assert!(cands.contains("알파 설비 견적") && cands.contains("견적 요청"), "{s}");
     assert!(!s.contains("[받은 메일]") && !s.contains("[보낸 메일]"), "no records before it is known: {s}");
     let before = format!("사용자가 물은 말: {q}\n비서가 되물은 말: 알파 설비 견적 말씀인가요?\n후보:\n{cands}");
-    // chosen: its counterparty's other matters
+    // chosen: that matter, nothing gathered with it
     let key = &cands[cands.rfind('<').unwrap()..];
     let chose = format!(r#"{{"search": true, "words": [], "precedent": true, "at_hand": true, "matter": "{key}"}}"#);
     let s = recall::find(&t.p, &Picks(chose), "응 그거", DAY, &[], Some(&before)).unwrap();
-    assert!(s.starts_with(recall::NOW_HIT) && s.contains("알파 배관 견적"), "{s}");
-    assert!(s.contains("알파 설비 견적\" 건의 거래처로"), "the matter they were gathered by is named: {s}");
+    assert!(s.starts_with(recall::NOW_HIT) && s.contains("알파 설비 견적"), "{s}");
+    assert!(s.contains(recall::NOT_GATHERED) && !s.contains("알파 배관 견적"), "{s}");
     // not chosen: not asked again, the one offered is assumed and said to be
     let s = recall::find(&t.p, &Picks(NAMES_NOTHING.into()), "글쎄", DAY, &[], Some(&before)).unwrap();
     assert!(!s.contains(recall::NOW), "asked once: {s}");
-    assert!(s.starts_with(recall::ASSUMED) && s.contains("알파 설비 견적") && s.contains("알파 배관 견적"), "{s}");
+    assert!(s.starts_with(recall::ASSUMED) && s.contains("알파 설비 견적") && !s.contains("알파 배관 견적"), "{s}");
 }
 
 #[test]
@@ -399,7 +407,7 @@ fn a_question_about_a_kind_of_work_is_not_asked_back_and_finds_by_its_topic() {
     let kind = r#"{"search": true, "words": ["설비"], "precedent": true}"#;
     let s = recall::find(&t.p, &Picks(kind.into()), "설비 견적 낼 땐 전에 어떻게 했지", DAY, &[], None).unwrap();
     assert!(!s.contains(recall::NOW), "{s}");
-    assert!(s.starts_with(recall::FOUND_HIT) && s.contains("알파 배관 견적"), "{s}");
+    assert!(s.starts_with(recall::FOUND_HIT) && s.contains("알파 설비 견적") && !s.contains("알파 배관 견적"), "{s}");
 }
 
 #[test]
@@ -440,12 +448,12 @@ fn meant(question: &str) -> Picked {
 }
 
 #[test]
-fn by_meaning_the_matter_found_first_gathers_its_counterparty_s_latest_others_not_the_nearest() {
+fn by_meaning_the_matter_found_first_gathers_nothing_besides_it() {
     let (_t, mut lib) = by_meaning();
     let got = hits(&mut lib, &meant("포트 포워딩 요청 전에 어떻게 했지"));
     assert_eq!(title(&got[0]), "포트 포워딩 요청", "{got:#?}");
     assert_eq!(got[0]["top"], true);
-    assert_eq!(earlier(&got), ["알파 센서 견적", "알파 밸브 견적", "알파 펌프 견적"], "{got:#?}");
+    nothing_gathered(&got);
     nothing_guessed(&got);
 }
 
@@ -454,18 +462,17 @@ fn by_meaning_a_matter_found_first_with_no_counterparty_gathers_nothing() {
     let (_t, mut lib) = by_meaning();
     let got = hits(&mut lib, &meant("회의실 예약 안내 전에 어떻게 했지"));
     assert_eq!(title(&got[0]), "회의실 예약 안내", "{got:#?}");
-    assert!(earlier(&got).is_empty(), "{got:#?}");
-    assert_eq!(got[0]["no_precedent"], true);
+    nothing_gathered(&got);
     nothing_guessed(&got);
 }
 
 // ---------- the eval ----------
 
-/// The eval (#95, ADR 0006): a precedent case lists the threads of the earlier matters it should gather. Three are
-/// shown at most, so what is found is the labels shown over min(3, labels); how exact is the share of the shown
-/// earlier matters that are labels.
+/// The eval (#95, ADR 0006): a precedent case lists the threads of the earlier matters it should gather. Nothing is
+/// gathered now (ADR 0007, amended), so a labelled case scores no label found and counts as "none shown"; the measure
+/// stays, to weigh a gathering made again on the same set.
 #[test]
-fn the_eval_scores_the_earlier_matters_by_how_many_labels_are_found_and_how_exact_what_is_shown() {
+fn the_eval_scores_a_labelled_case_with_nothing_gathered_as_none_found_and_none_shown() {
     use life_server::librarian::eval::{self, Kind};
     let t = T::new();
     t.quote("p", ALPHA, "알파 펌프 견적", "2026-01-05");
@@ -493,11 +500,11 @@ fn the_eval_scores_the_earlier_matters_by_how_many_labels_are_found_and_how_exac
         &f,
         format!(
             "{}{}{}",
-            // four labels; the latest three earlier ones are shown: two of them are labels
+            // four labels
             case("n1.md", "설비 견적 전에 어떻게 했지", Some(&["b1.md", "s1.md", "p1.md", "z1.md"])),
             // no label: not in this measure
             case("n1.md", "설비 견적 전에 어떻게 했지 (2)", None),
-            // labels all shown
+            // three labels
             case("n1.md", "설비 견적 전에 어떻게 했지 (3)", Some(&["b1.md", "s1.md", "v1.md"])),
         ),
     )
@@ -506,18 +513,17 @@ fn the_eval_scores_the_earlier_matters_by_how_many_labels_are_found_and_how_exac
     let m = Picks(r#"{"search": true, "words": ["설비"], "precedent": true}"#.into());
     let out = eval::run(&mut lib, Some(&m), &t.p.vault, &cases, 8).unwrap();
     assert_eq!(out[0].model_rank, Some(1), "the matter found comes first");
-    assert_eq!(out[0].gathered, Some(3), "the counterparty's other matters gathered");
+    assert_eq!(out[0].gathered, None, "nothing gathered besides it");
     let e = out[0].earlier.expect("scored");
-    assert_eq!((e.labels, e.found, e.shown, e.right), (4, 2, 3, 2), "{e:?}");
+    assert_eq!((e.labels, e.found, e.shown, e.right), (4, 0, 0, 0), "{e:?}");
     assert!(out[1].earlier.is_none(), "no label: left out of this measure");
     let e = out[2].earlier.expect("scored");
-    assert_eq!((e.labels, e.found, e.shown, e.right), (3, 3, 3, 3), "{e:?}");
+    assert_eq!((e.labels, e.found, e.shown, e.right), (3, 0, 0, 0), "{e:?}");
 
     let s = &eval::summary(&out)[&Kind::Precedent].earlier;
     assert_eq!(s.cases, 2);
-    assert!((s.found_avg().unwrap() - (2.0 / 3.0 + 1.0) / 2.0).abs() < 1e-9, "{s:?}");
-    assert!((s.exact_avg().unwrap() - (2.0 / 3.0 + 1.0) / 2.0).abs() < 1e-9, "{s:?}");
-    assert_eq!((s.any, s.none), (2, 0));
+    assert_eq!((s.found_avg(), s.exact_avg()), (Some(0.0), None), "{s:?}");
+    assert_eq!((s.any, s.none), (0, 2));
 }
 
 /// A matter with no earlier one shows none: how exact is not defined, it is counted as "none shown" apart.
@@ -591,7 +597,6 @@ fn a_line_break_in_what_the_graph_read_makes_no_line_of_its_own() {
         json!({"day": "2026-10-01", "kind": "받은 메일", "title": "지금", "count": 1, "snippet": "x", "case": "case:1",
                "top": true}),
         json!({"day": "2026-01-01", "kind": "받은 메일", "title": "전", "count": 1, "snippet": "y", "case": "case:2",
-               "like": format!("같은 거래처({fake})의 다른 건"),
                "state": {"label": fake, "since": fake, "origin": "model", "evidence": fake, "group": fake},
                "earlier": [{"label": fake, "since": fake, "origin": "model"}],
                "flow": [{"label": fake, "since": fake, "origin": "model"}],
@@ -599,5 +604,15 @@ fn a_line_break_in_what_the_graph_read_makes_no_line_of_its_own() {
     ];
     let section = recall::render(&hits);
     assert!(!section.lines().any(|l| l.starts_with("- 2099")), "{section}");
-    assert_eq!(section.lines().count(), 4, "two heads and two hits: {section}");
+    assert_eq!(section.lines().count(), 4, "a head, two hits and the line after the first: {section}");
+}
+
+/// What is found over what could be, and how exact what is shown, from the counts (ADR 0006: three at most).
+#[test]
+fn the_earlier_shares_count_three_at_most() {
+    use life_server::librarian::eval::Earlier;
+    let e = Earlier { labels: 4, found: 2, shown: 3, right: 2 };
+    assert!((e.found_share() - 2.0 / 3.0).abs() < 1e-9 && (e.exact_share().unwrap() - 2.0 / 3.0).abs() < 1e-9);
+    let none = Earlier { labels: 2, found: 0, shown: 0, right: 0 };
+    assert_eq!((none.found_share(), none.exact_share()), (0.0, None));
 }

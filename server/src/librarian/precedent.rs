@@ -4,6 +4,9 @@
 //! gathers nothing: no other likeness (the same stage, the same part) stands in for it (ADR 0006). No relation is added
 //! to the graph for it.
 //!
+//! The assistant does not ask for these now (ADR 0007, amended 2026-11-04: they showed nothing on the test set); they
+//! stay for a gathering made again with another order, to be weighed on a new test set.
+//!
 //! Each matter gathered is a hit as the graph gives it, with how it went (its states with their days, oldest first) and
 //! the mails it holds (`others`, ADR 0003: a revision and a changed sum are shown both before and after), up to the day
 //! asked.
