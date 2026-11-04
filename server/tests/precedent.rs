@@ -303,6 +303,50 @@ fn each_gathered_matter_shows_how_it_went_and_its_mails_a_revised_sum_before_and
     assert!(!section.contains("알파 펌프 견적"), "{section}");
 }
 
+#[test]
+fn the_counterparty_s_other_matters_keep_their_place_within_eight_and_the_last_found_ones_give_way() {
+    let t = T::new();
+    // the client's matter the words fit best, and three other matters with the client the words do not find
+    t.mail("c1.md", "2026-10-01", ALPHA, ME, "포트 설정 포트 요청", "포트 포트 포트 포트 설정 요청드립니다", None);
+    t.mail("c2.md", "2026-10-02", ME, ALPHA, "포트 설정 포트 요청", "적용했습니다", Some("c1.md"));
+    t.quote("e", ALPHA, "알파 펌프 견적", "2026-03-01");
+    t.quote("f", ALPHA, "알파 밸브 견적", "2026-05-01");
+    t.quote("g", ALPHA, "알파 센서 견적", "2026-07-01");
+    // seven internal matters the words find too, each less well
+    let subjects = ["가 점검", "나 정리", "다 회의", "라 보고", "마 일정", "바 교육", "사 공지"];
+    for (i, subject) in subjects.iter().enumerate() {
+        let day = format!("2026-0{}-15", i + 1);
+        let body = "포트 하나를 확인했고 그 밖에 여러 내용이 길게 길게 이어집니다 내용 내용 내용";
+        t.mail(&format!("i{i}.md"), &day, COLLEAGUE, ME, subject, body, None);
+    }
+    let mut lib = t.built();
+    let got = hits(&mut lib, &named(&["포트"]));
+    assert_eq!(title(&got[0]), "포트 설정 포트 요청", "{got:#?}");
+    assert_eq!(got.len(), 8, "{:?}", titles(&got));
+    assert_eq!(earlier(&got), ["알파 센서 견적", "알파 밸브 견적", "알파 펌프 견적"], "{:?}", titles(&got));
+    let found: Vec<&Value> = got.iter().filter(|h| h.get("like").is_none()).collect();
+    assert_eq!(found.len(), 5, "the top one and four more found: {:?}", titles(&got));
+    assert!(got[5..].iter().all(|h| h.get("like").is_some()), "the gathered ones come last: {:?}", titles(&got));
+}
+
+#[test]
+fn a_matter_both_found_and_gathered_is_shown_once_among_the_gathered() {
+    let t = T::new();
+    t.mail("c1.md", "2026-10-01", ALPHA, ME, "방화벽 설정 요청", "방화벽 설정 방화벽 설정 요청드립니다", None);
+    t.mail("c2.md", "2026-10-02", ME, ALPHA, "방화벽 설정 요청", "방화벽 설정 적용했습니다", Some("c1.md"));
+    // another matter with the client the words find as well
+    t.mail("w1.md", "2026-06-01", ALPHA, ME, "알파 방화벽 교체", "방화벽 교체 견적 요청드립니다", None);
+    t.mail("w2.md", "2026-06-03", ME, ALPHA, "알파 방화벽 교체", "견적서 송부드립니다", Some("w1.md"));
+    t.quote("e", ALPHA, "알파 펌프 견적", "2026-03-01");
+    let mut lib = t.built();
+    let got = hits(&mut lib, &named(&["방화벽"]));
+    assert_eq!(title(&got[0]), "방화벽 설정 요청", "{got:#?}");
+    let shown: Vec<&Value> = got.iter().filter(|h| title(h) == "알파 방화벽 교체").collect();
+    assert_eq!(shown.len(), 1, "{:?}", titles(&got));
+    assert!(shown[0].get("like").is_some(), "shown among the gathered: {:?}", titles(&got));
+    assert_eq!(earlier(&got), ["알파 방화벽 교체", "알파 펌프 견적"], "{:?}", titles(&got));
+}
+
 // ---------- a question that points at the matter at hand ----------
 
 struct Picks(String);
