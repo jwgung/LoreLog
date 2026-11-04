@@ -172,9 +172,9 @@ pub struct Result1 {
     pub asked_matters: bool,
     /// expect = "ask", asked back: the share of the candidates the case names that the list holds, over min([`recall::MAX_CANDIDATES`], them)
     pub candidate_hit: Option<f64>,
-    /// the model's words gathered earlier matters like the one at hand (#95): how many, and whether by the same
-    /// counterparty (else by the situation)
-    pub gathered: Option<(usize, bool)>,
+    /// the model's words gathered the other matters with the counterparty of the matter found first (or chosen) (#95,
+    /// ADR 0007): how many
+    pub gathered: Option<usize>,
 }
 
 /// A precedent case's earlier matters, as shown.
@@ -416,10 +416,8 @@ pub fn run(
                     // as the chat does today; asking back is scored by the candidates it lists (#93)
                     let r = match recall::lookup(lib, &p, k, &today, &[])? {
                         recall::Named::Hits(h) => {
-                            let like: Vec<&str> = h.iter().filter_map(|h| h.get("like_kind")?.as_str()).collect();
-                            if let Some(first) = like.first() {
-                                gathered = Some((like.len(), *first == super::precedent::BY_COUNTERPARTY));
-                            }
+                            let n = h.iter().filter(|h| h.get("like").is_some()).count();
+                            gathered = (n > 0).then_some(n);
                             if !earlier.is_empty() {
                                 let like: Vec<serde_json::Value> =
                                     h.iter().filter(|h| h.get("like").is_some()).cloned().collect();

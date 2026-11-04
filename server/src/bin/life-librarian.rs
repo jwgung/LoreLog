@@ -261,11 +261,7 @@ fn measure(lib: &mut Librarian, paths: &Paths, file: &std::path::Path, k: usize,
             Some(w) if r.asked => format!("   모델 되물음 {} {:?}", mark(r.model_rank), w),
             Some(w) => format!("   모델 {} {:?}", mark(r.model_rank), w),
         };
-        let gathered = match r.gathered {
-            Some((n, true)) => format!("  (같은 거래처 지난 건 {n})"),
-            Some((n, false)) => format!("  (같은 상황 지난 건 {n})"),
-            None => String::new(),
-        };
+        let gathered = r.gathered.map(|n| format!("  (같은 거래처의 다른 건 {n})")).unwrap_or_default();
         let share = r.person_share.map(|(a, b)| format!("  (그 사람과 {a}/{b})")).unwrap_or_default();
         let hit = match (r.expect_ask, r.candidate_hit) {
             (true, Some(h)) => format!("  (되물어야 함: 되물음 O, 후보 적중 {:.0}%)", h * 100.0),
