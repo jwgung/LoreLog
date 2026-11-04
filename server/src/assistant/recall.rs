@@ -68,15 +68,14 @@ pub fn render(hits: &[Value]) -> String {
     hits.iter()
         .map(|h| {
             let flag = |k: &str| h.get(k) == Some(&Value::Bool(true));
-            let head = if flag("now") {
-                format!("{NOW_HIT}\n")
+            let (head, tail) = if flag("now") {
+                (format!("{NOW_HIT}\n"), format!("\n{NOT_GATHERED}"))
             } else if flag("top") {
-                format!("{FOUND_HIT}\n")
+                (format!("{FOUND_HIT}\n"), format!("\n{NOT_GATHERED}"))
             } else {
-                String::new()
+                (String::new(), String::new())
             };
-            let none = if flag("no_precedent") { format!("\n{NO_PRECEDENT}") } else { String::new() };
-            head + &line(h) + &none
+            head + &line(h) + &tail
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -339,7 +338,7 @@ pub const NOW_HIT: &str = "- (지금 일로 삼은 건. 답에서 어느 건(제
 /// The line before what a question about how a kind of work was done before found (ADR 0007).
 pub const FOUND_HIT: &str = "- (전에 어떻게 했는지 묻는 말에 맞게 찾은 건, 맞는 것부터)";
 /// The line after the first matter: nothing is gathered besides what was found (ADR 0007, amended 2026-11-04).
-pub const NO_PRECEDENT: &str =
+pub const NOT_GATHERED: &str =
     "- (같은 거래처의 다른 건이나 비슷한 지난 건은 따로 모으지 않았다. 위 기록에 없는 지난 건을 짐작해 말하지 않는다)";
 /// among the matters the words fit about as well ([`MATTER_FIT`]), a second one with at least this share of the first
 /// one's records: which one is meant is not known. The same rule as the namesakes' ([`NAMESAKE_SHARE`]). On its own it
@@ -534,11 +533,11 @@ pub struct Picked {
     pub unclear: bool,
     /// the matter the user chose among the candidates of the turn before (`case:<n>`)
     pub matter: Option<String>,
-    /// how something like it was done before is asked (#95): the matter is found, and the other matters with its
-    /// counterparty gathered (ADR 0007)
+    /// how something like it was done before is asked (#95): the matter is found and shown with how it went, nothing
+    /// gathered besides it (ADR 0007, amended)
     pub precedent: bool,
     /// such a question points at the matter at hand ("이런 경우", "이 건"; ADR 0006): the one under way is asked back
-    /// and its counterparty's other matters gathered. Otherwise (and when it is not clear) the topic is searched.
+    /// and the answer is by the one chosen. Otherwise (and when it is not clear) the topic is searched.
     pub at_hand: bool,
     /// the user's message as said: what is embedded to find the matter by meaning (ADR 0007)
     pub question: String,
@@ -868,7 +867,6 @@ fn first_marked(
     if !flow.is_empty() {
         first["flow"] = Value::Array(flow);
     }
-    first["no_precedent"] = Value::Bool(true);
     let mut out = vec![first];
     out.extend(hits);
     out.truncate(limit);

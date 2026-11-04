@@ -142,8 +142,8 @@ fn titles(hits: &[Value]) -> Vec<String> {
 /// Nothing is gathered besides what was found, and the assistant is told so.
 fn nothing_gathered(got: &[Value]) {
     assert!(got.iter().all(|h| h.get("like").is_none()), "{got:#?}");
-    assert_eq!(got[0]["no_precedent"], true, "{got:#?}");
-    assert!(recall::render(got).contains(recall::NO_PRECEDENT), "{}", recall::render(got));
+    let section = recall::render(got);
+    assert_eq!(section.matches(recall::NOT_GATHERED).count(), 1, "{section}");
 }
 
 fn named(words: &[&str]) -> Picked {
@@ -313,6 +313,7 @@ fn each_other_matter_shows_how_it_went_and_its_mails_a_revised_sum_before_and_af
     // the fourth other one is left out
     assert!(!section.contains("알파 펌프 견적"), "{section}");
 }
+
 /// A first one among the user's own people gathers nothing: no other found matter with a counterparty is taken for the
 /// one at hand in its place (ADR 0006 took back the guess of ADR 0005).
 fn kind_of_work() -> T {
@@ -382,7 +383,7 @@ fn a_question_that_names_no_matter_asks_once_about_the_one_under_way_and_answers
     let chose = format!(r#"{{"search": true, "words": [], "precedent": true, "at_hand": true, "matter": "{key}"}}"#);
     let s = recall::find(&t.p, &Picks(chose), "응 그거", DAY, &[], Some(&before)).unwrap();
     assert!(s.starts_with(recall::NOW_HIT) && s.contains("알파 설비 견적"), "{s}");
-    assert!(s.contains(recall::NO_PRECEDENT) && !s.contains("알파 배관 견적"), "{s}");
+    assert!(s.contains(recall::NOT_GATHERED) && !s.contains("알파 배관 견적"), "{s}");
     // not chosen: not asked again, the one offered is assumed and said to be
     let s = recall::find(&t.p, &Picks(NAMES_NOTHING.into()), "글쎄", DAY, &[], Some(&before)).unwrap();
     assert!(!s.contains(recall::NOW), "asked once: {s}");
@@ -603,7 +604,7 @@ fn a_line_break_in_what_the_graph_read_makes_no_line_of_its_own() {
     ];
     let section = recall::render(&hits);
     assert!(!section.lines().any(|l| l.starts_with("- 2099")), "{section}");
-    assert_eq!(section.lines().count(), 3, "a head and two hits: {section}");
+    assert_eq!(section.lines().count(), 4, "a head, two hits and the line after the first: {section}");
 }
 
 /// What is found over what could be, and how exact what is shown, from the counts (ADR 0006: three at most).

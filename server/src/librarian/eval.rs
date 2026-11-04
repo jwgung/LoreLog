@@ -86,7 +86,8 @@ pub struct Case {
     pub candidates: Option<Vec<String>>,
     /// status, precedent: the thread (as the index names it, `mail:<message id>`)
     pub thread: Option<String>,
-    /// precedent: the threads of the earlier matters with the same counterparty it should gather (#95), when known
+    /// precedent: the threads of the earlier matters with the same counterparty it should gather (#95), when known. The
+    /// assistant gathers none now (ADR 0007, amended 2026-11-04); the labels stay to weigh a gathering made again.
     pub earlier: Option<Vec<String>>,
     /// person: their mail address
     pub person: Option<String>,
@@ -173,7 +174,7 @@ pub struct Result1 {
     /// expect = "ask", asked back: the share of the candidates the case names that the list holds, over min([`recall::MAX_CANDIDATES`], them)
     pub candidate_hit: Option<f64>,
     /// the model's words gathered the other matters with the counterparty of the matter found first (or chosen) (#95,
-    /// ADR 0007): how many
+    /// ADR 0007): how many. None while the assistant gathers none (ADR 0007, amended 2026-11-04)
     pub gathered: Option<usize>,
 }
 
