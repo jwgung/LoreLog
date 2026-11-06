@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use common::{FakeModel, Server};
 use life_server::assistant::chat::{Answer, Choice, chat_answer, chat_history};
-use life_server::assistant::recall;
+use life_server::assistant::recall::{self, ChoiceKind};
 use life_server::config::Paths;
 use life_server::librarian::Librarian;
 use serde_json::{Value, json};
@@ -104,8 +104,8 @@ fn chat(pick: impl Fn(&str) -> String + Send + Sync + 'static) -> Arc<FakeModel>
 }
 
 fn say(t: &T, m: &FakeModel, message: &str, choice: Option<Choice>) -> Answer {
-    let recall = |msg: &str, d: &str, said: &[String], before: Option<&str>| {
-        recall::find_with_sources(&t.p, m, msg, d, said, before)
+    let recall = |msg: &str, d: &str, said: &[String], before: Option<&str>, chosen: Option<&recall::Chosen>| {
+        recall::find_with_sources(&t.p, m, msg, d, said, before, chosen)
     };
     chat_answer(&t.p, m, &recall, DAY, message, None, choice).unwrap()
 }
@@ -130,7 +130,7 @@ fn asking_back_about_matters_gives_one_choice_per_candidate_in_their_order() {
     let m = chat(|_| ONE.to_string());
     let a = say(&t, &m, "견적 건 어떻게 됐지", None);
     let c = a.choices.expect("asked back");
-    assert_eq!(c.kind, "matters");
+    assert_eq!(c.kind, ChoiceKind::Matters);
     assert_eq!(c.options.len(), recall::MAX_CANDIDATES, "{c:?}");
     assert!(c.options[0].contains("견적 일차") && c.options[0].contains("2026-03-01"), "the biggest first: {c:?}");
     assert!(c.options.iter().all(|o| !o.contains("case:") && !o.contains('\n')), "no key, one line each: {c:?}");
@@ -153,6 +153,7 @@ fn the_day_s_chat_shows_the_choices_again_only_on_the_last_turn_while_unanswered
     assert_eq!(last["role"], "assistant");
     assert_eq!(last["choices"]["kind"], "matters", "{h:?}");
     assert_eq!(last["choices"]["options"].as_array().unwrap().len(), 3, "{h:?}");
+    assert!(last.get("keys").is_none() && !last.to_string().contains("case:"), "the keys stay on the server: {h:?}");
     say(&t, &m, "오늘 좀 피곤하네", None);
     let h = chat_history(&t.p, DAY);
     assert!(h.iter().all(|l| l.get("choices").is_none()), "answered: no buttons again: {h:?}");
@@ -198,7 +199,7 @@ fn people_of_one_name_are_choices_with_what_tells_them_apart_and_a_position_pick
     let t = namesakes();
     let m = chat(|_| r#"{"search": true, "people": ["김영희"], "words": []}"#.to_string());
     let c = say(&t, &m, "영희 님이랑 뭐 있었지", None).choices.expect("asked back");
-    assert_eq!(c.kind, "people");
+    assert_eq!(c.kind, ChoiceKind::People);
     assert_eq!(c.options.len(), 2, "{c:?}");
     assert!(c.options.iter().all(|o| o.contains("김영희") && !o.contains('@')), "a name, not an address: {c:?}");
     let other = c.options.iter().position(|o| o.contains("other.com")).expect("the company tells them apart") + 1;
@@ -215,7 +216,7 @@ fn the_matter_under_way_is_one_choice_to_answer_yes_or_no() {
     let t = several();
     let m = chat(|_| AT_HAND.to_string());
     let c = say(&t, &m, "이 견적 건 전에 어떻게 했지", None).choices.expect("asked back");
-    assert_eq!(c.kind, "now");
+    assert_eq!(c.kind, ChoiceKind::Now);
     assert_eq!(c.options.len(), 1, "{c:?}");
     assert!(c.options[0].contains("견적 사차"), "the latest: {c:?}");
     // yes: that matter
@@ -271,6 +272,36 @@ fn no_to_matters_offered_searches_the_others() {
         let title = o.split(" · ").next().unwrap();
         assert!(!p.contains(title), "{title} was turned down: {p}");
     }
+    assert!(p.contains("[받은 메일]") || p.contains("[보낸 메일]"), "the other one is found: {p}");
+}
+
+#[test]
+fn a_typed_no_with_nothing_asked_before_is_read_as_words() {
+    let t = several();
+    let m = chat(|_| r#"{"search": false}"#.to_string());
+    say(&t, &m, "아니요", None);
+    assert!(!prompt(&m).contains(recall::REFUSED), "{}", prompt(&m));
+    assert!(picker_saw(&m).ends_with("아니요"), "the message itself is read: {}", picker_saw(&m));
+}
+
+#[test]
+fn a_label_shows_no_address_even_when_a_name_or_title_is_one() {
+    let people = recall::Asked::People(vec![recall::Candidate {
+        addr: "kim@x.com".into(),
+        name: "kim@x.com".into(),
+        company: String::new(),
+        last: "2026-05-01".into(),
+        subject: "s".into(),
+    }]);
+    let matters = recall::Asked::Matters(vec![recall::Matter {
+        case: "case:1".into(),
+        title: "견적 a@b.com 회신".into(),
+        first: "2026-03-01".into(),
+        state: String::new(),
+    }]);
+    for c in [people.choices(), matters.choices()] {
+        assert!(c.options.iter().all(|o| !o.contains('@') && !o.contains("case:")), "{c:?}");
+    }
 }
 
 // ---------- over HTTP ----------
@@ -292,4 +323,29 @@ fn the_chat_takes_a_position_or_no_and_refuses_anything_else() {
     }
     let (_, body) = s.get(day);
     assert!(body["messages"].as_array().unwrap().iter().all(|l: &Value| l.get("choices").is_none()));
+}
+
+#[test]
+fn over_http_the_answer_and_the_day_s_chat_carry_the_choices_and_a_position_answers_them() {
+    let m = chat(|_| ONE.to_string());
+    let s = Server::start_full(1024 * 1024, m.clone());
+    let t = T { _dir: tempfile::tempdir().unwrap(), p: s.paths.clone() };
+    t.matter("a", "견적 일차", "2026-03-01", 3);
+    t.matter("b", "견적 이차", "2026-05-01", 2);
+    t.matter("c", "견적 삼차", "2026-07-01", 2);
+    let day = "/diary/2026-10-31/chat";
+    let (code, body) = s.post_json(day, &json!({"message": "견적 건 어떻게 됐지"}));
+    assert_eq!(code, 200, "{body}");
+    assert_eq!(body["choices"]["kind"], "matters", "{body}");
+    let options = body["choices"]["options"].as_array().unwrap().clone();
+    assert_eq!(options.len(), 3, "{body}");
+    let (_, h) = s.get(day);
+    assert_eq!(h["messages"].as_array().unwrap().last().unwrap()["choices"], body["choices"]);
+    let second = options[1].as_str().unwrap();
+    let (code, body) = s.post_json(day, &json!({"message": second, "choice": 2}));
+    assert_eq!(code, 200, "{body}");
+    assert!(body.get("choices").is_none(), "{body}");
+    let p = prompt(&m);
+    let title = second.split(" · ").next().unwrap();
+    assert!(p.contains(title) && !p.contains(recall::MATTERS) && !p.contains(recall::ASSUMED), "{p}");
 }

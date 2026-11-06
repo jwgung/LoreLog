@@ -19,14 +19,16 @@ const HELP: &str = r#"life-ingest: collection endpoint that any client (phone, P
   GET  /diary/senders        notification senders of the last 14 days with the user's allowed flag
   GET  /diary/allow          the allowed list as stored
   POST /diary/senders        body: {allow: ["<app>: <sender>" | "<app>: *"]}; which messengers may feed the diary
-  GET  /diary/<date>/chat    the day's chat exchange (to show it again); the last turn carries {choices} while it
-                             asked back and is not answered yet
-  POST /diary/<date>/chat    body: {message, wrong?, about?: summary|answer, choice?: 1-3|"no"}; stores it in the
-                             diary and returns the assistant's {reply}, with wrong {changed}: what the correction
-                             changed, in one line, when the librarian found records {sources: [{day, kind, title,
-                             ref}]}: the ones quoted, and when it asks back {choices: {kind: matters|people|now,
-                             options: [label]}}. `choice` answers the candidates of the turn before by position, or
-                             "no" for none of them (a plain typed "no" is the same); never with `wrong` (400)
+  GET  /diary/<date>/chat    the day's chat exchange (to show it again): {messages: [{role, text, wrong?, about?,
+                             sources?, choices?}]}; `choices` only on the last turn, while it asked back unanswered
+  POST /diary/<date>/chat    body: {message, wrong?, about?: summary|answer|ask, choice?: 1-3|"no"}; stores it in
+                             the diary and returns the assistant's {reply}, and beside it `changed` (with wrong: what
+                             the correction changed, in one line), `sources: [{day, kind, title, ref}]` (the records
+                             the librarian quoted) and `choices: {kind: matters|people|now, options: [label]}` (the
+                             candidates when it asks back), each only when there is one. `choice` answers the
+                             candidates of the turn before by position (one past them is read as words), or "no" for
+                             none (a plain typed "no" is the same). 400: no message, a choice other than 1-3 or
+                             "no", or a choice with `wrong`
   POST /corrections          body: {wrong, right, ref: summary:<date>|chat:<date>|todo:<id>}; keeps the pair in
                              raw/corrections, applies it (the day's note, the chat, the to-do's name), returns {changed}
   POST /transcribe           body: audio (wav); returns {text} from the speech model (LIFE_ASR_URL); nothing is stored

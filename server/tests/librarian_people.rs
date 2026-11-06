@@ -315,8 +315,8 @@ fn the_answer_to_asking_back_is_read_with_the_question_and_its_candidates_and_on
         Ok("x.com 김영희 님인가요, other.com 김영희 님인가요?".into())
     });
     let day = "2026-10-31";
-    let recall = |msg: &str, d: &str, said: &[String], before: Option<&str>| {
-        recall::find_with_sources(&t.p, m.as_ref(), msg, d, said, before)
+    let recall = |msg: &str, d: &str, said: &[String], before: Option<&str>, chosen: Option<&recall::Chosen>| {
+        recall::find_with_sources(&t.p, m.as_ref(), msg, d, said, before, chosen)
     };
     let words_asked = || -> String {
         let asked = m.asked.lock().unwrap();
@@ -353,8 +353,8 @@ fn a_namesake_asked_about_once_is_not_asked_again_and_the_likeliest_is_assumed()
         }
         Ok("어느 분인가요?".into())
     });
-    let recall = |msg: &str, d: &str, said: &[String], before: Option<&str>| {
-        recall::find_with_sources(&t.p, m.as_ref(), msg, d, said, before)
+    let recall = |msg: &str, d: &str, said: &[String], before: Option<&str>, chosen: Option<&recall::Chosen>| {
+        recall::find_with_sources(&t.p, m.as_ref(), msg, d, said, before, chosen)
     };
     chat_reply(&t.p, m.as_ref(), &recall, "2026-10-31", "영희 님이랑 뭐 있었지", None).unwrap();
     chat_reply(&t.p, m.as_ref(), &recall, "2026-10-31", "글쎄요", None).unwrap();

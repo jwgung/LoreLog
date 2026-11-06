@@ -211,12 +211,12 @@ pub struct Source {
 }
 
 /// What the librarian adds to a question: the section quoted in front of the user's words, the records it quotes, and
-/// what it asks the user to choose among, for the screen (#108).
+/// what it asks the user to choose among when it asks back (#108: the screen's choices, and the keys to keep).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Recalled {
     pub section: String,
     pub sources: Vec<Source>,
-    pub asked: Option<Choices>,
+    pub asking: Option<Asked>,
 }
 
 impl From<String> for Recalled {
@@ -225,13 +225,23 @@ impl From<String> for Recalled {
     }
 }
 
-/// What the screen offers when the librarian asks back (#108): `kind` is `matters`, `people` or `now` (the matter
-/// under way, one, answered yes or no), and one label per candidate in their order. No key of the librarian's: the
-/// answer comes back by position ([`Choice`]).
+/// What the screen offers when the librarian asks back (#108): what is asked, and one label per candidate in their
+/// order. No key of the librarian's and no address: the answer comes back by position ([`Choice`]).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Choices {
-    pub kind: String,
+    pub kind: ChoiceKind,
     pub options: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ChoiceKind {
+    /// which of several matters
+    Matters,
+    /// which of several people of one name
+    People,
+    /// whether the matter under way is the one meant: one candidate, answered yes or no
+    Now,
 }
 
 /// How the user answered on the screen: the candidate at this position (from 1), or none of them.
@@ -239,6 +249,18 @@ pub struct Choices {
 pub enum Choice {
     Pick(usize),
     No,
+}
+
+/// What the user chose on the screen, as the librarian's keys (#108): kept with the turn that asked back, on the server
+/// only, and looked up by the position the screen sends back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Chosen {
+    /// a matter (`case:<n>`)
+    Matter(String),
+    /// a person, by their address
+    Person(String),
+    /// none of these matters and people
+    None(Vec<String>),
 }
 
 /// The records these hits quote, one per matter, in their order.
@@ -318,13 +340,14 @@ impl Asked {
     /// The candidates as the screen offers them (#108): a matter by its title and start, a person by their name and
     /// company (else their last record); one line each, no key, no address.
     pub fn choices(&self) -> Choices {
-        let one = |s: &str| plain(s).split_whitespace().collect::<Vec<_>>().join(" ");
+        // one line, and no address: a display name or a subject may be one
+        let one = |s: &str| plain(s).split_whitespace().filter(|w| !w.contains('@')).collect::<Vec<_>>().join(" ");
         let matter = |m: &Matter| {
             format!("{} · {} 시작", one(&m.title).chars().take(MAX_CHOICE_TITLE).collect::<String>(), one(&m.first))
         };
         let (kind, options) = match self {
             Asked::People(c) => (
-                "people",
+                ChoiceKind::People,
                 c.iter()
                     .map(|c| match one(&c.company) {
                         co if co.is_empty() => format!("{} · 마지막 기록 {}", one(&c.name), one(&c.last)),
@@ -332,10 +355,19 @@ impl Asked {
                     })
                     .collect(),
             ),
-            Asked::Matters(m) => ("matters", m.iter().map(matter).collect()),
-            Asked::Now(m) => ("now", m.iter().map(matter).collect()),
+            Asked::Matters(m) => (ChoiceKind::Matters, m.iter().map(matter).collect()),
+            Asked::Now(m) => (ChoiceKind::Now, m.iter().map(matter).collect()),
         };
-        Choices { kind: kind.into(), options }
+        Choices { kind, options }
+    }
+
+    /// The librarian's keys of the candidates, in the order of [`Asked::choices`]: `case:<n>` for a matter, the
+    /// address for a person. Kept on the server with the turn (#108).
+    pub fn keys(&self) -> Vec<String> {
+        match self {
+            Asked::People(c) => c.iter().map(|c| c.addr.clone()).collect(),
+            Asked::Matters(m) | Asked::Now(m) => m.iter().map(|m| m.case.clone()).collect(),
+        }
     }
 }
 
@@ -588,9 +620,6 @@ pub struct Picked {
     pub at_hand: bool,
     /// the user's message as said: what is embedded to find the matter by meaning (ADR 0007)
     pub question: String,
-    /// the user said none of the candidates the turn before offered is meant (#108): what the question's topic finds
-    /// without them, and nothing asked back again
-    pub refused: bool,
 }
 
 impl Picked {
@@ -641,98 +670,18 @@ fn shown_before(before: &str) -> String {
     }
 }
 
-/// The candidates' lines of the turn that asked back, in their order.
-fn offered_lines(before: &str) -> Vec<&str> {
-    let Some(i) = before.rfind(OFFERED) else { return Vec::new() };
-    before[i + OFFERED.len()..].lines().filter(|l| l.starts_with(CANDIDATE)).collect()
-}
-
-/// The matter a candidate's line is about: the key that ends it (a key within a title is not).
-fn line_matter(line: &str) -> Option<String> {
-    line.trim_end().ends_with('>').then(|| line.rfind('<').and_then(|j| chosen_matter(&line[j..]))).flatten()
-}
-
-/// The person a candidate's line is about: the address after their name ([`render_candidates`]).
-fn line_person(line: &str) -> Option<String> {
-    let rest = line.strip_prefix(CANDIDATE)?;
-    let (head, _) = rest.split_once(" · ").unwrap_or((rest, ""));
-    let addr = head.trim_end().strip_suffix('>')?.rsplit_once(" <")?.1;
-    (!addr.is_empty()).then(|| addr.to_string())
-}
-
-/// The matters the turn that asked back offered.
+/// The matters the turn that asked back offered: the key that ends each candidate's line (a key within a title is not).
 fn offered(before: &str) -> Vec<String> {
-    offered_lines(before).into_iter().filter_map(line_matter).collect()
+    let Some(i) = before.rfind(OFFERED) else { return Vec::new() };
+    before[i + OFFERED.len()..]
+        .lines()
+        .filter(|l| l.starts_with(CANDIDATE) && l.trim_end().ends_with('>'))
+        .filter_map(|l| l.rfind('<').and_then(|j| chosen_matter(&l[j..])))
+        .collect()
 }
 
-/// where the turn that asked back says how the user answered it on the screen (before its candidates)
-const CHOSE: &str = "사용자가 화면에서 고른 것: ";
-const CHOSE_NONE: &str = "후보 가운데 없음";
-
-/// The turn that asked back, with how the user answered it on the screen (#108): the position, or none. The chat
-/// builds it; [`pick_in`] reads the choice from it and takes it over what the picker reads.
-pub fn chose(before: &str, choice: Choice) -> String {
-    let said = match choice {
-        Choice::Pick(n) => format!("{CHOSE}{n}번째 후보"),
-        Choice::No => format!("{CHOSE}{CHOSE_NONE}"),
-    };
-    match before.rfind(OFFERED) {
-        Some(i) => format!("{}{said}\n{}", &before[..i], &before[i..]),
-        None => before.to_string(),
-    }
-}
-
-/// How the user answered the turn before on the screen, as [`chose`] wrote it (only before its candidates: a title
-/// cannot say it).
-fn chosen_in(before: &str) -> Option<Choice> {
-    let head = &before[..before.rfind(OFFERED)?];
-    let said = head.lines().rev().find_map(|l| l.strip_prefix(CHOSE))?;
-    if said == CHOSE_NONE {
-        return Some(Choice::No);
-    }
-    said.strip_suffix("번째 후보")?.parse().ok().filter(|n| *n > 0).map(Choice::Pick)
-}
-
-/// [`pick`], with the user's lines before this message (the last [`RECENT_LINES`]) for what "그거" points at. When the
-/// turn before was answered on the screen ([`chose`]), the choice stands over what the picker reads: the candidate at
-/// that position is the one meant, and none of them is [`Picked::refused`].
+/// [`pick`], with the user's lines before this message (the last [`RECENT_LINES`]) for what "그거" points at.
 pub fn pick_in(
-    model: &dyn crate::llm::Model,
-    message: &str,
-    before: Option<&str>,
-    recent: &[String],
-) -> Option<Picked> {
-    let picked = picked_words(model, message, before, recent);
-    let Some(before) = before else { return picked };
-    match chosen_in(before) {
-        Some(Choice::Pick(n)) => {
-            let line = offered_lines(before).get(n - 1).copied();
-            let (case, addr) = (line.and_then(line_matter), line.and_then(line_person));
-            if case.is_none() && addr.is_none() {
-                return picked; // no such candidate: read as words
-            }
-            let mut p = picked.unwrap_or_else(|| Picked { question: message.to_string(), ..Picked::default() });
-            (p.one, p.unclear) = (false, false);
-            match case {
-                Some(case) => p.matter = Some(case),
-                None => p.people = addr.map(|a| format!("<{a}>")).into_iter().collect(),
-            }
-            Some(p)
-        }
-        Some(Choice::No) => {
-            let mut p = picked.unwrap_or_else(|| Picked { question: message.to_string(), ..Picked::default() });
-            let people: Vec<String> =
-                offered_lines(before).into_iter().filter_map(line_person).map(|a| format!("<{a}>")).collect();
-            p.people.retain(|n| !people.contains(n));
-            (p.one, p.unclear, p.at_hand, p.matter, p.refused) = (false, false, false, None, true);
-            Some(p)
-        }
-        None => picked,
-    }
-}
-
-/// What the picker reads of the message, with the turn that asked back or the user's lines before it.
-fn picked_words(
     model: &dyn crate::llm::Model,
     message: &str,
     before: Option<&str>,
@@ -793,7 +742,6 @@ fn picked_words(
         precedent: yes("precedent"),
         at_hand: yes("at_hand"),
         question: message.to_string(),
-        refused: false,
     };
     // "요즘 OO 님이랑 뭐 있었지", "요즘 지원사업 공고 뭐 있었지" ask about records, not what hangs: a small model
     // takes 요즘 for a period. "요즘 밀린 거" names nothing.
@@ -1228,10 +1176,27 @@ pub fn find_with(
     day: &str,
     said: &[String],
 ) -> Option<String> {
-    asked(open, model, message, day, said, None).0.map(|r| r.section)
+    asked(open, model, message, day, said, None, None).0.map(|r| r.section)
+}
+
+/// What was picked, with what the user chose on the screen over it: that matter or that person, or none of the ones
+/// offered (the topic without them: no matter, no one offered, nothing asked back).
+fn with_chosen(mut p: Picked, chosen: &Chosen) -> Picked {
+    (p.one, p.unclear) = (false, false);
+    match chosen {
+        Chosen::Matter(case) => p.matter = Some(case.clone()),
+        Chosen::Person(addr) => p.people = vec![format!("<{addr}>")],
+        Chosen::None(keys) => {
+            p.people.retain(|n| !keys.iter().any(|k| n.trim_start_matches('<').trim_end_matches('>') == k));
+            (p.at_hand, p.matter) = (false, None);
+        }
+    }
+    p
 }
 
 /// [`find_with`] with the records quoted, and what to keep of the question: the words searched and where the hits are.
+/// `chosen`: what the user chose on the screen among the candidates of `before` (#108); it stands over what the
+/// picker reads.
 fn asked(
     open: impl FnOnce() -> anyhow::Result<Box<dyn Index>>,
     model: &dyn crate::llm::Model,
@@ -1239,9 +1204,21 @@ fn asked(
     day: &str,
     said: &[String],
     before: Option<&str>,
+    chosen: Option<&Chosen>,
 ) -> (Option<Recalled>, Option<Vec<String>>, crate::librarian::asks::Found) {
     use crate::librarian::asks::Found;
-    let Some(picked) = pick_in(model, message, before, said) else { return (None, None, Found::NotSearched) };
+    let picked = pick_in(model, message, before, said);
+    let picked = match chosen {
+        None => picked,
+        Some(c) => {
+            Some(with_chosen(picked.unwrap_or_else(|| Picked { question: message.into(), ..Picked::default() }), c))
+        }
+    };
+    let refused = match chosen {
+        Some(Chosen::None(keys)) => Some(keys.as_slice()),
+        _ => None,
+    };
+    let Some(picked) = picked else { return (None, None, Found::NotSearched) };
     let words: Vec<String> = picked.people.iter().chain(&picked.words).cloned().collect();
     let mut notes = Vec::new();
     // a period's question is answered by what hangs in it, the others by what the words and the graph find
@@ -1267,11 +1244,10 @@ fn asked(
             return period_section(lib.as_mut(), &picked, day).map(Got::Period);
         }
         // none of the candidates offered is meant (#108): the topic without them, never asked back again
-        if picked.refused {
+        if let Some(not) = refused {
             if picked.words.is_empty() && picked.people.is_empty() && picked.graph().is_empty() {
                 return Ok(Got::Note(REFUSED));
             }
-            let not = before.map(offered).unwrap_or_default();
             return Ok(match lookup(lib.as_mut(), &picked, LIMIT, day, &all)? {
                 Named::Hits(h) => Got::Named(Named::Hits(
                     h.into_iter()
@@ -1297,7 +1273,7 @@ fn asked(
     })();
     match found {
         Ok(got) => {
-            let (body, sources, found, asked) = match got {
+            let (body, sources, found, asking) = match got {
                 Got::Period(r) => {
                     let refs = r.sources.iter().map(|s| s.refers.clone()).collect();
                     (r.section, r.sources, Found::Hits(refs), None)
@@ -1308,7 +1284,10 @@ fn asked(
                     Found::Hits(hits.iter().filter_map(|h| h["ref"].as_str().map(str::to_string)).collect()),
                     None,
                 ),
-                Got::Named(Named::Ask(asked)) => (asked.render(), Vec::new(), Found::Asked, Some(asked.choices())),
+                Got::Named(Named::Ask(asked)) => {
+                    let section = asked.render();
+                    (section, Vec::new(), Found::Asked, Some(asked))
+                }
                 Got::Note(line) => (line.to_string(), Vec::new(), Found::Hits(Vec::new()), None),
             };
             // what was assumed comes before the records it is about; the other notes after
@@ -1320,7 +1299,7 @@ fn asked(
                 .chain(tail.into_iter().map(str::to_string))
                 .collect::<Vec<_>>()
                 .join("\n");
-            (Some(Recalled { section, sources, asked }), Some(words), found)
+            (Some(Recalled { section, sources, asking }), Some(words), found)
         }
         Err(e) => {
             log::warn!("librarian unavailable: {}", first_word(&e));
@@ -1352,10 +1331,11 @@ pub fn find(
     said: &[String],
     before: Option<&str>,
 ) -> Option<String> {
-    find_with_sources(paths, model, message, day, said, before).map(|r| r.section)
+    find_with_sources(paths, model, message, day, said, before, None).map(|r| r.section)
 }
 
-/// [`find`], and the records the section quotes (for the answer to show where it comes from, #64).
+/// [`find`], and the records the section quotes (for the answer to show where it comes from, #64). `chosen`: what the
+/// user chose on the screen among the candidates of `before` (#108).
 pub fn find_with_sources(
     paths: &crate::config::Paths,
     model: &dyn crate::llm::Model,
@@ -1363,13 +1343,14 @@ pub fn find_with_sources(
     day: &str,
     said: &[String],
     before: Option<&str>,
+    chosen: Option<&Chosen>,
 ) -> Option<Recalled> {
     let open = || -> anyhow::Result<Box<dyn Index>> {
         let mut lib = crate::librarian::Librarian::open(paths, None, LOCK_WAIT)?;
         lib.embedder = crate::host::Models::load(paths).embedder(); // none set: by words, as before
         Ok(Box::new(lib))
     };
-    let (section, words, found) = asked(open, model, message, day, said, before);
+    let (section, words, found) = asked(open, model, message, day, said, before, chosen);
     crate::librarian::asks::record(paths, day, message, words.as_deref(), &found);
     section
 }

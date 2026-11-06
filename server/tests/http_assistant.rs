@@ -119,7 +119,7 @@ fn a_chat_answer_carries_the_records_it_quoted_and_older_answers_stay_as_they_we
         FakeModel::plain(),
         std::sync::Arc::new(common::FakeSpeech),
     );
-    app.recall = std::sync::Arc::new(|message: &str, _: &str, _: &[String], _: Option<&str>| {
+    app.recall = std::sync::Arc::new(|message: &str, _: &str, _: &[String], _: Option<&str>, _| {
         message.contains("견적").then(|| Recalled {
             section: "- 2026-03-05 [보낸 메일] 배관 교체 견적: 배관 견적 보냅니다".into(),
             sources: vec![Source {
@@ -128,7 +128,7 @@ fn a_chat_answer_carries_the_records_it_quoted_and_older_answers_stay_as_they_we
                 title: "배관 교체 견적".into(),
                 refers: "Mail/2026/q3.md".into(),
             }],
-            asked: None,
+            asking: None,
         })
     });
     let s = Server::run(dir, paths, std::sync::Arc::new(app));
