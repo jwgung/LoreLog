@@ -308,6 +308,34 @@ fn a_label_shows_no_address_even_when_a_name_or_title_is_one() {
     }
 }
 
+#[test]
+fn no_to_people_of_one_name_searches_the_rest_of_the_question_without_them() {
+    let t = namesakes();
+    let m = chat(|said| {
+        if said.contains("회의록") {
+            r#"{"search": true, "people": ["김영희"], "words": ["회의록"]}"#.into()
+        } else {
+            r#"{"search": true, "people": ["김영희"], "words": []}"#.into()
+        }
+    });
+    // the question names a topic besides the person: it is searched without anyone of that name
+    say(&t, &m, "영희 님이랑 회의록 건 어떻게 됐지", None);
+    say(&t, &m, "아니요", Some(Choice::No));
+    let p = prompt(&m);
+    assert!(!p.contains(recall::NAMESAKES) && !p.contains(recall::REFUSED), "{p}");
+    assert!(p.contains("회의록"), "the topic is searched: {p}");
+}
+
+#[test]
+fn no_to_people_of_one_name_with_nothing_else_asked_for_a_word() {
+    let t = namesakes();
+    let m = chat(|_| r#"{"search": true, "people": ["김영희"], "words": []}"#.into());
+    say(&t, &m, "영희 님이랑 뭐 있었지", None);
+    say(&t, &m, "아니요", Some(Choice::No));
+    let p = prompt(&m);
+    assert!(p.contains(recall::REFUSED) && !p.contains(recall::NAMESAKES), "{p}");
+}
+
 // ---------- over HTTP ----------
 
 #[test]

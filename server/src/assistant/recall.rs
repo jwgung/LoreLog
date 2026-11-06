@@ -1187,7 +1187,11 @@ fn with_chosen(mut p: Picked, chosen: &Chosen) -> Picked {
         Chosen::Matter(case) => p.matter = Some(case.clone()),
         Chosen::Person(addr) => p.people = vec![format!("<{addr}>")],
         Chosen::None(keys) => {
-            p.people.retain(|n| !keys.iter().any(|k| n.trim_start_matches('<').trim_end_matches('>') == k));
+            // people turned down: the name that found them is not searched again (the keys are their addresses, the
+            // picker gave a name); matters turned down are left out of what the topic finds
+            if keys.iter().any(|k| chosen_matter(k).is_none()) {
+                p.people.clear();
+            }
             (p.at_hand, p.matter) = (false, None);
         }
     }
