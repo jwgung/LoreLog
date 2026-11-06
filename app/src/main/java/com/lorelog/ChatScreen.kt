@@ -83,7 +83,12 @@ private val Picked = Color(0xFF3A4766)
 /** 대화 화면에 덧붙는 말풍선(서버 초안 뒤에 사용자가 주고받은 것). */
 private sealed class Msg {
     data class Mine(val text: String) : Msg()
-    data class Assistant(val text: String, val sources: List<DiaryClient.Source> = emptyList()) : Msg()
+    /** [choices]: 비서가 되물은 후보(#108). 이 답이 대화의 마지막일 때만 버튼으로 보인다. */
+    data class Assistant(
+        val text: String,
+        val sources: List<DiaryClient.Source> = emptyList(),
+        val choices: DiaryClient.Choices? = null,
+    ) : Msg()
     data class Fixed(val wrong: String, val right: String) : Msg()
     /** 사용자의 답이 바꾼 것 한 줄(구조 질문에 답했을 때, #63) */
     data class Changed(val text: String) : Msg()
@@ -137,7 +142,7 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
                 restored.add(Msg.Mine(l.text))
                 pendingFix = l.wrong?.let { Msg.Fixed(it, l.text) }
             } else {
-                restored.add(Msg.Assistant(l.text, l.sources))
+                restored.add(Msg.Assistant(l.text, l.sources, l.choices))
                 pendingFix?.let { restored.add(it); pendingFix = null }
             }
         }
@@ -192,26 +197,34 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
     }
     LaunchedEffect(extra.size, draft, selected) { scroll.animateScrollTo(scroll.maxValue) }
 
-    fun send() {
-        val t = input.trim()
-        if (t.isEmpty()) return
-        input = ""
+    /**
+     * 한 말을 보내고 답을 받는다. [choice]: 되물은 후보에 버튼으로 답한 것(그때 [t]는 버튼의 글자, #108). 버튼으로 답하면
+     * 고치려고 고른 문장은 보내지 않고 풀린다(정정과 후보 답은 함께 가지 않는다).
+     */
+    fun say(t: String, choice: Any? = null) {
         extra.add(Msg.Mine(t))
-        val wrong = fixing
+        val wrong = if (choice == null) fixing else null
         val about = fixingAbout
         fixing = null; selected = null; pickedAnswer = null; fixingAbout = "summary"
         extra.add(Msg.Typing)
         scope.launch {
-            val r = DiaryClient.chat(context, day, t, wrong, about)
+            val r = DiaryClient.chat(context, day, t, wrong, about, choice)
             extra.remove(Msg.Typing)
             if (r == null) {
                 extra.add(Msg.Assistant("연결이 안 돼서 답을 못 드렸어요. 말씀하신 건 다시 보내 주시면 남길게요."))
                 return@launch
             }
-            extra.add(Msg.Assistant(r.reply, r.sources))
+            extra.add(Msg.Assistant(r.reply, r.sources, r.choices))
             if (wrong != null) extra.add(Msg.Fixed(wrong, t))
             else r.changed?.let { extra.add(Msg.Changed(it)) }
         }
+    }
+
+    fun send() {
+        val t = input.trim()
+        if (t.isEmpty()) return
+        input = ""
+        say(t)
     }
 
     Column(modifier = Modifier.fillMaxSize().background(Ground).safeDrawingPadding().imePadding()) {
@@ -316,6 +329,20 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
                                 sourceLine(m.sources), color = Sub, fontSize = 11.sp, lineHeight = 16.sp,
                                 modifier = Modifier.widthIn(max = bubbleMax()).padding(start = 8.dp),
                             )
+                        }
+                        // 되물은 후보: 답하지 않은 마지막 되묻기에만 버튼으로. 글로 답해도 된다(#108)
+                        val asked = m.choices
+                        if (asked != null && m === extra.lastOrNull()) {
+                            Column(
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.widthIn(max = bubbleMax()).padding(start = 8.dp),
+                            ) {
+                                DiaryClient.buttons(asked).forEach { b ->
+                                    OutlinedButton(onClick = { say(b.label, b.value) }) {
+                                        Text(b.label, color = Text0, fontSize = 14.sp, lineHeight = 20.sp)
+                                    }
+                                }
+                            }
                         }
                         if (pickedAnswer == m.text) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 8.dp)) {
