@@ -281,7 +281,8 @@ fn the_records_quoted_are_the_sources_and_the_chat_hears_the_period() {
         }
         Ok("네.".into())
     });
-    let r = recall::find_with_sources(&t.p, m.as_ref(), "이번 달에 뭐가 걸려 있지", "2026-11-10", &[], None).unwrap();
+    let r =
+        recall::find_with_sources(&t.p, m.as_ref(), "이번 달에 뭐가 걸려 있지", "2026-11-10", &[], None, None).unwrap();
     assert!(r.section.contains("킥오프 회의"), "{}", r.section);
     let titles: Vec<&str> = r.sources.iter().map(|s| s.title.as_str()).collect();
     assert!(titles.contains(&"킥오프 회의") && titles.contains(&"측정 자료 요청"), "{titles:?}");

@@ -68,8 +68,8 @@ impl T {
     }
 
     fn talk(&self, m: &FakeModel, message: &str, day: &str, wrong: Option<&str>) -> String {
-        let recall = |msg: &str, d: &str, said: &[String], before: Option<&str>| {
-            recall::find_with_sources(&self.p, m, msg, d, said, before)
+        let recall = |msg: &str, d: &str, said: &[String], before: Option<&str>, chosen: Option<&recall::Chosen>| {
+            recall::find_with_sources(&self.p, m, msg, d, said, before, chosen)
         };
         chat_reply(&self.p, m, &recall, day, message, wrong).unwrap()
     }
@@ -326,11 +326,12 @@ fn the_chat_gets_the_records_quoted_and_none_for_a_mood() {
     t.mail("2025-05-14-1000-q.md", "프레스 금형 견적", "금형칠번 단가는 다음 주에 확정합니다", "2025-05-14");
     let m = model(Ok(Some(vec!["금형칠번"])));
     let found =
-        recall::find_with_sources(&t.p, m.as_ref(), "금형칠번 견적 어떻게 됐지?", "2026-11-02", &[], None).unwrap();
+        recall::find_with_sources(&t.p, m.as_ref(), "금형칠번 견적 어떻게 됐지?", "2026-11-02", &[], None, None)
+            .unwrap();
     assert!(found.section.contains("프레스 금형 견적"));
     assert_eq!(found.sources.len(), 1);
     assert_eq!((found.sources[0].day.as_str(), found.sources[0].title.as_str()), ("2025-05-14", "프레스 금형 견적"));
     let m = model(Ok(Some(vec!["어디에도없는품목"])));
-    let none = recall::find_with_sources(&t.p, m.as_ref(), "어디에도없는품목", "2026-11-02", &[], None).unwrap();
+    let none = recall::find_with_sources(&t.p, m.as_ref(), "어디에도없는품목", "2026-11-02", &[], None, None).unwrap();
     assert!(none.sources.is_empty() && none.section.contains("찾지 못함"));
 }

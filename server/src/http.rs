@@ -17,7 +17,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 use subtle::ConstantTimeEq;
 
-use crate::assistant::{chat, diary, senders, todos};
+use crate::assistant::{chat, diary, recall, senders, todos};
 use crate::config::Paths;
 use crate::filestore::{self, FileError, FileMeta};
 use crate::jobs::Jobs;
@@ -29,7 +29,7 @@ pub const BODY_LIMIT: usize = 1_000_000;
 
 /// What the librarian adds to a chat question (see [`chat::Recall`]); set by whoever builds the app.
 pub type RecallFn =
-    Arc<dyn Fn(&str, &str, &[String], Option<&str>) -> Option<crate::assistant::recall::Recalled> + Send + Sync>;
+    Arc<dyn Fn(&str, &str, &[String], Option<&str>, Option<&recall::Chosen>) -> Option<recall::Recalled> + Send + Sync>;
 
 /// What the server needs to answer requests.
 pub struct App {
@@ -60,8 +60,8 @@ impl App {
         let store = RawStore::new(&paths.data);
         // a chat question asks the librarian of the same places
         let (p, m) = (paths.clone(), model.clone());
-        let recall: RecallFn = Arc::new(move |message, day, said, before| {
-            crate::assistant::recall::find_with_sources(&p, m.as_ref(), message, day, said, before)
+        let recall: RecallFn = Arc::new(move |message, day, said, before, chosen| {
+            crate::assistant::recall::find_with_sources(&p, m.as_ref(), message, day, said, before, chosen)
         });
         App {
             paths,
@@ -273,6 +273,18 @@ fn chat_post(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, 
         return Ok(Reply::new(400, json!({"error": "bad body"})));
     };
     let wrong = payload.get("wrong").and_then(Value::as_str).filter(|w| !w.is_empty());
+    // how the candidates asked back were answered on the screen (#108): a position, or "no"; never with a correction
+    let choice = match payload.get("choice") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) if s == "no" => Some(chat::Choice::No),
+        Some(v) => match v.as_u64().filter(|n| (1..=recall::MAX_CANDIDATES as u64).contains(n)) {
+            Some(n) => Some(chat::Choice::Pick(n as usize)),
+            None => return Ok(Reply::new(400, json!({"error": "bad choice"}))),
+        },
+    };
+    if choice.is_some() && wrong.is_some() {
+        return Ok(Reply::new(400, json!({"error": "bad choice"})));
+    }
     let fix = match (wrong, payload.get("about").and_then(Value::as_str)) {
         (None, Some("ask")) => Some(chat::Fix::Ask),
         (None, _) => None,
@@ -280,16 +292,21 @@ fn chat_post(app: &App, req: &Request, caps: &regex::Captures) -> Result<Reply, 
         (Some(w), Some("answer")) => Some(chat::Fix::Answer(w)),
         (Some(_), Some(_)) => return Ok(Reply::new(400, json!({"error": "bad about"}))),
     };
-    let recall = |m: &str, d: &str, said: &[String], before: Option<&str>| (app.recall)(m, d, said, before);
-    match chat::chat_answer(&app.paths, app.model.as_ref(), &recall, &caps[1], message, fix) {
-        // `changed` and `sources` only when there are some: older apps read `{reply}` as before
-        Ok(chat::Answer { reply, changed, sources }) => {
+    let recall = |m: &str, d: &str, said: &[String], before: Option<&str>, chosen: Option<&recall::Chosen>| {
+        (app.recall)(m, d, said, before, chosen)
+    };
+    match chat::chat_answer(&app.paths, app.model.as_ref(), &recall, &caps[1], message, fix, choice) {
+        // `changed`, `sources` and `choices` only when there are some: older apps read `{reply}` as before
+        Ok(chat::Answer { reply, changed, sources, choices }) => {
             let mut body = json!({"reply": reply});
             if let Some(c) = changed {
                 body["changed"] = json!(c);
             }
             if !sources.is_empty() {
                 body["sources"] = json!(sources);
+            }
+            if let Some(c) = choices {
+                body["choices"] = json!(c);
             }
             Ok(Reply::ok(body))
         }

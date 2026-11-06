@@ -219,8 +219,8 @@ fn chat(t: &T, pick: impl Fn(&str) -> String + Send + Sync + 'static) -> Arc<Fak
 }
 
 fn talk(t: &T, m: &FakeModel, message: &str) -> String {
-    let recall = |msg: &str, d: &str, said: &[String], before: Option<&str>| {
-        recall::find_with_sources(&t.p, m, msg, d, said, before)
+    let recall = |msg: &str, d: &str, said: &[String], before: Option<&str>, chosen: Option<&recall::Chosen>| {
+        recall::find_with_sources(&t.p, m, msg, d, said, before, chosen)
     };
     chat_reply(&t.p, m, &recall, DAY, message, None).unwrap();
     m.last().last().unwrap()["content"].as_str().unwrap().to_string()

@@ -6,7 +6,8 @@ use serde_json::{Map, Value, json};
 use super::context::{build_context, read_records};
 use super::corrections::{Correction, Ref};
 use super::diary::{read_day, save_user, split_fix, wrap_answer_correction, wrap_correction};
-use super::recall::{Recalled, Source};
+pub use super::recall::Choice;
+use super::recall::{ChoiceKind, Choices, Chosen, Recalled, Source};
 use super::util::pystr;
 use crate::config::Paths;
 use crate::fsutil::append_private;
@@ -38,7 +39,7 @@ pub const CHAT_SYSTEM: &str = r#"너는 사용자의 개인 비서다. 사용자
 /// What the librarian adds to a question: given the message, the day, the user's lines already in the prompt and the
 /// turn that asked back (when the message answers it), the quoted section to put in front of the user's words and the
 /// records it quotes, or None when there is nothing to look up.
-pub type Recall<'a> = &'a dyn Fn(&str, &str, &[String], Option<&str>) -> Option<Recalled>;
+pub type Recall<'a> = &'a dyn Fn(&str, &str, &[String], Option<&str>, Option<&Chosen>) -> Option<Recalled>;
 
 /// What the user said was wrong, when the message corrects something.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -51,13 +52,15 @@ pub enum Fix<'a> {
     Ask,
 }
 
-/// An answer, what changed when the message corrected something (one line, #10), and the records the librarian
-/// quoted for it (#64; none when it found nothing or was not asked).
+/// An answer, what changed when the message corrected something (one line, #10), the records the librarian
+/// quoted for it (#64; none when it found nothing or was not asked), and the candidates to choose among when it asks
+/// back (#108).
 #[derive(Debug, PartialEq)]
 pub struct Answer {
     pub reply: String,
     pub changed: Option<String>,
     pub sources: Vec<Source>,
+    pub choices: Option<Choices>,
 }
 
 /// Save what the user said (a correction of a summary sentence, or a word for the diary), then answer it.
@@ -69,11 +72,12 @@ pub fn chat_reply(
     message: &str,
     wrong: Option<&str>,
 ) -> anyhow::Result<String> {
-    chat_answer(paths, model, recall, day, message, wrong.map(Fix::Summary)).map(|a| a.reply)
+    chat_answer(paths, model, recall, day, message, wrong.map(Fix::Summary), None).map(|a| a.reply)
 }
 
 /// Save what the user said (a correction, or a word for the diary), then answer it with the model. A correction is
-/// kept as one pair ([`super::corrections`]) and the answer says what changed.
+/// kept as one pair ([`super::corrections`]) and the answer says what changed. `choice`: how the user answered the
+/// candidates of the turn before on the screen (#108); with none asked back it is read as words.
 pub fn chat_answer(
     paths: &Paths,
     model: &dyn Model,
@@ -81,6 +85,7 @@ pub fn chat_answer(
     day: &str,
     message: &str,
     fix: Option<Fix>,
+    choice: Option<Choice>,
 ) -> anyhow::Result<Answer> {
     let draft = read_day(paths, day);
     let exists = draft["exists"].as_bool().unwrap_or(false);
@@ -159,12 +164,22 @@ pub fn chat_answer(
         .filter(|t| t.get("role").and_then(Value::as_str) == Some("user"))
         .map(|t| pystr(t.get("text")))
         .collect();
+    // an answer to candidates asked back: the one pressed, or "no" (pressed or said); "no" is looked up by the question
+    let before = asked_before(turns);
+    let chosen =
+        before.as_ref().and_then(|_| chosen(turns, choice.or_else(|| says_no(message).then_some(Choice::No))?));
+    let looked = match chosen {
+        Some(Chosen::None(_)) => asked_question(turns).unwrap_or_else(|| message.to_string()),
+        _ => message.to_string(),
+    };
     let past = if matches!(fix, Some(Fix::Summary(_) | Fix::Answer(_))) || answered.is_some() {
         None
     } else {
-        recall(message, day, &said, asked_before(turns).as_deref())
+        recall(&looked, day, &said, before.as_deref(), chosen.as_ref())
     };
     let asked = past.as_ref().and_then(|p| super::recall::asked_candidates(&p.section));
+    let asking = past.as_ref().and_then(|p| p.asking.clone());
+    let choices = asking.as_ref().map(|a| a.choices());
     let quoted = past.as_ref().map(|p| format!("{}\n\n", super::recall::quote(&p.section))).unwrap_or_default();
     msgs.push(json!({"role": "user", "content": format!("{quoted}{user}")}));
     let reply = model.complete(&msgs, Ask::new(0.5, 300, false, 120))?.trim().to_string();
@@ -173,20 +188,48 @@ pub fn chat_answer(
     }
     append_chat(paths, day, "user", &user)?;
     let sources = past.map(|p| p.sources).unwrap_or_default();
-    append_turn(paths, day, "assistant", &reply, asked.as_deref(), &sources)?;
+    let kept = asked.as_deref().zip(asking.as_ref()).map(|(lines, a)| (lines, a.choices(), a.keys()));
+    append_turn(paths, day, "assistant", &reply, kept.as_ref().map(|(l, c, k)| (*l, c, k.as_slice())), &sources)?;
     let changed = answered.map(|a| a.changed).or_else(|| correction.map(|c| c.changed()));
-    Ok(Answer { reply, changed, sources })
+    Ok(Answer { reply, changed, sources, choices })
+}
+
+/// Is this message a plain "no" (to the candidates asked back)?
+fn says_no(message: &str) -> bool {
+    let m = message.trim().trim_end_matches(['.', '!', '~', ' ']);
+    ["아니", "아니요", "아니오", "아뇨", "아니에요", "아니야", "아닌데", "그거 아니야"].contains(&m)
+}
+
+/// What the user chose among the candidates the last turn asked back (#108), as the librarian's keys kept with it: the
+/// one at that position (None when there is none), or none of them.
+fn chosen(turns: &[Map<String, Value>], choice: Choice) -> Option<Chosen> {
+    let last = turns.last()?;
+    let keys: Vec<String> =
+        last.get("keys")?.as_array()?.iter().filter_map(|k| k.as_str().map(str::to_string)).collect();
+    match choice {
+        Choice::No => Some(Chosen::None(keys)),
+        Choice::Pick(n) => {
+            let key = keys.get(n.checked_sub(1)?)?.clone();
+            let kind = last.get("choices").and_then(|c| serde_json::from_value::<Choices>(c.clone()).ok())?.kind;
+            Some(if kind == ChoiceKind::People { Chosen::Person(key) } else { Chosen::Matter(key) })
+        }
+    }
+}
+
+/// The user's question the last turn asked back about.
+fn asked_question(turns: &[Map<String, Value>]) -> Option<String> {
+    let (_, rest) = turns.split_last()?;
+    rest.iter().rev().find(|t| t.get("role").and_then(Value::as_str) == Some("user")).map(|t| pystr(t.get("text")))
 }
 
 /// When the last turn asked back which person or matter was meant: the question, the reply and its candidates, for the words of
 /// the answer to be read by. Only right after: an older one is not what the user answers.
 fn asked_before(turns: &[Map<String, Value>]) -> Option<String> {
-    let (last, rest) = turns.split_last()?;
+    let last = turns.last()?;
     let cands = last.get("asked").and_then(Value::as_str).filter(|c| !c.is_empty())?;
-    let question = rest.iter().rev().find(|t| t.get("role").and_then(Value::as_str) == Some("user"));
     Some(format!(
         "사용자가 물은 말: {}\n비서가 되물은 말: {}\n후보:\n{cands}",
-        question.map(|t| pystr(t.get("text"))).unwrap_or_default(),
+        asked_question(turns).unwrap_or_default(),
         pystr(last.get("text"))
     ))
 }
@@ -204,22 +247,25 @@ pub fn append_chat(paths: &Paths, day: &str, role: &str, text: &str) -> std::io:
     append_turn(paths, day, role, text, None, &[])
 }
 
-/// A turn, the candidates it asked the user to choose among (kept for the next turn to read the answer by), and the
+/// A turn, the candidates it asked the user to choose among (their lines, kept for the next turn to read the answer
+/// by; as the screen offers them; and the librarian's keys in their order, for a choice by position, #108), and the
 /// records the answer quoted (shown again under it when the chat is opened later).
 fn append_turn(
     paths: &Paths,
     day: &str,
     role: &str,
     text: &str,
-    asked: Option<&str>,
+    asked: Option<(&str, &Choices, &[String])>,
     sources: &[super::recall::Source],
 ) -> std::io::Result<()> {
     let raw = paths.raw().join("diary");
     crate::fsutil::ensure_private_dir(&raw)?;
     let mut rec = json!({"type": "chat", "ts": Local::now().timestamp_millis(), "date": day, "role": role, "text": text,
                      "_src": "diary", "_class": "personal"});
-    if let Some(a) = asked {
-        rec["asked"] = json!(a);
+    if let Some((lines, choices, keys)) = asked {
+        rec["asked"] = json!(lines);
+        rec["choices"] = json!(choices);
+        rec["keys"] = json!(keys); // the server's own: never in the history the app reads
     }
     if !sources.is_empty() {
         rec["sources"] = json!(sources);
@@ -227,10 +273,12 @@ fn append_turn(
     append_private(&raw.join(format!("{day}.ndjson")), &format!("{rec}\n"))
 }
 
-/// Today's exchange for the app to show again: `[{role, text, wrong?, sources?}]`. A correction is stored with a
-/// wrapper line; it is unwrapped. `sources` only on answers that quoted records.
+/// Today's exchange for the app to show again: `[{role, text, wrong?, about?, sources?, choices?}]`. A correction is stored
+/// with a wrapper line; it is unwrapped. `sources` only on answers that quoted records; `choices` only on the last
+/// turn, when it asked back and is not answered yet (#108).
 pub fn chat_history(paths: &Paths, day: &str) -> Vec<Value> {
-    chat_log(paths, day)
+    let log = chat_log(paths, day);
+    let mut lines: Vec<Value> = log
         .iter()
         .map(|t| {
             let role = pystr(t.get("role"));
@@ -245,7 +293,14 @@ pub fn chat_history(paths: &Paths, day: &str) -> Vec<Value> {
             }
             line
         })
-        .collect()
+        .collect();
+    if let (Some(last), Some(line)) = (log.last(), lines.last_mut())
+        && last.get("role").and_then(Value::as_str) == Some("assistant")
+        && let Some(c) = last.get("choices").filter(|c| c.is_object())
+    {
+        line["choices"] = c.clone();
+    }
+    lines
 }
 
 #[cfg(test)]
