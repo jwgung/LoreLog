@@ -37,9 +37,9 @@ pub const CHAT_SYSTEM: &str = r#"너는 사용자의 개인 비서다. 사용자
 - 다른 사람의 사생활을 새로 꺼내거나 추측하지 않는다."#;
 
 /// What the librarian adds to a question: given the message, the day, the user's lines already in the prompt, the turn
-/// that asked back (when the message answers it; none after a "no": the picker reads the question and the user's
-/// lines only) and what the user chose among its candidates on the screen (#108), the quoted section to put in front of the user's words and the
-/// records it quotes, or None when there is nothing to look up.
+/// that asked back (when the message answers it) and what the user chose among its candidates on the screen (#108),
+/// the quoted section to put in front of the user's words and the records it quotes, or None when there is nothing to
+/// look up. After a "no" the turn that asked back is None: the picker reads the question and the user's lines only.
 pub type Recall<'a> = &'a dyn Fn(&str, &str, &[String], Option<&str>, Option<&Chosen>) -> Option<Recalled>;
 
 /// What the user said was wrong, when the message corrects something.

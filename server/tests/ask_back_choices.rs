@@ -85,6 +85,8 @@ fn namesakes() -> T {
     t.mail("y2.md", "2026-05-02", ME, "김영희 <yh@x.com>", "RE: 회의록", "[<y1.md@x>]");
     t.mail("z1.md", "2026-06-01", "김영희 <yh2@other.com>", ME, "다른 회사 영희", "[]");
     t.mail("z2.md", "2026-06-02", "김영희 <yh2@other.com>", ME, "다른 회사 영희 둘째", "[]");
+    // a quotation with someone else: neither 김영희 is on it
+    t.mail("q1.md", "2026-06-10", "거래처 <c@client.com>", ME, "견적 요청", "[]");
     t.built();
     t
 }
@@ -311,19 +313,15 @@ fn a_label_shows_no_address_even_when_a_name_or_title_is_one() {
 #[test]
 fn no_to_people_of_one_name_searches_the_rest_of_the_question_without_them() {
     let t = namesakes();
-    let m = chat(|said| {
-        if said.contains("회의록") {
-            r#"{"search": true, "people": ["김영희"], "words": ["회의록"]}"#.into()
-        } else {
-            r#"{"search": true, "people": ["김영희"], "words": []}"#.into()
-        }
-    });
-    // the question names a topic besides the person: it is searched without anyone of that name
-    say(&t, &m, "영희 님이랑 회의록 건 어떻게 됐지", None);
+    // the topic does not tell the two apart: with the name kept, they would be asked about again
+    let m = chat(|_| r#"{"search": true, "people": ["김영희"], "words": ["견적"]}"#.into());
+    say(&t, &m, "영희 님이랑 견적 건 어떻게 됐지", None);
+    assert!(prompt(&m).contains(recall::NAMESAKES), "{}", prompt(&m));
+    // no: the name is dropped and the topic is searched
     say(&t, &m, "아니요", Some(Choice::No));
     let p = prompt(&m);
     assert!(!p.contains(recall::NAMESAKES) && !p.contains(recall::REFUSED), "{p}");
-    assert!(p.contains("회의록"), "the topic is searched: {p}");
+    assert!(p.contains("견적 요청"), "the topic is searched without the name: {p}");
 }
 
 #[test]
