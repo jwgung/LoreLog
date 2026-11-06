@@ -85,6 +85,8 @@ fn namesakes() -> T {
     t.mail("y2.md", "2026-05-02", ME, "김영희 <yh@x.com>", "RE: 회의록", "[<y1.md@x>]");
     t.mail("z1.md", "2026-06-01", "김영희 <yh2@other.com>", ME, "다른 회사 영희", "[]");
     t.mail("z2.md", "2026-06-02", "김영희 <yh2@other.com>", ME, "다른 회사 영희 둘째", "[]");
+    // a quotation with someone else: neither 김영희 is on it
+    t.mail("q1.md", "2026-06-10", "거래처 <c@client.com>", ME, "견적 요청", "[]");
     t.built();
     t
 }
@@ -231,7 +233,9 @@ fn no_to_the_matter_under_way_searches_the_question_s_topic_without_it() {
     let m = chat(|_| AT_HAND.to_string());
     say(&t, &m, "이 견적 건 전에 어떻게 했지", None);
     let a = say(&t, &m, "아니요", Some(Choice::No));
-    assert!(picker_saw(&m).contains("이 견적 건 전에 어떻게 했지"), "the topic is read from the question");
+    let saw = picker_saw(&m);
+    assert!(saw.contains("이 견적 건 전에 어떻게 했지"), "the topic is read from the question: {saw}");
+    assert!(!saw.contains("견적 사차"), "not from the candidate turned down: {saw}");
     let p = prompt(&m);
     assert!(!p.contains(recall::NOW) && !p.contains(recall::ASSUMED), "not asked again, nothing assumed: {p}");
     assert!(p.contains(recall::FOUND_HIT) && p.contains("견적 일차"), "found by the topic: {p}");
@@ -267,10 +271,12 @@ fn no_to_matters_offered_searches_the_others() {
     let c = say(&t, &m, "견적 건 어떻게 됐지", None).choices.unwrap();
     say(&t, &m, "아니요", Some(Choice::No));
     let p = prompt(&m);
+    let saw = picker_saw(&m);
     assert!(!p.contains(recall::MATTERS) && !p.contains(recall::ASSUMED), "{p}");
     for o in &c.options {
         let title = o.split(" · ").next().unwrap();
         assert!(!p.contains(title), "{title} was turned down: {p}");
+        assert!(!saw.contains(title), "{title} is not shown to the picker: {saw}");
     }
     assert!(p.contains("[받은 메일]") || p.contains("[보낸 메일]"), "the other one is found: {p}");
 }
@@ -302,6 +308,30 @@ fn a_label_shows_no_address_even_when_a_name_or_title_is_one() {
     for c in [people.choices(), matters.choices()] {
         assert!(c.options.iter().all(|o| !o.contains('@') && !o.contains("case:")), "{c:?}");
     }
+}
+
+#[test]
+fn no_to_people_of_one_name_searches_the_rest_of_the_question_without_them() {
+    let t = namesakes();
+    // the topic does not tell the two apart: with the name kept, they would be asked about again
+    let m = chat(|_| r#"{"search": true, "people": ["김영희"], "words": ["견적"]}"#.into());
+    say(&t, &m, "영희 님이랑 견적 건 어떻게 됐지", None);
+    assert!(prompt(&m).contains(recall::NAMESAKES), "{}", prompt(&m));
+    // no: the name is dropped and the topic is searched
+    say(&t, &m, "아니요", Some(Choice::No));
+    let p = prompt(&m);
+    assert!(!p.contains(recall::NAMESAKES) && !p.contains(recall::REFUSED), "{p}");
+    assert!(p.contains("견적 요청"), "the topic is searched without the name: {p}");
+}
+
+#[test]
+fn no_to_people_of_one_name_with_nothing_else_asked_for_a_word() {
+    let t = namesakes();
+    let m = chat(|_| r#"{"search": true, "people": ["김영희"], "words": []}"#.into());
+    say(&t, &m, "영희 님이랑 뭐 있었지", None);
+    say(&t, &m, "아니요", Some(Choice::No));
+    let p = prompt(&m);
+    assert!(p.contains(recall::REFUSED) && !p.contains(recall::NAMESAKES), "{p}");
 }
 
 // ---------- over HTTP ----------
