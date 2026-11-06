@@ -101,25 +101,62 @@ object DiaryClient {
      * 비서의 답, 정정이었으면 무엇이 바뀌었는지 한 줄(서버가 만든다), 그리고 사서가 찾아 답에 인용한 기록.
      * 예전 서버는 sources를 보내지 않는다: 그때는 빈 목록.
      */
-    data class ChatReply(val reply: String, val changed: String?, val sources: List<Source> = emptyList())
+    data class ChatReply(
+        val reply: String,
+        val changed: String?,
+        val sources: List<Source> = emptyList(),
+        val choices: Choices? = null,
+    )
+
+    /**
+     * 비서가 되물을 때의 후보(#108). [kind]는 "matters"(어느 건), "people"(어느 분), "now"(지금 진행 중인 건이 맞는지:
+     * 후보 하나, 네/아니요로 답한다). [options]는 후보마다 한 줄 이름이고, 서버 쪽 키는 없다.
+     */
+    data class Choices(val kind: String, val options: List<String>)
+
+    /** 후보 버튼 하나: 보이는 글자(누르면 내 말로도 남는다)와 서버에 보내는 값(순번 1~3, 또는 "no"). */
+    data class ChoiceButton(val label: String, val value: Any)
+
+    private val choiceKinds = setOf("matters", "people", "now")
+
+    /** 서버가 보낸 후보. 앱이 모르는 종류이거나 후보가 없으면 null(그때는 버튼 없이 글로 답한다). */
+    internal fun parseChoices(o: JSONObject?): Choices? {
+        val kind = o?.optString("kind")?.takeIf { it in choiceKinds } ?: return null
+        val arr = o.optJSONArray("options") ?: return null
+        val options = (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotEmpty() }.take(3)
+        return if (options.isEmpty()) null else Choices(kind, options)
+    }
+
+    /** 후보를 버튼으로: 건·사람은 후보마다 하나(순번), 지금 일은 "네, 그 건"(1)과 "아니요"("no"). */
+    internal fun buttons(c: Choices): List<ChoiceButton> =
+        if (c.kind == "now") listOf(ChoiceButton("네, 그 건", 1), ChoiceButton("아니요", "no"))
+        else c.options.mapIndexed { i, label -> ChoiceButton(label, i + 1) }
+
+    /** 대화 요청 본문. 정정([wrong])에는 후보 답([choice])을 싣지 않는다(서버가 거절한다). */
+    internal fun chatBody(message: String, wrong: String?, about: String, choice: Any?): JSONObject =
+        JSONObject().put("message", message).apply {
+            if (wrong != null) { put("wrong", wrong); put("about", about) }
+            else if (choice != null) put("choice", choice)
+        }
 
     /**
      * 사용자가 한 말을 일기에 남기고 비서의 답을 받는다(서버의 로컬 LLM). [wrong]이 있으면 그것을 고치는 말이다:
-     * [about]이 "summary"면 오늘 정리의 문장, "answer"면 비서의 답. 실패하면 null.
+     * [about]이 "summary"면 오늘 정리의 문장, "answer"면 비서의 답. [choice]는 되물은 후보에 버튼으로 답한 것(순번 또는
+     * "no", #108). 실패하면 null.
      */
-    suspend fun chat(context: Context, day: String, message: String, wrong: String? = null, about: String = "summary"): ChatReply? = withContext(Dispatchers.IO) {
+    suspend fun chat(context: Context, day: String, message: String, wrong: String? = null, about: String = "summary", choice: Any? = null): ChatReply? = withContext(Dispatchers.IO) {
         var conn: HttpURLConnection? = null
         try {
             conn = open(context, "/diary/$day/chat", "POST") ?: return@withContext null
             conn.readTimeout = 150_000
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json")
-            val body = JSONObject().put("message", message).apply { if (wrong != null) { put("wrong", wrong); put("about", about) } }
+            val body = chatBody(message, wrong, about, choice)
             conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             if (conn.responseCode !in 200..299) return@withContext null
             val o = JSONObject(conn.inputStream.bufferedReader().readText())
             val reply = o.optString("reply").takeIf { it.isNotBlank() } ?: return@withContext null
-            ChatReply(reply, o.optString("changed").takeIf { it.isNotBlank() }, sources(o.optJSONArray("sources")))
+            ChatReply(reply, o.optString("changed").takeIf { it.isNotBlank() }, sources(o.optJSONArray("sources")), parseChoices(o.optJSONObject("choices")))
         } catch (e: Exception) {
             null
         } finally {
@@ -138,8 +175,11 @@ object DiaryClient {
         }
     }
 
-    /** [sources]: 답이 인용한 기록. 다시 열어도 답 아래에 보인다. 예전 서버는 보내지 않는다(빈 목록). */
-    data class ChatLine(val role: String, val text: String, val wrong: String?, val sources: List<Source> = emptyList())
+    /**
+     * [sources]: 답이 인용한 기록. 다시 열어도 답 아래에 보인다. 예전 서버는 보내지 않는다(빈 목록). [choices]: 답하지 않은
+     * 마지막 되묻기의 후보(서버가 마지막 줄에만 싣는다).
+     */
+    data class ChatLine(val role: String, val text: String, val wrong: String?, val sources: List<Source> = emptyList(), val choices: Choices? = null)
 
     /** 오늘 서버에 남은 대화(사용자 말, 비서 답, 정정). 앱을 다시 열어도 이어서 보이게 한다. 실패하면 빈 목록. */
     suspend fun fetchChat(context: Context, day: String): List<ChatLine> = withContext(Dispatchers.IO) {
@@ -150,7 +190,7 @@ object DiaryClient {
             val arr = JSONObject(conn.inputStream.bufferedReader().readText()).getJSONArray("messages")
             (0 until arr.length()).map {
                 val o = arr.getJSONObject(it)
-                ChatLine(o.getString("role"), o.getString("text"), if (o.has("wrong")) o.getString("wrong") else null, sources(o.optJSONArray("sources")))
+                ChatLine(o.getString("role"), o.getString("text"), if (o.has("wrong")) o.getString("wrong") else null, sources(o.optJSONArray("sources")), parseChoices(o.optJSONObject("choices")))
             }
         } catch (e: Exception) { emptyList() } finally { conn?.disconnect() }
     }
