@@ -175,7 +175,10 @@ pub fn chat_answer(
     let past = if matches!(fix, Some(Fix::Summary(_) | Fix::Answer(_))) || answered.is_some() {
         None
     } else {
-        recall(&looked, day, &said, before.as_deref(), chosen.as_ref())
+        // after "no" the picker reads the question and the lines before it, not the turn that offered what was turned
+        // down: the words of a candidate's title are not the topic
+        let shown = if matches!(chosen, Some(Chosen::None(_))) { None } else { before.as_deref() };
+        recall(&looked, day, &said, shown, chosen.as_ref())
     };
     let asked = past.as_ref().and_then(|p| super::recall::asked_candidates(&p.section));
     let asking = past.as_ref().and_then(|p| p.asking.clone());

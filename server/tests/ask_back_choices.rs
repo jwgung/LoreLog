@@ -231,7 +231,9 @@ fn no_to_the_matter_under_way_searches_the_question_s_topic_without_it() {
     let m = chat(|_| AT_HAND.to_string());
     say(&t, &m, "이 견적 건 전에 어떻게 했지", None);
     let a = say(&t, &m, "아니요", Some(Choice::No));
-    assert!(picker_saw(&m).contains("이 견적 건 전에 어떻게 했지"), "the topic is read from the question");
+    let saw = picker_saw(&m);
+    assert!(saw.contains("이 견적 건 전에 어떻게 했지"), "the topic is read from the question: {saw}");
+    assert!(!saw.contains("견적 사차"), "not from the candidate turned down: {saw}");
     let p = prompt(&m);
     assert!(!p.contains(recall::NOW) && !p.contains(recall::ASSUMED), "not asked again, nothing assumed: {p}");
     assert!(p.contains(recall::FOUND_HIT) && p.contains("견적 일차"), "found by the topic: {p}");
