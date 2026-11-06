@@ -269,10 +269,12 @@ fn no_to_matters_offered_searches_the_others() {
     let c = say(&t, &m, "견적 건 어떻게 됐지", None).choices.unwrap();
     say(&t, &m, "아니요", Some(Choice::No));
     let p = prompt(&m);
+    let saw = picker_saw(&m);
     assert!(!p.contains(recall::MATTERS) && !p.contains(recall::ASSUMED), "{p}");
     for o in &c.options {
         let title = o.split(" · ").next().unwrap();
         assert!(!p.contains(title), "{title} was turned down: {p}");
+        assert!(!saw.contains(title), "{title} is not shown to the picker: {saw}");
     }
     assert!(p.contains("[받은 메일]") || p.contains("[보낸 메일]"), "the other one is found: {p}");
 }

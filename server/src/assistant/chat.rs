@@ -36,8 +36,9 @@ pub const CHAT_SYSTEM: &str = r#"너는 사용자의 개인 비서다. 사용자
 - 질문은 꼭 필요할 때만 하나만 한다. 같은 질문을 반복하지 않는다.
 - 다른 사람의 사생활을 새로 꺼내거나 추측하지 않는다."#;
 
-/// What the librarian adds to a question: given the message, the day, the user's lines already in the prompt and the
-/// turn that asked back (when the message answers it), the quoted section to put in front of the user's words and the
+/// What the librarian adds to a question: given the message, the day, the user's lines already in the prompt, the turn
+/// that asked back (when the message answers it; none after a "no": the picker reads the question and the user's lines
+/// only) and what the user chose among its candidates on the screen (#108), the quoted section to put in front of the user's words and the
 /// records it quotes, or None when there is nothing to look up.
 pub type Recall<'a> = &'a dyn Fn(&str, &str, &[String], Option<&str>, Option<&Chosen>) -> Option<Recalled>;
 
@@ -177,8 +178,8 @@ pub fn chat_answer(
     } else {
         // after "no" the picker reads the question and the lines before it, not the turn that offered what was turned
         // down: the words of a candidate's title are not the topic
-        let shown = if matches!(chosen, Some(Chosen::None(_))) { None } else { before.as_deref() };
-        recall(&looked, day, &said, shown, chosen.as_ref())
+        let offered = if matches!(chosen, Some(Chosen::None(_))) { None } else { before.as_deref() };
+        recall(&looked, day, &said, offered, chosen.as_ref())
     };
     let asked = past.as_ref().and_then(|p| super::recall::asked_candidates(&p.section));
     let asking = past.as_ref().and_then(|p| p.asking.clone());
