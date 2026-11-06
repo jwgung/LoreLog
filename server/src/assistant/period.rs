@@ -499,5 +499,5 @@ pub fn render(g: &Gathered, period: Period, span: Span, today: NaiveDate, names:
     if g.requests.is_none() || g.matters.is_none() {
         out.push(NO_GRAPH.to_string());
     }
-    Recalled { section: out.join("\n"), sources }
+    Recalled { section: out.join("\n"), sources, asked: None }
 }

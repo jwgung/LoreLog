@@ -128,6 +128,7 @@ fn a_chat_answer_carries_the_records_it_quoted_and_older_answers_stay_as_they_we
                 title: "배관 교체 견적".into(),
                 refers: "Mail/2026/q3.md".into(),
             }],
+            asked: None,
         })
     });
     let s = Server::run(dir, paths, std::sync::Arc::new(app));

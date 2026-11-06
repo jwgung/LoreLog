@@ -467,7 +467,7 @@ fn the_chat_says_a_guess_as_one_and_answers_with_the_records_it_quoted() {
     let recall = |msg: &str, d: &str, said: &[String], before: Option<&str>| {
         recall::find_with_sources(&t.p, m.as_ref(), msg, d, said, before)
     };
-    let a = chat_answer(&t.p, m.as_ref(), &recall, "2026-10-31", "배관 건 어디까지 갔지?", None).unwrap();
+    let a = chat_answer(&t.p, m.as_ref(), &recall, "2026-10-31", "배관 건 어디까지 갔지?", None, None).unwrap();
     let msgs = m.last();
     assert!(CHAT_SYSTEM.contains("로 보여요") && msgs[0]["content"].as_str().unwrap().starts_with(CHAT_SYSTEM));
     let turn = msgs.last().unwrap()["content"].as_str().unwrap();
