@@ -197,7 +197,10 @@ internal fun ChatScreen(onDrawer: () -> Unit, onCollect: () -> Unit, onTodos: ()
     }
     LaunchedEffect(extra.size, draft, selected) { scroll.animateScrollTo(scroll.maxValue) }
 
-    /** 한 말을 보내고 답을 받는다. [choice]: 되물은 후보에 버튼으로 답한 것(그때 [t]는 버튼의 글자, #108). */
+    /**
+     * 한 말을 보내고 답을 받는다. [choice]: 되물은 후보에 버튼으로 답한 것(그때 [t]는 버튼의 글자, #108). 버튼으로 답하면
+     * 고치려고 고른 문장은 보내지 않고 풀린다(정정과 후보 답은 함께 가지 않는다).
+     */
     fun say(t: String, choice: Any? = null) {
         extra.add(Msg.Mine(t))
         val wrong = if (choice == null) fixing else null

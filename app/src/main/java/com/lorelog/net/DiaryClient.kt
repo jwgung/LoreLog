@@ -98,8 +98,8 @@ object DiaryClient {
     data class Source(val day: String, val kind: String, val title: String)
 
     /**
-     * 비서의 답, 정정이었으면 무엇이 바뀌었는지 한 줄(서버가 만든다), 그리고 사서가 찾아 답에 인용한 기록.
-     * 예전 서버는 sources를 보내지 않는다: 그때는 빈 목록.
+     * 비서의 답, 정정이었으면 무엇이 바뀌었는지 한 줄(서버가 만든다), 사서가 찾아 답에 인용한 기록, 그리고 되물을 때의
+     * 후보([Choices], #108). 예전 서버는 sources·choices를 보내지 않는다: 그때는 빈 목록·null.
      */
     data class ChatReply(
         val reply: String,
@@ -110,20 +110,25 @@ object DiaryClient {
 
     /**
      * 비서가 되물을 때의 후보(#108). [kind]는 "matters"(어느 건), "people"(어느 분), "now"(지금 진행 중인 건이 맞는지:
-     * 후보 하나, 네/아니요로 답한다). [options]는 후보마다 한 줄 이름이고, 서버 쪽 키는 없다.
+     * 후보 하나, 네/아니요로 답한다). [options]는 후보마다 한 줄 이름(서버는 많아야 셋을 보낸다)이고, 서버 쪽 키는 없다.
      */
     data class Choices(val kind: String, val options: List<String>)
 
-    /** 후보 버튼 하나: 보이는 글자(누르면 내 말로도 남는다)와 서버에 보내는 값(순번 1~3, 또는 "no"). */
+    /**
+     * 후보 버튼 하나: 보이는 글자와 서버에 보내는 값([value]는 순번 Int 1~3, 또는 문자열 "no"만). 누르면 그 글자가 내 말로
+     * 남고 서버에도 내 말로 저장된다(사용자가 정한 대로, #108). 고르기는 [value]로만 하고 글자는 고르기에 쓰이지 않는다.
+     */
     data class ChoiceButton(val label: String, val value: Any)
 
     private val choiceKinds = setOf("matters", "people", "now")
+    /** 서버가 보내는 후보 수의 상한(서버의 MAX_CANDIDATES와 같다) */
+    private const val MAX_CHOICES = 3
 
     /** 서버가 보낸 후보. 앱이 모르는 종류이거나 후보가 없으면 null(그때는 버튼 없이 글로 답한다). */
     internal fun parseChoices(o: JSONObject?): Choices? {
         val kind = o?.optString("kind")?.takeIf { it in choiceKinds } ?: return null
         val arr = o.optJSONArray("options") ?: return null
-        val options = (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotEmpty() }.take(3)
+        val options = (0 until arr.length()).map { arr.optString(it).trim() }.filter { it.isNotEmpty() }.take(MAX_CHOICES)
         return if (options.isEmpty()) null else Choices(kind, options)
     }
 

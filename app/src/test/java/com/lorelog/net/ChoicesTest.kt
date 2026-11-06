@@ -32,7 +32,7 @@ class ChoicesTest {
         assertNull(DiaryClient.parseChoices(JSONObject("""{"kind": "matters", "options": []}""")))
         assertNull(DiaryClient.parseChoices(JSONObject("""{"kind": "later", "options": ["a"]}""")))
         assertNull(DiaryClient.parseChoices(JSONObject("""{"options": ["a"]}""")))
-        // blank labels are left out; three at most
+        // 빈 글자는 빼고, 많아야 셋
         val c = DiaryClient.parseChoices(JSONObject("""{"kind": "matters", "options": ["a", " ", "b", "c", "d"]}"""))!!
         assertEquals(listOf("a", "b", "c"), c.options)
     }
