@@ -405,9 +405,9 @@ pub const MATTERS: &str =
     "- (물은 것에 맞는 건이 여럿이라 어느 건인지 모른다. 아래 후보 가운데 어느 건인지 한 번만 되묻는다)";
 /// The first line of the section when the turn before asked back and the user chose none: not asked again.
 pub const ASSUMED: &str = "- (한 번 되물었는데 사용자가 고르지 않았다. 다시 묻지 말고 가장 유력한 아래 기록으로 답하고, 그렇게 가정했다고 한 마디 밝힌다)";
-/// The section when the user said none of the candidates offered is meant and the question names nothing to search
-/// (#108): not asked back again.
-pub const REFUSED: &str = "- (사용자가 되물은 후보가 모두 아니라고 했고 물은 말에 찾을 주제가 없다. 후보를 다시 묻지 말고, 어떤 일인지 한 마디만 알려 달라고 청한다)";
+/// The section when the user said none of the candidates offered is meant and what is left of the question tells
+/// nothing to search (no topic, or only what would be asked back again) (#108): not asked back again.
+pub const REFUSED: &str = "- (사용자가 되물은 후보가 모두 아니라고 했고, 물은 말로는 무엇을 찾을지 모른다. 후보를 또 내놓지 말고 어떤 일인지 한 마디만 청한다)";
 /// The first line of the section when a question about how it was done before (#95) points at the matter at hand or
 /// names nothing: the matter under way is offered, asked about once (ADR 0005·0006).
 pub const NOW: &str =
@@ -1187,7 +1187,11 @@ fn with_chosen(mut p: Picked, chosen: &Chosen) -> Picked {
         Chosen::Matter(case) => p.matter = Some(case.clone()),
         Chosen::Person(addr) => p.people = vec![format!("<{addr}>")],
         Chosen::None(keys) => {
-            p.people.retain(|n| !keys.iter().any(|k| n.trim_start_matches('<').trim_end_matches('>') == k));
+            // people turned down: the name that found them is not searched again (the keys are their addresses, the
+            // picker gave a name); matters turned down are left out of what the topic finds
+            if keys.iter().any(|k| chosen_matter(k).is_none()) {
+                p.people.clear();
+            }
             (p.at_hand, p.matter) = (false, None);
         }
     }
